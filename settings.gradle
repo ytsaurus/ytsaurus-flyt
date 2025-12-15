@@ -1,0 +1,3 @@
+rootProject.name = "flyt"
+
+include("flink-yson-fast-adapter")
