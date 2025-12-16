@@ -44,6 +44,10 @@ allprojects {
     tasks.assemble {
         dependsOn("shadowJar")
     }
+
+    tasks.test {
+        useJUnitPlatform()
+    }
 }
 
 tasks.jar {
