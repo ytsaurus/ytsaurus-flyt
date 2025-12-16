@@ -1,7 +1,3 @@
-import org.gradle.api.tasks.testing.logging.TestExceptionFormat
-import org.gradle.api.tasks.testing.logging.TestLogEvent
-import java.nio.file.Paths
-
 plugins {
     id("checkstyle")
     id("java")
@@ -43,6 +39,10 @@ allprojects {
 
     tasks.assemble {
         dependsOn("shadowJar")
+    }
+
+    tasks.test {
+        useJUnitPlatform()
     }
 }
 
