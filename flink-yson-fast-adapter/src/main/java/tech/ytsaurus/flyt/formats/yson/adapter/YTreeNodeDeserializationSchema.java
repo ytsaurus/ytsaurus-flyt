@@ -1,4 +1,4 @@
-package ru.yandex.taxi.dmp.flink.formats.yson.adapter;
+package tech.ytsaurus.flyt.formats.yson.adapter;
 
 import org.apache.flink.api.common.serialization.DeserializationSchema;
 import org.apache.flink.table.data.RowData;
