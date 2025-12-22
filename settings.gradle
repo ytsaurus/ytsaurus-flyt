@@ -1,6 +1,7 @@
 rootProject.name = "flyt"
 
-include("flink-yson-fast-adapter")
+include("flink-connector-ytsaurus")
 include("flink-yson")
+include("flink-yson-fast-adapter")
 include("locks-api")
 include("locks-noop")
