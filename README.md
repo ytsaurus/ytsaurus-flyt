@@ -15,8 +15,10 @@ You can read [post about YTsaurus](https://medium.com/p/42e7f5fa5fc6) or check v
 
 [![video about YTsaurus](https://raw.githubusercontent.com/ytsaurus/ytsaurus/main/yt/docs/images/ytsaurus-promo-video.png)](https://youtu.be/4Q2EB_uimLs)
 
-### FLYT
+## FLYT
 
-* Apache Flink connectors for working with YTsaurus [dynamic tables](https://ytsaurus.tech/docs/en/user-guide/dynamic-tables/overview)
-* Apache Flink formatters for working with [YSON](https://ytsaurus.tech/docs/en/user-guide/storage/yson) format
+The project that aims to integrate Apache Flink and YTsaurus.
+
+* [Apache Flink connectors](https://github.com/ytsaurus/ytsaurus-flyt/tree/main/flink-connector-ytsaurus) for working with YTsaurus [dynamic tables](https://ytsaurus.tech/docs/en/user-guide/dynamic-tables/overview)
+* [Apache Flink formatters](https://github.com/ytsaurus/ytsaurus-flyt/tree/main/flink-yson) for working with [YSON](https://ytsaurus.tech/docs/en/user-guide/storage/yson) format
 * tools that simplify the integration YTsaurus and Apache Flink

@@ -229,16 +229,16 @@ public class YTsaurusDynamicTableFactory implements DynamicTableSinkFactory, Dyn
 
     @Override
     public Set<ConfigOption<?>> requiredOptions() {
-        return Set.of(YSON_SCHEMA);
+        return Set.of(YSON_SCHEMA,
+                CREDENTIALS_SOURCE,
+                CLUSTER_NAME);
     }
 
     @Override
     public Set<ConfigOption<?>> optionalOptions() {
         return Set.of(
-                FactoryUtil.FORMAT,
                 PARTITION_KEY,
                 PARTITION_SCALE,
-                CREDENTIALS_SOURCE,
                 YT_USERNAME_OPTION,
                 YT_TOKEN_OPTION,
                 ENABLE_DYNAMIC_STORE_READ,
@@ -259,7 +259,6 @@ public class YTsaurusDynamicTableFactory implements DynamicTableSinkFactory, Dyn
                 RESHARD_UNIFORM,
                 LOOKUP_METHOD,
                 PATH,
-                CLUSTER_NAME,
                 PATH_MAP,
                 CLUSTER_PICK_STRATEGY,
                 COMMIT_TRANSACTION_PERIOD,
@@ -358,7 +357,6 @@ public class YTsaurusDynamicTableFactory implements DynamicTableSinkFactory, Dyn
                 minPartitionTtl,
                 new YtPartitioningInstantRowDataConverter(partitionKeyLogicalType));
     }
-
 
 
     private TrackableField getAndValidateTrackableField(TableSchema tableSchema,
