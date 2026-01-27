@@ -3,9 +3,9 @@ package tech.ytsaurus.flyt.formats.yson;
 import java.nio.charset.StandardCharsets;
 
 import org.apache.flink.api.common.serialization.SerializationSchema;
+import org.apache.flink.formats.common.TimestampFormat;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.types.logical.RowType;
-import tech.ytsaurus.flyt.formats.yson.common.TimestampFormat;
 import tech.ytsaurus.ysontree.YTree;
 import tech.ytsaurus.ysontree.YTreeNode;
 import tech.ytsaurus.ysontree.YTreeTextSerializer;

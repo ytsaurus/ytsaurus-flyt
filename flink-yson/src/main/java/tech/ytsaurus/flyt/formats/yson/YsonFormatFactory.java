@@ -9,6 +9,7 @@ import org.apache.flink.api.common.serialization.SerializationSchema;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.configuration.ConfigOption;
 import org.apache.flink.configuration.ReadableConfig;
+import org.apache.flink.formats.common.TimestampFormat;
 import org.apache.flink.table.connector.ChangelogMode;
 import org.apache.flink.table.connector.format.DecodingFormat;
 import org.apache.flink.table.connector.format.EncodingFormat;
@@ -21,7 +22,6 @@ import org.apache.flink.table.factories.FactoryUtil;
 import org.apache.flink.table.factories.SerializationFormatFactory;
 import org.apache.flink.table.types.DataType;
 import org.apache.flink.table.types.logical.RowType;
-import tech.ytsaurus.flyt.formats.yson.common.TimestampFormat;
 
 import static tech.ytsaurus.flyt.formats.yson.YsonFormatOptions.FAIL_ON_MISSING_FIELD;
 import static tech.ytsaurus.flyt.formats.yson.YsonFormatOptions.IGNORE_PARSE_ERRORS;
