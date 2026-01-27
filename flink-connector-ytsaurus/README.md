@@ -32,7 +32,7 @@ Prerequisites:
 ```
 git clone https://github.com/ytsaurus/ytsaurus-flyt.git
 cd ytsaurus-flyt
-gradle shadowJar -p flink-connector-ytsaurus
+./gradlew shadowJar -p flink-connector-ytsaurus
 
 # To see the assembled artifact
 ls flink-connector-ytsaurus/build/libs
