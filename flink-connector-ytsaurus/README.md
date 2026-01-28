@@ -398,7 +398,6 @@ CREATE TABLE partitioned_table (
     'partitionKey' = 'event_time',
     'partitionScale' = 'DAY',
     'partitionTtlDayCnt' = '30',
-    'eagerInitialization' = 'false',
     'schema' = '[
         {"name"="id";"type"="int64";"required"=%false;"sort_order"="ascending"};
         {"name"="data";"type"="string";"required"=%false};
@@ -451,6 +450,8 @@ The connector supports both synchronous and asynchronous lookup operations with 
 - **`FULL`** - Full table caching with periodic or timed reload
 
 ### Lookup Example
+
+The lookup connector requires a yson formatter. Build the yson formatter according to the [docs](../flink-yson/README.md) and put it in `$FLINK_ROOT/lib`.
 
 Prepare data to lookup operation.
 
