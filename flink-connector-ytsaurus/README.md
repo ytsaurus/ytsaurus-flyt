@@ -346,7 +346,7 @@ Set the following environment variables:
 
 ### Custom Authentication
 
-To create your own authentication method, implement the interface [`CredentialsProvider`](../flink-connector-ytsaurus/src/main/java/tech/ytsaurus/flyt/connectors/ytsaurus/common/credentials/CredentialsProvider.java) interface.
+To create your own authentication method, implement the interface [`CredentialsProvider`](src/main/java/tech/ytsaurus/flyt/connectors/ytsaurus/common/credentials/CredentialsProvider.java) interface.
 
 ## Data Partitioning
 
