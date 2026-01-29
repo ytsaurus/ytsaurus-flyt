@@ -190,7 +190,7 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
             if (!mapNodeExists) {
                 client.createNode(
                                 CreateNode.builder()
-                                        .setPath(YPath.simple(path.getFullPath()))
+                                        .setPath(YPath.simple(path.getBasePath()))
                                         .setType(CypressNodeType.MAP)
                                         .setRecursive(true)
                                         .build())
