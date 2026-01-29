@@ -293,7 +293,6 @@ public class YtDynamicTableWriterPoolTest {
 
         var path = ComplexYtPath.builder()
                 .basePath("//home/something")
-                .tableName("my_table")
                 .build();
 
         setYtPathAvailable(path.getBasePath(), false);
