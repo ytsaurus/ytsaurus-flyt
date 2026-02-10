@@ -345,7 +345,9 @@ public class YtDynamicTableWriterPoolClientTest {
                         .reshardStrategy(ReshardStrategy.NONE)
                         .build(),
                 YtWriterOptions.builder().build(),
-                new NoopLocksProvider());
+                new NoopLocksProvider(),
+                null,
+                null);
     }
 
     @Builder

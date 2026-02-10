@@ -1,5 +1,5 @@
 group = "tech.ytsaurus.flyt.connectors.ytsaurus"
-version = "1.8.2"
+version = "1.9.0"
 
 plugins {
     id("com.peterabeles.gversion") version "1.10.3"
@@ -9,6 +9,7 @@ plugins {
 dependencies {
     implementation(project(":locks-api"))
     implementation(project(":locks-noop"))
+    api(project(":flink-connector-data-metrics"))
     api("tech.ytsaurus:ytsaurus-client:1.2.12")
     implementation(project(":flink-yson-fast-adapter"))
     implementation("jakarta.annotation:jakarta.annotation-api:1.3.5")

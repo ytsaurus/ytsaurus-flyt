@@ -2,6 +2,8 @@ package tech.ytsaurus.flyt.connectors.ytsaurus.producer;
 
 import java.time.Instant;
 
+import javax.annotation.Nullable;
+
 import org.apache.flink.util.Preconditions;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
@@ -22,6 +24,7 @@ import tech.ytsaurus.flyt.locks.api.LocksProviderChooser;
 import tech.ytsaurus.ysontree.YTreeNode;
 import tech.ytsaurus.ysontree.YTreeTextSerializer;
 
+import tech.ytsaurus.flyt.connectors.datametrics.DataMetricsConfig;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.ComplexYtPath;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.ReshardingConfig;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.TrackableField;
@@ -44,6 +47,7 @@ public class YtRowDataSinkFunction extends RichSinkFunction<RowData> implements 
     private final String ysonSchemaString;
     private final RowDataToYtListConverters.RowDataToYtMapConverter ytConverters;
     private final LogicalType logicalType;
+    private final DataType originalType;
     private PartitionConfig partitionConfig;
     private int partitionKeyColumnIndex;
     private OAuthCredentialsConfig credentialsConfig;
@@ -55,6 +59,9 @@ public class YtRowDataSinkFunction extends RichSinkFunction<RowData> implements 
 
     private ReshardingConfig reshardingConfig;
     private YtWriterOptions ytWriterOptions;
+
+    @Nullable
+    private DataMetricsConfig dataMetricsConfig;
 
     @SuppressWarnings("checkstyle:ParameterNumber")
     public YtRowDataSinkFunction(RowDataToYtListConverters ytConverters,
@@ -73,6 +80,7 @@ public class YtRowDataSinkFunction extends RichSinkFunction<RowData> implements 
         this.ytConverters = ytConverters.createConverter(type.getLogicalType(), schemaNode);
         this.path = path;
         this.logicalType = type.getLogicalType();
+        this.originalType = type;
         this.ysonSchemaString = ysonSchemaString;
         this.eagerInitialization = eagerInitialization;
         this.retryStrategy = retryStrategy;
@@ -118,6 +126,11 @@ public class YtRowDataSinkFunction extends RichSinkFunction<RowData> implements 
         return this;
     }
 
+    public YtRowDataSinkFunction withDataMetricsConfig(DataMetricsConfig config) {
+        this.dataMetricsConfig = config;
+        return this;
+    }
+
     @Override
     public void snapshotState(FunctionSnapshotContext context) {
         for (YtDynamicTableWriter writer : pool.getWriters()) {
@@ -139,6 +152,7 @@ public class YtRowDataSinkFunction extends RichSinkFunction<RowData> implements 
                 ytWriterOptions.getLocksConfig().getConfig());
 
         this.pool = new YtDynamicTableWriterPool(
+                null,  // cache - will be created by constructor
                 this::makeYtClient,
                 ytConverters,
                 path,
@@ -149,7 +163,9 @@ public class YtRowDataSinkFunction extends RichSinkFunction<RowData> implements 
                 tableAttributes,
                 reshardingConfig,
                 ytWriterOptions,
-                locksProvider);
+                locksProvider,
+                originalType,
+                dataMetricsConfig);
         if (eagerInitialization) {
             if (partitionConfig != null) {
                 log.info("Eager initialize map node for partition tables at {}", path.getBasePath());

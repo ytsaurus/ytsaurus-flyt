@@ -59,6 +59,7 @@ import tech.ytsaurus.flyt.connectors.ytsaurus.common.partition.PartitionScale;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.utils.RowTypeUtils;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.utils.TableFactoryPropertyHelper;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.YtDynamicTableSource;
+import tech.ytsaurus.flyt.connectors.datametrics.DataMetricsConfig;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.cluster.ClusterPickStrategy;
 import tech.ytsaurus.flyt.connectors.ytsaurus.producer.YtDynamicTableSink;
 import tech.ytsaurus.flyt.connectors.ytsaurus.producer.YtWriterOptions;
@@ -150,6 +151,12 @@ public class YTsaurusDynamicTableFactory implements DynamicTableSinkFactory, Dyn
 
         YtWriterOptions ytWriterOptions = initYtWriterOptions(options);
 
+        DataMetricsConfig dataMetricsConfig = DataMetricsConfig.fromProperties(helper.getProperties());
+        if (dataMetricsConfig != null && !dataMetricsConfig.isEmpty()) {
+            log.info("Configuring data metrics with {} metrics for alias: {}",
+                    dataMetricsConfig.getMetrics().size(), dataMetricsConfig.getMetricTablePathAlias());
+        }
+
         return YtDynamicTableSink.builder()
                 .type(type)
                 .ytConverters(ytConverter)
@@ -164,6 +171,7 @@ public class YTsaurusDynamicTableFactory implements DynamicTableSinkFactory, Dyn
                 .eagerInitialization(options.get(EAGER_INITIALIZATION))
                 .reshardingConfig(reshardingConfig)
                 .ytWriterOptions(ytWriterOptions)
+                .dataMetricsConfig(dataMetricsConfig)
                 .build();
     }
 

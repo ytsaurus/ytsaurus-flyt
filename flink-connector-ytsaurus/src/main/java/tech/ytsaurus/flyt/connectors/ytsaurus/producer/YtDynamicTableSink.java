@@ -4,6 +4,7 @@ import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
 import lombok.Builder;
+import lombok.Getter;
 import org.apache.flink.table.connector.ChangelogMode;
 import org.apache.flink.table.connector.sink.DynamicTableSink;
 import org.apache.flink.table.connector.sink.SinkFunctionProvider;
@@ -11,6 +12,7 @@ import org.apache.flink.table.types.DataType;
 import org.apache.flink.util.concurrent.RetryStrategy;
 import org.apache.flink.util.function.SerializableSupplier;
 
+import tech.ytsaurus.flyt.connectors.datametrics.DataMetricsConfig;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.ComplexYtPath;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.ReshardingConfig;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.TrackableField;
@@ -19,7 +21,11 @@ import tech.ytsaurus.flyt.connectors.ytsaurus.common.credentials.CredentialsProv
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.partition.PartitionConfig;
 import tech.ytsaurus.flyt.connectors.ytsaurus.producer.converters.RowDataToYtListConverters;
 
+/**
+ * YT Dynamic Table Sink.
+ */
 @Builder
+@Getter
 public class YtDynamicTableSink implements DynamicTableSink {
     private final DataType type;
     private final RowDataToYtListConverters ytConverters;
@@ -36,6 +42,9 @@ public class YtDynamicTableSink implements DynamicTableSink {
     private SerializableSupplier<RetryStrategy> retryStrategy;
     private ReshardingConfig reshardingConfig;
     private YtWriterOptions ytWriterOptions;
+
+    @Nullable
+    private DataMetricsConfig dataMetricsConfig;
 
     @Override
     public ChangelogMode getChangelogMode(ChangelogMode requestedMode) {
@@ -60,6 +69,9 @@ public class YtDynamicTableSink implements DynamicTableSink {
         if (partitionConfig != null) {
             rowDataYtFunction.enablePartitioning(partitionConfig);
         }
+        if (dataMetricsConfig != null) {
+            rowDataYtFunction.withDataMetricsConfig(dataMetricsConfig);
+        }
         return SinkFunctionProvider.of(rowDataYtFunction, parallelism);
     }
 
@@ -79,6 +91,7 @@ public class YtDynamicTableSink implements DynamicTableSink {
                 .tableAttributes(tableAttributes)
                 .reshardingConfig(reshardingConfig)
                 .ytWriterOptions(ytWriterOptions)
+                .dataMetricsConfig(dataMetricsConfig)
                 .build();
     }
 
