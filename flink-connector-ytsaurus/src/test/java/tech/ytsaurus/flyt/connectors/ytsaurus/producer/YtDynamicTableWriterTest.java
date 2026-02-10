@@ -12,6 +12,7 @@ import org.mockito.Mock;
 import org.mockito.Mockito;
 import org.mockito.MockitoAnnotations;
 import tech.ytsaurus.client.YTsaurusClient;
+import tech.ytsaurus.flyt.connectors.datametrics.NoopDataMetricsWriterDelegate;
 import tech.ytsaurus.flyt.locks.noop.NoopLocksProvider;
 
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.ComplexYtPath;
@@ -79,7 +80,8 @@ class YtDynamicTableWriterTest {
                 tableAttributes,
                 null, // ReshardTable
                 ytWriterOptions,
-                new NoopLocksProvider()
+                new NoopLocksProvider(),
+                NoopDataMetricsWriterDelegate.INSTANCE
         );
         ytDynamicTableWriter = Mockito.spy(ytDynamicTableWriter);
         doReturn(false).when(ytDynamicTableWriter).isTableMounted();

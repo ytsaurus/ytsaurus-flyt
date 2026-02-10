@@ -52,6 +52,7 @@ import tech.ytsaurus.ysontree.YTree;
 import tech.ytsaurus.ysontree.YTreeNode;
 import tech.ytsaurus.ysontree.YTreeTextSerializer;
 
+import tech.ytsaurus.flyt.connectors.datametrics.DataMetricsWriterDelegate;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.ComplexYtPath;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.TrackableField;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.YtTableAttributes;
@@ -169,6 +170,9 @@ public class YtDynamicTableWriter implements Serializable {
 
     private transient String acquiredLock;
 
+    // Shared data metrics delegate (managed by pool, not by individual writers)
+    private final DataMetricsWriterDelegate dataMetrics;
+
     @SuppressWarnings("checkstyle:ParameterNumber")
     public YtDynamicTableWriter(RowDataToYtListConverters.RowDataToYtMapConverter ytConverter,
                                 WriterYtInfo ytInfo,
@@ -181,7 +185,8 @@ public class YtDynamicTableWriter implements Serializable {
                                 YtTableAttributes tableAttributes,
                                 @Nullable ReshardTable reshardRequest,
                                 YtWriterOptions ytWriterOptions,
-                                LocksProvider locksProvider) {
+                                LocksProvider locksProvider,
+                                DataMetricsWriterDelegate dataMetrics) {
         this.ytConverter = ytConverter;
         this.path = ytInfo.getPath();
         this.ysonSchemaString = ytInfo.getYsonSchemaString();
@@ -196,6 +201,7 @@ public class YtDynamicTableWriter implements Serializable {
         this.reshardRequest = reshardRequest;
         this.ytWriterOptions = ytWriterOptions;
         this.locksProvider = locksProvider;
+        this.dataMetrics = dataMetrics;
     }
 
     @SneakyThrows
@@ -297,6 +303,8 @@ public class YtDynamicTableWriter implements Serializable {
     }
 
     public void write(RowData record) {
+        dataMetrics.onRecord(record);
+
         if (modificationSize() == ytWriterOptions.getRowsInModificationLimit()) {
             flushModificationLock.lock();
             try {
@@ -686,6 +694,7 @@ public class YtDynamicTableWriter implements Serializable {
         while (backoffRetryStrategy.getNumRemainingRetries() >= 0) {
             try {
                 currentTransaction.commit().join();
+                onCommitSuccess();
                 break;
             } catch (Exception e) {
                 log.error("Unable to commit transaction {} for table {}", currentTransaction.getId(), getPath(), e);
@@ -706,6 +715,14 @@ public class YtDynamicTableWriter implements Serializable {
                 currentTransaction.modifyRows(modifyRowRequestBuilder).join();
             }
         }
+    }
+
+    /**
+     * Hook called after successful transaction commit.
+     * Can be overridden by subclasses to add custom logic.
+     */
+    protected void onCommitSuccess() {
+        dataMetrics.onCommit();
     }
 
     private void flushModification() {

@@ -19,6 +19,7 @@ import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.api.common.functions.RuntimeContext;
+import org.apache.flink.table.types.DataType;
 import org.apache.flink.util.concurrent.ExponentialBackoffRetryStrategy;
 import org.apache.flink.util.concurrent.RetryStrategy;
 import tech.ytsaurus.client.YTsaurusClient;
@@ -27,6 +28,8 @@ import tech.ytsaurus.client.request.ReshardTable;
 import tech.ytsaurus.core.cypress.CypressNodeType;
 import tech.ytsaurus.core.cypress.YPath;
 import tech.ytsaurus.core.tables.TableSchema;
+import tech.ytsaurus.flyt.connectors.datametrics.DataMetricsConfig;
+import tech.ytsaurus.flyt.connectors.datametrics.DataMetricsWriterDelegate;
 import tech.ytsaurus.flyt.locks.api.LocksProvider;
 import tech.ytsaurus.ysontree.YTreeTextSerializer;
 
@@ -70,6 +73,11 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
 
     private final LocksProvider locksProvider;
 
+    private final DataType dataType;
+
+    // Shared across all writers in this pool
+    private final DataMetricsWriterDelegate dataMetrics;
+
     @SuppressWarnings("checkstyle:ParameterNumber")
     public YtDynamicTableWriterPool(@Nullable TemporalCache<String, YtDynamicTableWriter> cache,
                                     Supplier<YTsaurusClient> clientSupplier,
@@ -82,7 +90,9 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
                                     YtTableAttributes tableAttributes,
                                     ReshardingConfig reshardingConfig,
                                     YtWriterOptions ytWriterOptions,
-                                    LocksProvider locksProvider) {
+                                    LocksProvider locksProvider,
+                                    DataType dataType,
+                                    @Nullable DataMetricsConfig dataMetricsConfig) {
         if (cache == null) {
             cache = makeDefaultCache();
         }
@@ -99,6 +109,12 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
         this.reshardingConfig = reshardingConfig;
         this.ytWriterOptions = ytWriterOptions;
         this.locksProvider = locksProvider;
+        this.dataType = dataType;
+
+        // Create and initialize delegate once for the whole pool
+        this.dataMetrics = DataMetricsWriterDelegate.create(dataMetricsConfig, dataType);
+        this.dataMetrics.open(context);
+
         cache.schedule();
     }
 
@@ -126,7 +142,9 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
                 tableAttributes,
                 reshardingConfig,
                 ytWriterOptions,
-                locksProvider);
+                locksProvider,
+                null,
+                null);
     }
 
     @VisibleForTesting
@@ -161,6 +179,7 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
     public void close() {
         cache.cancel();
         multipleOperations(YtDynamicTableWriter::close, "close");
+        dataMetrics.close();
     }
 
     private void multipleOperations(Consumer<YtDynamicTableWriter> operation, String operationName) {
@@ -247,7 +266,8 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
                 tableAttributes,
                 reshardRequest,
                 ytWriterOptions,
-                locksProvider);
+                locksProvider,
+                dataMetrics);
         writer.open();
         return writer;
     }
