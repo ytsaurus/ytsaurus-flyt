@@ -6,7 +6,6 @@ import java.util.function.LongSupplier;
 
 /**
  * A simple Gauge implementation for long values.
- * This is a local copy to avoid dependency on flink-common-metrics.
  */
 public class GaugeLong implements Gauge<Long> {
     private final LongSupplier supplier;
