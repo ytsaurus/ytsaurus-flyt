@@ -1,5 +1,5 @@
 group = "tech.ytsaurus.flyt.connectors.ytsaurus"
-version = "1.9.1"
+version = "1.9.2"
 
 plugins {
     id("com.peterabeles.gversion") version "1.10.3"

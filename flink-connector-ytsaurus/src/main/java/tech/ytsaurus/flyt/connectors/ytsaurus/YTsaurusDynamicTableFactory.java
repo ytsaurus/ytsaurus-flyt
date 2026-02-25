@@ -68,7 +68,7 @@ import tech.ytsaurus.flyt.connectors.ytsaurus.producer.converters.TrackableField
 import tech.ytsaurus.flyt.connectors.ytsaurus.producer.converters.YtPartitioningInstantRowDataConverter;
 import tech.ytsaurus.flyt.connectors.ytsaurus.utils.YtConfigUtils;
 
-import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.CLUSTER_NAME;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.PROXY;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.CLUSTER_PICK_STRATEGY;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.COMMIT_TRANSACTION_PERIOD;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.CREDENTIALS_SOURCE;
@@ -132,7 +132,7 @@ public class YTsaurusDynamicTableFactory implements DynamicTableSinkFactory, Dyn
         SerializableSupplier<RetryStrategy> retryStrategy = getRetryStrategy(options);
         ReshardingConfig reshardingConfig = getReshardingConfig(options);
         ComplexYtPath path = ComplexYtPath.builder()
-                .clusterName(options.get(CLUSTER_NAME))
+                .clusterName(options.get(PROXY))
                 .basePath(options.get(PATH))
                 .isPartitioned(partitionConfig != null)
                 .enableDynamicStoreRead(options.get(ENABLE_DYNAMIC_STORE_READ))
@@ -218,7 +218,7 @@ public class YTsaurusDynamicTableFactory implements DynamicTableSinkFactory, Dyn
                 .pathMap(pathMap)
                 .clusterPickStrategy(clusterPickStrategy)
                 .ysonSchemaString(options.get(YSON_SCHEMA))
-                .clusterName(options.get(CLUSTER_NAME))
+                .clusterName(options.get(PROXY))
                 .credentialsProvider(credentialsProvider)
                 .physicalRowDataType(context.getPhysicalRowDataType())
                 .limit(-1)
@@ -240,7 +240,7 @@ public class YTsaurusDynamicTableFactory implements DynamicTableSinkFactory, Dyn
     public Set<ConfigOption<?>> requiredOptions() {
         return Set.of(YSON_SCHEMA,
                 CREDENTIALS_SOURCE,
-                CLUSTER_NAME);
+                PROXY);
     }
 
     @Override
