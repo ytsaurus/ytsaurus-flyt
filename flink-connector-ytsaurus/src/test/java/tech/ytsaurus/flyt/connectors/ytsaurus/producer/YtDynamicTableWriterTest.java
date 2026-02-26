@@ -13,11 +13,10 @@ import org.mockito.Mockito;
 import org.mockito.MockitoAnnotations;
 import tech.ytsaurus.client.YTsaurusClient;
 import tech.ytsaurus.flyt.connectors.datametrics.NoopDataMetricsWriterDelegate;
-import tech.ytsaurus.flyt.locks.noop.NoopLocksProvider;
-
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.ComplexYtPath;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.YtTableAttributes;
 import tech.ytsaurus.flyt.connectors.ytsaurus.producer.converters.RowDataToYtListConverters;
+import tech.ytsaurus.flyt.locks.noop.NoopLocksProvider;
 
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -95,7 +94,7 @@ class YtDynamicTableWriterTest {
         when(ytClient.existsNode(anyString())).thenReturn(CompletableFuture.completedFuture(false));
         when(ytWriterOptions.getMountMode()).thenReturn(MountMode.ALWAYS);
 
-        doReturn(successCreateTable).when(ytDynamicTableWriter).tryCreateTable();
+        doReturn(successCreateTable).when(ytDynamicTableWriter).tryCreateAndConfigureTheTable();
         doNothing().when(ytDynamicTableWriter).mountIfUnmounted();
 
         ytDynamicTableWriter.createAndMountTableIfNeeded();
@@ -111,7 +110,7 @@ class YtDynamicTableWriterTest {
         when(ytClient.existsNode(anyString())).thenReturn(CompletableFuture.completedFuture(false));
         when(ytWriterOptions.getMountMode()).thenReturn(MountMode.ON_CREATE);
 
-        doReturn(successCreateTable).when(ytDynamicTableWriter).tryCreateTable();
+        doReturn(successCreateTable).when(ytDynamicTableWriter).tryCreateAndConfigureTheTable();
         if (!successCreateTable) {
             doNothing().when(ytDynamicTableWriter).waitUntilMounted(anyLong());
         }
@@ -133,7 +132,7 @@ class YtDynamicTableWriterTest {
         when(ytClient.existsNode(anyString())).thenReturn(CompletableFuture.completedFuture(true));
         when(ytWriterOptions.getMountMode()).thenReturn(MountMode.ALWAYS);
 
-        verify(ytDynamicTableWriter, never()).tryCreateTable();
+        verify(ytDynamicTableWriter, never()).tryCreateAndConfigureTheTable();
         doNothing().when(ytDynamicTableWriter).mountIfUnmounted();
 
         ytDynamicTableWriter.createAndMountTableIfNeeded();
@@ -149,7 +148,7 @@ class YtDynamicTableWriterTest {
         when(ytWriterOptions.getMountMode()).thenReturn(MountMode.ON_CREATE);
 
         doNothing().when(ytDynamicTableWriter).waitUntilMounted(YtDynamicTableWriter.WAIT_MOUNTING_TIMEOUT_MS);
-        verify(ytDynamicTableWriter, never()).tryCreateTable();
+        verify(ytDynamicTableWriter, never()).tryCreateAndConfigureTheTable();
 
         ytDynamicTableWriter.createAndMountTableIfNeeded();
 

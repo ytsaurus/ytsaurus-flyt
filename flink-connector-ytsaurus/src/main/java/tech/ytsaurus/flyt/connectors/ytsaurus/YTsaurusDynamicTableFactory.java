@@ -137,6 +137,7 @@ public class YTsaurusDynamicTableFactory implements DynamicTableSinkFactory, Dyn
                 .isPartitioned(partitionConfig != null)
                 .enableDynamicStoreRead(options.get(ENABLE_DYNAMIC_STORE_READ))
                 .build();
+        log.info("Created YT Resharding config for table '{}' - {}", path.getBasePath(), reshardingConfig);
 
         YtTableAttributes ytTableAttributes = YtTableAttributes.empty()
                 .setOptimizeFor(options.getOptional(OPTIMIZE_FOR).orElse(null))
@@ -147,7 +148,7 @@ public class YTsaurusDynamicTableFactory implements DynamicTableSinkFactory, Dyn
         // for compatibility
         options.getOptional(YT_CUSTOM_ATTRIBUTES).ifPresent(ytTableAttributes::setCustomAttributesYson);
 
-        log.info("YtTableAttributes: {}", ytTableAttributes);
+        log.info("Created YtTableAttributes for table '{}' - {}", path.getBasePath(), ytTableAttributes);
 
         YtWriterOptions ytWriterOptions = initYtWriterOptions(options);
 
