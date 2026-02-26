@@ -45,13 +45,6 @@ import tech.ytsaurus.core.common.YTsaurusError;
 import tech.ytsaurus.core.cypress.CypressNodeType;
 import tech.ytsaurus.core.cypress.YPath;
 import tech.ytsaurus.core.tables.TableSchema;
-import tech.ytsaurus.flyt.locks.api.LockMode;
-import tech.ytsaurus.flyt.locks.api.LocksProvider;
-import tech.ytsaurus.flyt.locks.api.utils.LocksProviderUtils;
-import tech.ytsaurus.ysontree.YTree;
-import tech.ytsaurus.ysontree.YTreeNode;
-import tech.ytsaurus.ysontree.YTreeTextSerializer;
-
 import tech.ytsaurus.flyt.connectors.datametrics.DataMetricsWriterDelegate;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.ComplexYtPath;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.TrackableField;
@@ -59,9 +52,16 @@ import tech.ytsaurus.flyt.connectors.ytsaurus.common.YtTableAttributes;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.constants.YtErrorCodes;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.metrics.GaugeLong;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.partition.PartitionConfig;
+import tech.ytsaurus.flyt.connectors.ytsaurus.common.providers.reshard.ReshardProvider;
 import tech.ytsaurus.flyt.connectors.ytsaurus.producer.converters.RowDataToYtListConverters;
 import tech.ytsaurus.flyt.connectors.ytsaurus.utils.FutureUtils;
 import tech.ytsaurus.flyt.connectors.ytsaurus.utils.PartitionScaleUtils;
+import tech.ytsaurus.flyt.locks.api.LockMode;
+import tech.ytsaurus.flyt.locks.api.LocksProvider;
+import tech.ytsaurus.flyt.locks.api.utils.LocksProviderUtils;
+import tech.ytsaurus.ysontree.YTree;
+import tech.ytsaurus.ysontree.YTreeNode;
+import tech.ytsaurus.ysontree.YTreeTextSerializer;
 
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.constants.YtConsts.YT_ENABLE_DYNAMIC_STORE_READ_ATTRIBUTE_NAME;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.constants.YtConsts.YT_EXPIRATION_TIME_ATTRIBUTE_NAME;
@@ -110,7 +110,7 @@ public class YtDynamicTableWriter implements Serializable {
     private final LocksProvider locksProvider;
 
     @Nullable
-    private final ReshardTable reshardRequest;
+    private final ReshardProvider reshardProvider;
 
     private final YtWriterOptions ytWriterOptions;
 
@@ -183,7 +183,7 @@ public class YtDynamicTableWriter implements Serializable {
                                 RuntimeContext context,
                                 MetricsSupplier metricsSuppliers,
                                 YtTableAttributes tableAttributes,
-                                @Nullable ReshardTable reshardRequest,
+                                @Nullable ReshardProvider reshardProvider,
                                 YtWriterOptions ytWriterOptions,
                                 LocksProvider locksProvider,
                                 DataMetricsWriterDelegate dataMetrics) {
@@ -198,7 +198,7 @@ public class YtDynamicTableWriter implements Serializable {
         this.tableAttributes = tableAttributes;
         this.retryStrategy = retryStrategy;
         this.locksRetryStrategy = locksRetryStrategy;
-        this.reshardRequest = reshardRequest;
+        this.reshardProvider = reshardProvider;
         this.ytWriterOptions = ytWriterOptions;
         this.locksProvider = locksProvider;
         this.dataMetrics = dataMetrics;
@@ -424,7 +424,7 @@ public class YtDynamicTableWriter implements Serializable {
                 path.getFullPath(),
                 LockMode.EXCLUSIVE,
                 this::isTableExists,
-                this::tryCreateTable,
+                this::tryCreateAndConfigureTheTable,
                 locksRetryStrategy,
                 locksProvider
         );
@@ -509,25 +509,16 @@ public class YtDynamicTableWriter implements Serializable {
     }
 
     @VisibleForTesting
-    boolean tryCreateTable() {
+    boolean tryCreateAndConfigureTheTable() {
         boolean createdTableByUs = false;
         try {
-            Map<String, YTreeNode> attributes = tableAttributes.getAttributes();
-            attributes.put(YT_SCHEMA_ATTRIBUTE_NAME, schemaToCreate.toYTree());
-
-            log.info("Create YT table {}. Attributes: {}.", path.getFullPath(), attributes);
-
-            client.createNode(
-                            CreateNode.builder()
-                                    .setPath(YPath.simple(path.getFullPath()))
-                                    .setType(CypressNodeType.TABLE)
-                                    .setAttributes(attributes)
-                                    .setRecursive(true)
-                                    .build())
-                    .join();
+            configureTableAttributes();
+            createTable();
             createdTableByUs = true;
             log.info("YT table: {} was created successfully.", path.getFullPath());
-            applyPostCreateOperations();
+            applyDynamicStoreRead();
+            applyTtl();
+            reshardTable();
         } catch (CompletionException e) {
             YTsaurusError ytsaurusError = unwrapYTSaurusError(e);
             if (!ytsaurusError.matches(YtErrorCodes.NODE_ALREADY_EXISTS)) {
@@ -538,16 +529,37 @@ public class YtDynamicTableWriter implements Serializable {
         return createdTableByUs;
     }
 
-    private void applyPostCreateOperations() {
-        log.info("Apply post create operations for table {}", path.getFullPath());
-        applyDynamicStoreRead();
-        applyTtl();
-        reshardTable();
+    private void configureTableAttributes() {
+        if (reshardProvider != null) {
+            int tabletCount = reshardProvider.calculateTabletCount(client, path);
+            // We must add this attribute so that the YT does not compress the number of partitions we set
+            log.info("Set min_tablet_count attribute: {}", tabletCount);
+            tableAttributes.setMinTabletCount(tabletCount);
+        }
+    }
+
+    private void createTable() {
+        Map<String, YTreeNode> attributes = tableAttributes.getAttributes();
+        attributes.put(YT_SCHEMA_ATTRIBUTE_NAME, schemaToCreate.toYTree());
+
+        log.info("Create YT table {}. Attributes: {}.", path.getFullPath(), attributes);
+
+        client.createNode(
+                        CreateNode.builder()
+                                .setPath(YPath.simple(path.getFullPath()))
+                                .setType(CypressNodeType.TABLE)
+                                .setAttributes(attributes)
+                                .setRecursive(true)
+                                .build())
+                .join();
     }
 
     private void reshardTable() {
-        if (reshardRequest != null) {
-            log.info("Reshard table {}", path.getFullPath());
+        Integer tabletCount = tableAttributes.getMinTabletCount();
+        if (reshardProvider != null && tabletCount != null) {
+            log.info("Preparing reshard request for YT table '{}' to '{}' tablets with reshard config {}",
+                    path.getFullPath(), tabletCount, reshardProvider.getReshardingConfig());
+            ReshardTable reshardRequest = reshardProvider.makeReshardRequest(path, schemaToCreate, tabletCount);
             client.reshardTable(reshardRequest).join();
             log.info("Table {} was resharded successfully.", path.getFullPath());
         }

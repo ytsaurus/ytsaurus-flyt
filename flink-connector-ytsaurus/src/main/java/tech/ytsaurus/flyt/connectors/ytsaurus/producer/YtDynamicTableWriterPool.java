@@ -39,7 +39,7 @@ import tech.ytsaurus.flyt.connectors.ytsaurus.common.TrackableField;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.YtTableAttributes;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.partition.PartitionConfig;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.providers.reshard.FixedReshardProvider;
-import tech.ytsaurus.flyt.connectors.ytsaurus.common.providers.reshard.LastPartitionReshardProvider;
+import tech.ytsaurus.flyt.connectors.ytsaurus.common.providers.reshard.LastPartitionsReshardProvider;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.providers.reshard.ReshardProvider;
 import tech.ytsaurus.flyt.connectors.ytsaurus.producer.converters.RowDataToYtListConverters;
 import tech.ytsaurus.flyt.connectors.ytsaurus.utils.TemporalCache;
@@ -72,8 +72,6 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
     private final YtWriterOptions ytWriterOptions;
 
     private final LocksProvider locksProvider;
-
-    private final DataType dataType;
 
     // Shared across all writers in this pool
     private final DataMetricsWriterDelegate dataMetrics;
@@ -109,7 +107,6 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
         this.reshardingConfig = reshardingConfig;
         this.ytWriterOptions = ytWriterOptions;
         this.locksProvider = locksProvider;
-        this.dataType = dataType;
 
         // Create and initialize delegate once for the whole pool
         this.dataMetrics = DataMetricsWriterDelegate.create(dataMetricsConfig, dataType);
@@ -230,22 +227,9 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
         metricsSuppliers.putIfAbsent(tablePath.getFullPath(), new MetricsSupplier(tablePath.getFullPath()));
         MetricsSupplier metricsSupplier = metricsSuppliers.get(tablePath.getFullPath());
 
-        YTsaurusClient ytClient = clientSupplier.get();
-        ReshardProvider reshardProvider = resolveReshardProvider(writerClassifier.getPartitionConfig());
-        ReshardTable reshardRequest = null;
-        if (reshardProvider != null) {
-            TableSchema schema = TableSchema.fromYTree(YTreeTextSerializer.deserialize(ysonSchemaString));
-            reshardRequest = reshardProvider.get(ytClient, tablePath, schema, reshardingConfig);
-            if (tableAttributes.getMinTabletCount() == null) {
-                // We must add this attribute so that the YT does not compress the number of partitions we set
-                log.info("Set min_tablet_count attribute: {}", reshardingConfig.getTabletCount());
-                tableAttributes.setMinTabletCount(reshardingConfig.getTabletCount());
-            }
-        }
-
         WriterYtInfo ytInfo = new WriterYtInfo(
                 tablePath,
-                ytClient,
+                clientSupplier.get(),
                 ysonSchemaString);
 
         ExponentialBackoffRetryStrategy locksRetryStrategy = new ExponentialBackoffRetryStrategy(
@@ -264,7 +248,7 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
                 context,
                 metricsSupplier,
                 tableAttributes,
-                reshardRequest,
+                resolveReshardProvider(writerClassifier.getPartitionConfig()),
                 ytWriterOptions,
                 locksProvider,
                 dataMetrics);
@@ -277,9 +261,9 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
             case NONE:
                 return null;
             case FIXED:
-                return new FixedReshardProvider();
+                return new FixedReshardProvider(reshardingConfig);
             case LAST_PARTITIONS:
-                return new LastPartitionReshardProvider(partitionConfig);
+                return new LastPartitionsReshardProvider(reshardingConfig, partitionConfig);
             default:
                 throw new IllegalArgumentException("Unsupported resharding strategy: "
                         + reshardingConfig.getReshardStrategy());
