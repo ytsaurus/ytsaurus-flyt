@@ -587,7 +587,8 @@ public class YtDynamicTableWriter implements Serializable {
                 client.mountTableAndWaitTablets(MountTable.builder()
                         .setPath(path.getFullPath())
                         .setTimeout(Duration.ofMinutes(1))
-                        .build());
+                        .build())
+                        .join();
                 break;
             } catch (CompletionException e) {
                 YTsaurusError ytsaurusError = unwrapYTSaurusError(e);

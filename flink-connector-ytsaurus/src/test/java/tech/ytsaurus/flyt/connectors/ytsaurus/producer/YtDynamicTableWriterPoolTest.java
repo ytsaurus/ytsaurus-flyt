@@ -217,6 +217,8 @@ public class YtDynamicTableWriterPoolTest {
                         eq(path.getFullPathWithAttribute(YT_ENABLE_DYNAMIC_STORE_READ_ATTRIBUTE_NAME)),
                         Mockito.<YTreeNode>any()))
                 .thenAnswer(invocation -> CompletableFuture.completedFuture(null));
+        Mockito.when(mockedClient.mountTableAndWaitTablets(any(MountTable.class)))
+                .thenAnswer(invocation -> CompletableFuture.completedFuture(null));
 
         try (var pool = makePool(path, schema, logicalType)) {
             pool.createFullPathTable();
@@ -349,6 +351,8 @@ public class YtDynamicTableWriterPoolTest {
                         }
                         return CompletableFuture.completedFuture(null);
                     });
+            Mockito.when(mockedClient.mountTableAndWaitTablets(any(MountTable.class)))
+                    .thenAnswer(invocation -> CompletableFuture.completedFuture(null));
 
             try (var pool = makePool(path, schema, logicalType)) {
                 pool.getOrAcquire(WriterClassifier.partition(rowInstant, partitionConfigBuilder
@@ -379,6 +383,8 @@ public class YtDynamicTableWriterPoolTest {
                 );
         Mockito.when(mockedClient.mountTable(anyString(), any(), anyBoolean(), anyBoolean(), any()))
                 .thenReturn(CompletableFuture.completedFuture(null));
+        Mockito.when(mockedClient.mountTableAndWaitTablets(any(MountTable.class)))
+                .thenAnswer(invocation -> CompletableFuture.completedFuture(null));
     }
 
     private void setYtPathAvailable(boolean exists, String... parts) {
