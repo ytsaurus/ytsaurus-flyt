@@ -38,69 +38,83 @@ public class YtConnectorOptions {
             .stringType()
             .noDefaultValue();
 
-    public static final ConfigOption<String> PARTITION_KEY = ConfigOptions.key("partitionKey")
+    public static final ConfigOption<String> PARTITION_KEY = ConfigOptions.key("partition-key")
             .stringType()
-            .noDefaultValue();
+            .noDefaultValue()
+            .withDeprecatedKeys("partitionKey");
 
-    public static final ConfigOption<PartitionScale> PARTITION_SCALE = ConfigOptions.key("partitionScale")
+    public static final ConfigOption<PartitionScale> PARTITION_SCALE = ConfigOptions.key("partition-scale")
             .enumType(PartitionScale.class)
-            .noDefaultValue();
+            .noDefaultValue()
+            .withDeprecatedKeys("partitionScale");
 
-    public static final ConfigOption<String> CLUSTER_NAME = ConfigOptions.key("clusterName")
+    public static final ConfigOption<String> PROXY = ConfigOptions.key("proxy")
             .stringType()
-            .noDefaultValue();
+            .noDefaultValue()
+            .withDeprecatedKeys("clusterName");
 
-    public static final ConfigOption<Map<String, String>> PATH_MAP = ConfigOptions.key("pathMap")
+    public static final ConfigOption<Map<String, String>> PATH_MAP = ConfigOptions.key("path-map")
             .mapType()
             .noDefaultValue()
-            .withDescription("Map of cluster-to-table-path. Useful when querying multiple clusters");
+            .withDescription("Map of cluster-to-table-path. Useful when querying multiple clusters")
+            .withDeprecatedKeys("pathMap");
 
-    public static final ConfigOption<String> CREDENTIALS_SOURCE = ConfigOptions.key("credentialsSource")
+    public static final ConfigOption<String> CREDENTIALS_SOURCE = ConfigOptions.key("credentials-source")
             .stringType()
-            .noDefaultValue();
+            .noDefaultValue()
+            .withDeprecatedKeys("credentialsSource");
 
-    public static final ConfigOption<String> YT_USERNAME_OPTION = ConfigOptions.key("ytUsername")
+    public static final ConfigOption<String> YT_USERNAME_OPTION = ConfigOptions.key("username")
             .stringType()
-            .noDefaultValue();
+            .noDefaultValue()
+            .withDeprecatedKeys("ytUsername");
 
-    public static final ConfigOption<String> YT_TOKEN_OPTION = ConfigOptions.key("ytToken")
+    public static final ConfigOption<String> YT_TOKEN_OPTION = ConfigOptions.key("token")
             .stringType()
-            .noDefaultValue();
+            .noDefaultValue()
+            .withDeprecatedKeys("ytToken");
 
-    public static final ConfigOption<String> TRACKABLE_FIELD = ConfigOptions.key("trackableField")
+    public static final ConfigOption<String> TRACKABLE_FIELD = ConfigOptions.key("trackable-field")
             .stringType()
-            .noDefaultValue();
+            .noDefaultValue()
+            .withDeprecatedKeys("trackableField");
 
-    public static final ConfigOption<TimestampFormat> TIMESTAMP_FORMAT_OPTION = ConfigOptions.key("timestampFormat")
+    public static final ConfigOption<TimestampFormat> TIMESTAMP_FORMAT_OPTION = ConfigOptions.key("timestamp-format")
             .enumType(TimestampFormat.class)
-            .defaultValue(TimestampFormat.ISO_8601);
+            .defaultValue(TimestampFormat.ISO_8601)
+            .withDeprecatedKeys("timestampFormat");
 
-    public static final ConfigOption<Boolean> EAGER_INITIALIZATION = ConfigOptions.key("eagerInitialization")
+    public static final ConfigOption<Boolean> EAGER_INITIALIZATION = ConfigOptions.key("eager-initialization")
             .booleanType()
-            .defaultValue(true);
+            .defaultValue(true)
+            .withDeprecatedKeys("eagerInitialization");
 
     /**
      * Set enable_dynamic_store_read attribute for dynamic table after mount
      *
      * @see <a href="https://ytsaurus.tech/docs/en/user-guide/dynamic-tables/mapreduce#running_operations_over_dyn_tables">YT Documentation</a>
      */
-    public static final ConfigOption<Boolean> ENABLE_DYNAMIC_STORE_READ = ConfigOptions.key("enableDynamicStoreRead")
+    public static final ConfigOption<Boolean> ENABLE_DYNAMIC_STORE_READ = ConfigOptions.key("enable-dynamic-store-read")
             .booleanType()
-            .defaultValue(true);
+            .defaultValue(true)
+            .withDeprecatedKeys("enableDynamicStoreRead");
 
-    public static final ConfigOption<Integer> PARTITION_TTL_DAY_CNT = ConfigOptions.key("partitionTtlDayCnt")
+    public static final ConfigOption<Integer> PARTITION_TTL_DAY_CNT = ConfigOptions.key("partition-ttl-day-cnt")
             .intType()
-            .noDefaultValue();
+            .noDefaultValue()
+            .withDeprecatedKeys("partitionTtlDayCnt");
 
     public static final ConfigOption<Integer> PARTITION_TTL_IN_DAYS_FROM_CREATION = ConfigOptions
-            .key("partitionTtlInDaysFromCreation")
+            .key("partition-ttl-in-days-from-creation")
             .intType()
-            .noDefaultValue();
+            .noDefaultValue()
+            .withDeprecatedKeys("partitionTtlInDaysFromCreation");
 
     public static final ConfigOption<Integer> MIN_PARTITION_TTL = ConfigOptions
-            .key("minPartitionTtl")
+            .key("min-partition-ttl")
             .intType()
-            .defaultValue(20);
+            .defaultValue(20)
+            .withDeprecatedKeys("minPartitionTtl");
 
     public static final ConfigOption<Boolean> LOOKUP_ASYNC =
             ConfigOptions.key("lookup.async")
@@ -108,25 +122,30 @@ public class YtConnectorOptions {
                     .defaultValue(false)
                     .withDescription("whether to set async lookup.");
 
-    public static final ConfigOption<OptimizeFor> OPTIMIZE_FOR = ConfigOptions.key("optimizeFor")
+    public static final ConfigOption<OptimizeFor> OPTIMIZE_FOR = ConfigOptions.key("optimize-for")
             .enumType(OptimizeFor.class)
-            .noDefaultValue();
+            .noDefaultValue()
+            .withDeprecatedKeys("optimizeFor");
 
-    public static final ConfigOption<PrimaryMedium> PRIMARY_MEDIUM = ConfigOptions.key("primaryMedium")
+    public static final ConfigOption<PrimaryMedium> PRIMARY_MEDIUM = ConfigOptions.key("primary-medium")
             .enumType(PrimaryMedium.class)
-            .noDefaultValue();
+            .noDefaultValue()
+            .withDeprecatedKeys("primaryMedium");
 
-    public static final ConfigOption<RetryStrategy> RETRY_STRATEGY = ConfigOptions.key("retryStrategy")
+    public static final ConfigOption<RetryStrategy> RETRY_STRATEGY = ConfigOptions.key("retry-strategy")
             .enumType(RetryStrategy.class)
-            .defaultValue(RetryStrategy.EXPONENTIAL);
+            .defaultValue(RetryStrategy.EXPONENTIAL)
+            .withDeprecatedKeys("retryStrategy");
 
-    public static final ConfigOption<String> TABLET_CELL_BUNDLE = ConfigOptions.key("tabletCellBundle")
+    public static final ConfigOption<String> TABLET_CELL_BUNDLE = ConfigOptions.key("tablet-cell-bundle")
             .stringType()
-            .noDefaultValue();
+            .noDefaultValue()
+            .withDeprecatedKeys("tabletCellBundle");
 
-    public static final ConfigOption<Integer> RESHARD_TABLET_COUNT = ConfigOptions.key("reshard.tabletCount")
+    public static final ConfigOption<Integer> RESHARD_TABLET_COUNT = ConfigOptions.key("reshard.tablet-count")
             .intType()
-            .noDefaultValue();
+            .noDefaultValue()
+            .withDeprecatedKeys("reshard.tabletCount");
 
     public static final ConfigOption<Boolean> RESHARD_UNIFORM = ConfigOptions.key("reshard.uniform")
             .booleanType()
@@ -137,54 +156,66 @@ public class YtConnectorOptions {
             .defaultValue(ReshardStrategy.NONE);
 
     public static final ConfigOption<Integer> RESHARD_LAST_PARTITIONS_COUNT =
-            ConfigOptions.key("reshard.lastPartitionsCount")
+            ConfigOptions.key("reshard.last-partitions-count")
                     .intType()
                     .defaultValue(7) // days in a week (daily partitions are the most typical)
-                    .withDescription("Number of partitions to consider in LAST_PARTITIONS reshard strategy.");
+                    .withDescription("Number of partitions to consider in LAST_PARTITIONS reshard strategy.")
+                    .withDeprecatedKeys("reshard.lastPartitionsCount");
 
-    public static final ConfigOption<LookupMethod> LOOKUP_METHOD = ConfigOptions.key("lookupMethod")
+    public static final ConfigOption<LookupMethod> LOOKUP_METHOD = ConfigOptions.key("lookup-method")
             .enumType(LookupMethod.class)
-            .defaultValue(LookupMethod.LOOKUP);
+            .defaultValue(LookupMethod.LOOKUP)
+            .withDeprecatedKeys("lookupMethod");
 
-    public static final ConfigOption<String> CLUSTER_PICK_STRATEGY = ConfigOptions.key("clusterPickStrategy")
+    public static final ConfigOption<String> CLUSTER_PICK_STRATEGY = ConfigOptions.key("cluster-pick-strategy")
             .stringType()
-            .defaultValue(FirstAvailableClusterPickStrategy.NAME);
+            .defaultValue(FirstAvailableClusterPickStrategy.NAME)
+            .withDeprecatedKeys("clusterPickStrategy");
 
-    public static final ConfigOption<Duration> COMMIT_TRANSACTION_PERIOD = ConfigOptions.key("commitTransactionPeriod")
+    public static final ConfigOption<Duration> COMMIT_TRANSACTION_PERIOD = ConfigOptions.key("commit-transaction-period")
             .durationType()
-            .noDefaultValue();
+            .noDefaultValue()
+            .withDeprecatedKeys("commitTransactionPeriod");
 
-    public static final ConfigOption<Duration> FLUSH_MODIFICATION_PERIOD = ConfigOptions.key("flushModificationPeriod")
+    public static final ConfigOption<Duration> FLUSH_MODIFICATION_PERIOD = ConfigOptions.key("flush-modification-period")
             .durationType()
-            .noDefaultValue();
+            .noDefaultValue()
+            .withDeprecatedKeys("flushModificationPeriod");
 
-    public static final ConfigOption<Duration> TRANSACTION_TIMEOUT = ConfigOptions.key("transactionTimeout")
+    public static final ConfigOption<Duration> TRANSACTION_TIMEOUT = ConfigOptions.key("transaction-timeout")
             .durationType()
-            .noDefaultValue();
+            .noDefaultValue()
+            .withDeprecatedKeys("transactionTimeout");
 
-    public static final ConfigOption<Integer> ROWS_IN_MODIFICATION_LIMIT = ConfigOptions.key("rowsInModificationLimit")
+    public static final ConfigOption<Integer> ROWS_IN_MODIFICATION_LIMIT = ConfigOptions.key("rows-in-modification-limit")
             .intType()
-            .noDefaultValue();
+            .noDefaultValue()
+            .withDeprecatedKeys("rowsInModificationLimit");
 
-    public static final ConfigOption<Integer> ROWS_IN_TRANSACTION_LIMIT = ConfigOptions.key("rowsInTransactionLimit")
+    public static final ConfigOption<Integer> ROWS_IN_TRANSACTION_LIMIT = ConfigOptions.key("rows-in-transaction-limit")
             .intType()
-            .noDefaultValue();
+            .noDefaultValue()
+            .withDeprecatedKeys("rowsInTransactionLimit");
 
-    public static final ConfigOption<MountMode> MOUNT_MODE = ConfigOptions.key("mountMode")
+    public static final ConfigOption<MountMode> MOUNT_MODE = ConfigOptions.key("mount-mode")
             .enumType(MountMode.class)
-            .defaultValue(MountMode.ALWAYS);
+            .defaultValue(MountMode.ALWAYS)
+            .withDeprecatedKeys("mountMode");
 
-    public static final ConfigOption<Atomicity> TRANSACTION_ATOMICITY = ConfigOptions.key("transactionAtomicity")
+    public static final ConfigOption<Atomicity> TRANSACTION_ATOMICITY = ConfigOptions.key("transaction-atomicity")
             .enumType(Atomicity.class)
-            .noDefaultValue();
+            .noDefaultValue()
+            .withDeprecatedKeys("transactionAtomicity");
 
     public static final ConfigOption<String> YT_CUSTOM_ATTRIBUTES =
             ConfigOptions
-                    .key("customAttributes")
+                    .key("custom-attributes")
                     .stringType()
-                    .noDefaultValue();
+                    .noDefaultValue()
+                    .withDeprecatedKeys("customAttributes");
 
-    public static final ConfigOption<String> PROXY_ROLE = ConfigOptions.key("proxyRole")
+    public static final ConfigOption<String> PROXY_ROLE = ConfigOptions.key("proxy-role")
             .stringType()
-            .noDefaultValue();
+            .noDefaultValue()
+            .withDeprecatedKeys("proxyRole");
 }

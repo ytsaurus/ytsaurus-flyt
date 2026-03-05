@@ -14,7 +14,7 @@ import tech.ytsaurus.flyt.connectors.ytsaurus.common.credentials.CredentialsProv
 
 import static org.apache.flink.util.Preconditions.checkArgument;
 import static org.apache.flink.util.Preconditions.checkNotNull;
-import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.CLUSTER_NAME;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.PROXY;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.CREDENTIALS_SOURCE;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.ENABLE_DYNAMIC_STORE_READ;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.PARTITION_KEY;
@@ -25,10 +25,10 @@ import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.P
 public class YtConfigUtils {
     public static Map<String, ComplexYtPath> getPathMap(ReadableConfig options) {
         Map<String, String> pathMap;
-        if (options.getOptional(CLUSTER_NAME).isPresent()) {
+        if (options.getOptional(PROXY).isPresent()) {
             checkArgument(options.getOptional(PATH_MAP).isEmpty(),
                     "Path map must be null when cluster name is used");
-            pathMap = Map.of(options.get(CLUSTER_NAME), options.get(PATH));
+            pathMap = Map.of(options.get(PROXY), options.get(PATH));
         } else {
             pathMap = options.get(PATH_MAP);
             checkNotNull(pathMap, "Path map or cluster name must be present");

@@ -166,11 +166,11 @@ CREATE TABLE ytsaurus_simple_sink (
     PRIMARY KEY (id) NOT ENFORCED
 ) WITH (
     'connector' = 'ytsaurus',
-    'clusterName' = 'localhost:8082',
+    'proxy' = 'localhost:8082',
     'path' = '//tmp/flink_simple_test_table',
-    'credentialsSource' = 'options',
-    'ytUsername' = 'admin',
-    'ytToken' = 'password',
+    'credentials-source' = 'options',
+    'username' = 'admin',
+    'token' = 'password',
     'schema' = '[
         {"name"="id";"type"="int64";"required"=%false;"sort_order"="ascending"};
         {"name"="name";"type"="string";"required"=%false};
@@ -216,72 +216,72 @@ The YTsaurus connector supports a wide range of configuration options to customi
 
 | Option | Type | Description|
 |--------|------|------------|
-| `clusterName` | String | YTsaurus HTTP proxy address|
+| `proxy` | String | YTsaurus HTTP proxy address|
 | `schema` | String | YSON schema definition for the YTsaurus table|
-| `credentialsSource` | String | Authentication method (`options`, `env`, `your-custom-provider`) |
+| `credentials-source` | String | Authentication method (`options`, `env`, `your-custom-provider`) |
 
 ### Path Configuration
 
 | Option | Type | Default | Description|
 |--------|------|---------|------------|
 | `path` | String | - | Path to the YTsaurus table|
-| `pathMap` | Map<String, String> | - | Map of cluster-to-table-path for multi-cluster lookups |
+| `path-map` | Map<String, String> | - | Map of cluster-to-table-path for multi-cluster lookups |
 
 ### Authentication Options
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `ytUsername` | String | - | YTsaurus username (when using `options` credentials source) |
-| `ytToken` | String | - | YTsaurus token (when using `options` credentials source) |
-| `proxyRole` | String | - | Proxy role for authentication |
+| `username` | String | - | YTsaurus username (when using `options` credentials source) |
+| `token` | String | - | YTsaurus token (when using `options` credentials source) |
+| `proxy-role` | String | - | Proxy role for authentication |
 
 ### Table Configuration
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `optimizeFor` | Enum | - | Table optimization mode (`LOOKUP`, `SCAN`) |
-| `primaryMedium` | Enum | - | Primary storage medium (`DEFAULT`, `SSD_BLOBS`) |
-| `tabletCellBundle` | String | - | Tablet cell bundle name |
-| `enableDynamicStoreRead` | Boolean | `true` | Enable dynamic store read attribute |
-| `customAttributes` | String | - | Custom table attributes in YSON format |
+| `optimize-for` | Enum | - | Table optimization mode (`LOOKUP`, `SCAN`) |
+| `primary-medium` | Enum | - | Primary storage medium (`DEFAULT`, `SSD_BLOBS`) |
+| `tablet-cell-bundle` | String | - | Tablet cell bundle name |
+| `enable-dynamic-store-read` | Boolean | `true` | Enable dynamic store read attribute |
+| `custom-attributes` | String | - | Custom table attributes in YSON format |
 
 ### Partitioning Options
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `partitionKey` | String | - | Column name to use for partitioning |
-| `partitionScale` | Enum | - | Partitioning granularity (`HOUR`, `HOUR_T`, `DAY`, `WEEK`, `MONTH`, `SHORT_MONTH`, `YEAR`, `SHORT_YEAR`) |
-| `partitionTtlDayCnt` | Integer | - | Number of days to keep partitions |
-| `partitionTtlInDaysFromCreation` | Integer | - | TTL in days from partition creation |
-| `minPartitionTtl` | Integer | `20` | Minimum partition TTL in days |
+| `partition-key` | String | - | Column name to use for partitioning |
+| `partition-scale` | Enum | - | Partitioning granularity (`HOUR`, `HOUR_T`, `DAY`, `WEEK`, `MONTH`, `SHORT_MONTH`, `YEAR`, `SHORT_YEAR`) |
+| `partition-ttl-day-cnt` | Integer | - | Number of days to keep partitions |
+| `partition-ttl-in-days-from-creation` | Integer | - | TTL in days from partition creation |
+| `min-partition-ttl` | Integer | `20` | Minimum partition TTL in days |
 
 ### Resharding Options
 
 | Option | Type | Default | Description|
 |--------|------|---------|------------|
 | `reshard.strategy` | Enum | `NONE` | Resharding strategy (`NONE`, `FIXED`, `LAST_PARTITIONS`) |
-| `reshard.tabletCount` | Integer | - | Number of tablets for resharding|
+| `reshard.tablet-count` | Integer | - | Number of tablets for resharding|
 | `reshard.uniform` | Boolean | `false` | Use uniform partitioning|
-| `reshard.lastPartitionsCount` | Integer | `7` | Number of partitions to consider in `LAST_PARTITIONS` strategy |
+| `reshard.last-partitions-count` | Integer | `7` | Number of partitions to consider in `LAST_PARTITIONS` strategy |
 
 ### Transaction and Performance Options
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `commitTransactionPeriod` | Duration | - | Period for committing transactions |
-| `transactionTimeout` | Duration | - | Transaction timeout |
-| `transactionAtomicity` | Enum | - | Transaction atomicity level |
-| `rowsInTransactionLimit` | Integer | - | Maximum rows per transaction |
-| `rowsInModificationLimit` | Integer | - | Maximum rows per modification |
-| `retryStrategy` | Enum | `EXPONENTIAL` | Retry strategy (`EXPONENTIAL`, `NO_RETRY`) |
+| `commit-transaction-period` | Duration | - | Period for committing transactions |
+| `transaction-timeout` | Duration | - | Transaction timeout |
+| `transaction-atomicity` | Enum | - | Transaction atomicity level |
+| `rows-in-transaction-limit` | Integer | - | Maximum rows per transaction |
+| `rows-in-modification-limit` | Integer | - | Maximum rows per modification |
+| `retry-strategy` | Enum | `EXPONENTIAL` | Retry strategy (`EXPONENTIAL`, `NO_RETRY`) |
 
 ### Lookup Options
 
 | Option | Type | Default | Description                                                                                                                                                           |
 |--------|------|---------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `lookup.async` | Boolean | `false` | Enable asynchronous lookup                                                                                                                                            |
-| `lookupMethod` | Enum | `LOOKUP` | Lookup method (`LOOKUP`, `SELECT`). `LOOKUP` method works only with key columns, but has better performance. `SELECT` method works with any colums, but works slowly. |
-| `clusterPickStrategy` | String | `FirstAvailableClusterPickStrategy` | Strategy for picking clusters in multi-cluster setup. You can choose your own implementation of the strategy.                                                         |
+| `lookup-method` | Enum | `LOOKUP` | Lookup method (`LOOKUP`, `SELECT`). `LOOKUP` method works only with key columns, but has better performance. `SELECT` method works with any colums, but works slowly. |
+| `cluster-pick-strategy` | String | `FirstAvailableClusterPickStrategy` | Strategy for picking clusters in multi-cluster setup. You can choose your own implementation of the strategy.                                                         |
 
 ### Cache Options for lookup
 
@@ -300,7 +300,7 @@ The YTsaurus connector supports a wide range of configuration options to customi
 
 | Option | Type | Default | Description                             |
 |--------|------|---------|-----------------------------------------|
-| `trackableField` | String | - | Field name for tracking value|
+| `trackable-field` | String | - | Field name for tracking value|
 
 ## Schema Definition
 
@@ -327,9 +327,9 @@ The connector supports multiple authentication methods:
 Credentials are provided directly in the table configuration:
 
 ```sql
-'credentialsSource' = 'options',
-'ytUsername' = 'your-username',
-'ytToken' = 'your-token'
+'credentials-source' = 'options',
+'username' = 'your-username',
+'token' = 'your-token'
 ```
 
 ### Environment-based Authentication
@@ -337,7 +337,7 @@ Credentials are provided directly in the table configuration:
 Credentials are read from environment variables:
 
 ```sql
-'credentialsSource' = 'env'
+'credentials-source' = 'env'
 ```
 
 Set the following environment variables:
@@ -390,14 +390,14 @@ CREATE TABLE partitioned_table (
     PRIMARY KEY (id) NOT ENFORCED
 ) WITH (
     'connector' = 'ytsaurus',
-    'clusterName' = 'localhost:8082',
-    'credentialsSource' = 'options',
-    'ytUsername' = 'admin',
-    'ytToken' = 'password',
+    'proxy' = 'localhost:8082',
+    'credentials-source' = 'options',
+    'username' = 'admin',
+    'token' = 'password',
     'path' = '//tmp/partitioned_table',
-    'partitionKey' = 'event_time',
-    'partitionScale' = 'DAY',
-    'partitionTtlDayCnt' = '30',
+    'partition-key' = 'event_time',
+    'partition-scale' = 'DAY',
+    'partition-ttl-day-cnt' = '30',
     'schema' = '[
         {"name"="id";"type"="int64";"required"=%false;"sort_order"="ascending"};
         {"name"="data";"type"="string";"required"=%false};
@@ -430,7 +430,7 @@ The connector supports automatic table resharding to optimize performance:
 
 ```sql
 'reshard.strategy' = 'FIXED',
-'reshard.tabletCount' = '10',
+'reshard.tablet-count' = '10',
 'reshard.uniform' = 'true'
 ```
 
@@ -480,11 +480,11 @@ CREATE TABLE lookup_table_sink (
     PRIMARY KEY (id) NOT ENFORCED
 ) WITH (
     'connector' = 'ytsaurus',
-    'clusterName' = 'localhost:8082',
+    'proxy' = 'localhost:8082',
     'path' = '//tmp/lookup_table',
-    'credentialsSource' = 'options',
-    'ytUsername' = 'admin',
-    'ytToken' = 'password',
+    'credentials-source' = 'options',
+    'username' = 'admin',
+    'token' = 'password',
     'schema' = '[
         {"name"="id";"type"="int64";"required"=%false;"sort_order"="ascending"};
         {"name"="name";"type"="string";"required"=%false};
@@ -533,16 +533,16 @@ CREATE TABLE lookup_table (
 ) WITH (
     'connector' = 'ytsaurus',
     'format' = 'yson',
-    'clusterName' = 'localhost:8082',
-    'credentialsSource' = 'options',
-    'ytUsername' = 'admin',
-    'ytToken' = 'password',
+    'proxy' = 'localhost:8082',
+    'credentials-source' = 'options',
+    'username' = 'admin',
+    'token' = 'password',
     'path' = '//tmp/lookup_table',
     'lookup.async' = 'true',
     'lookup.cache' = 'PARTIAL',
     'lookup.partial-cache.max-rows' = '10000',
     'lookup.partial-cache.expire-after-access' = '1h',
-    'lookupMethod' = 'LOOKUP',
+    'lookup-method' = 'LOOKUP',
     'schema' = '[
         {"name"="id";"type"="int64";"required"=%false;"sort_order"="ascending"};
         {"name"="name";"type"="string";"required"=%false}
@@ -585,11 +585,11 @@ CREATE TABLE ytsaurus_sink (
     PRIMARY KEY (user_id) NOT ENFORCED
 ) WITH (
     'connector' = 'ytsaurus',
-    'clusterName' = 'your-cluster:8082',
+    'proxy' = 'your-cluster:8082',
     'path' = '//home/your-user/users_table',
-    'credentialsSource' = 'options',
-    'ytUsername' = 'your-username',
-    'ytToken' = 'your-token',
+    'credentials-source' = 'options',
+    'username' = 'your-username',
+    'token' = 'your-token',
     'schema' = '[
         {"name"="user_id";"type"="int64";"required"=%false;"sort_order"="ascending"};
         {"name"="username";"type"="string";"required"=%false};
@@ -611,19 +611,19 @@ CREATE TABLE events_table (
     PRIMARY KEY (event_id) NOT ENFORCED
 ) WITH (
     'connector' = 'ytsaurus',
-    'clusterName' = 'your-cluster:8082',
+    'proxy' = 'your-cluster:8082',
     'path' = '//home/your-user/events',
-    'credentialsSource' = 'options',
-    'ytUsername' = 'your-username',
-    'ytToken' = 'your-token',
-    'partitionKey' = 'event_time',
-    'partitionScale' = 'DAY',
-    'partitionTtlDayCnt' = '90',
+    'credentials-source' = 'options',
+    'username' = 'your-username',
+    'token' = 'your-token',
+    'partition-key' = 'event_time',
+    'partition-scale' = 'DAY',
+    'partition-ttl-day-cnt' = '90',
     'reshard.strategy' = 'LAST_PARTITIONS',
-    'reshard.tabletCount' = '20',
-    'reshard.lastPartitionsCount' = '7',
+    'reshard.tablet-count' = '20',
+    'reshard.last-partitions-count' = '7',
     'reshard.uniform' = 'true',
-    'optimizeFor' = 'SCAN',
+    'optimize-for' = 'SCAN',
     'schema' = '[
         {"name"="event_id";"type"="int64";"required"=%false;"sort_order"="ascending"};
         {"name"="user_id";"type"="int64";"required"=%false};
@@ -644,15 +644,15 @@ CREATE TABLE user_lookup (
     PRIMARY KEY (user_id) NOT ENFORCED
 ) WITH (
     'connector' = 'ytsaurus',
-    'clusterName' = 'your-cluster:8082',
+    'proxy' = 'your-cluster:8082',
     'path' = '//home/your-user/users',
-    'credentialsSource' = 'options',
-    'ytUsername' = 'your-username',
-    'ytToken' = 'your-token',
+    'credentials-source' = 'options',
+    'username' = 'your-username',
+    'token' = 'your-token',
     'lookup.cache' = 'FULL',
     'lookup.full-cache.reload-strategy' = 'PERIODIC',
     'lookup.full-cache.periodic-reload-interval' = '1h',
-    'optimizeFor' = 'LOOKUP',
+    'optimize-for' = 'LOOKUP',
     'schema' = '[
         {"name"="user_id";"type"="int64";"required"=%false;"sort_order"="ascending"};
         {"name"="username";"type"="string";"required"=%false};
@@ -670,11 +670,11 @@ CREATE TABLE multi_cluster_table (
     PRIMARY KEY (id) NOT ENFORCED
 ) WITH (
     'connector' = 'ytsaurus',
-    'pathMap' = 'cluster1://tmp/table1,cluster2://tmp/table2',
-    'clusterPickStrategy' = 'FirstAvailableClusterPickStrategy',
-    'credentialsSource' = 'options',
-    'ytUsername' = 'your-username',
-    'ytToken' = 'your-token',
+    'path-map' = 'cluster1://tmp/table1,cluster2://tmp/table2',
+    'cluster-pick-strategy' = 'FirstAvailableClusterPickStrategy',
+    'credentials-source' = 'options',
+    'username' = 'your-username',
+    'token' = 'your-token',
     'schema' = '[
         {"name"="id";"type"="int64";"required"=%false;"sort_order"="ascending"};
         {"name"="data";"type"="string";"required"=%false}
