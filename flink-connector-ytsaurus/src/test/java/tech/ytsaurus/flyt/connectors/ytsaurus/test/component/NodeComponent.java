@@ -7,6 +7,7 @@ import javax.annotation.Nullable;
 
 import tech.ytsaurus.client.request.CreateNode;
 import tech.ytsaurus.client.request.GetNode;
+import tech.ytsaurus.client.request.MountTable;
 import tech.ytsaurus.core.GUID;
 import tech.ytsaurus.ysontree.YTreeNode;
 
@@ -20,6 +21,8 @@ public interface NodeComponent {
                                        boolean freeze,
                                        boolean waitMounted,
                                        @Nullable Duration requestTimeout);
+
+    CompletableFuture<Void> mountTableAndWaitTablets(MountTable req);
 
     CompletableFuture<Void> setNode(String path, YTreeNode data);
 

@@ -14,6 +14,7 @@ import lombok.Data;
 import org.junit.platform.commons.util.StringUtils;
 import tech.ytsaurus.client.request.CreateNode;
 import tech.ytsaurus.client.request.GetNode;
+import tech.ytsaurus.client.request.MountTable;
 import tech.ytsaurus.core.GUID;
 import tech.ytsaurus.core.cypress.CypressNodeType;
 import tech.ytsaurus.ysontree.YTree;
@@ -124,6 +125,11 @@ public class BasicEmulatingNodeComponent implements NodeComponent {
                                               boolean waitMounted,
                                               @Nullable Duration requestTimeout) {
         return mountTable(path);
+    }
+
+    @Override
+    public CompletableFuture<Void> mountTableAndWaitTablets(MountTable req) {
+        return mountTable(req.getPath());
     }
 
     @Override

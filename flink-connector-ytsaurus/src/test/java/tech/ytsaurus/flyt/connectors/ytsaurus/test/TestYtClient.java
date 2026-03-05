@@ -9,6 +9,7 @@ import tech.ytsaurus.client.ApiServiceTransaction;
 import tech.ytsaurus.client.YTsaurusClient;
 import tech.ytsaurus.client.request.CreateNode;
 import tech.ytsaurus.client.request.GetNode;
+import tech.ytsaurus.client.request.MountTable;
 import tech.ytsaurus.client.request.StartTransaction;
 import tech.ytsaurus.client.rpc.YTsaurusClientAuth;
 import tech.ytsaurus.core.GUID;
@@ -60,6 +61,11 @@ public class TestYtClient<N extends NodeComponent, T extends TransactionComponen
                                               boolean waitMounted,
                                               @Nullable Duration requestTimeout) {
         return nodeComponent.mountTable(path, cellId, freeze, waitMounted, requestTimeout);
+    }
+
+    @Override
+    public CompletableFuture<Void> mountTableAndWaitTablets(MountTable req) {
+        return nodeComponent.mountTableAndWaitTablets(req);
     }
 
     @Override
