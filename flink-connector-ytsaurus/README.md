@@ -1,6 +1,6 @@
 # Apache Flink YTsaurus Connector
 
-This project contains the Apache Flink Connector for working with [YTsaurus Dynamic Tables](https://ytsaurus.tech/docs/en/user-guide/dynamic-tables/overview).
+This project contains the Apache Flink Connector for working with [YTsaurus Sorted Dynamic Tables](https://ytsaurus.tech/docs/en/user-guide/dynamic-tables/sorted-dynamic-tables).
 
 ## Table of Contents
 
@@ -19,7 +19,7 @@ This project contains the Apache Flink Connector for working with [YTsaurus Dyna
 
 ## Overview
 
-The Apache Flink YTsaurus Connector enables seamless integration between Apache Flink and YTsaurus dynamic tables. It provides both source and sink capabilities with advanced features like automatic table creation, data partitioning, lookup operations with caching, and multi-cluster support.
+The Apache Flink YTsaurus Connector enables seamless integration between Apache Flink and YTsaurus sorted dynamic tables. It provides both source and sink capabilities with advanced features like automatic table creation, data partitioning, lookup operations with caching, and multi-cluster support.
 
 ## Supported Flink APIs
 
@@ -67,51 +67,22 @@ ls flink-connector-ytsaurus/build/libs
 
 Install a YTsaurus cluster to connect to. This step can be skipped if you already have a cluster configured.
 
-We recommend using the official documentation to [install the YTsaurus cluster via Kind](https://ytsaurus.tech/docs/en/overview/try-yt?tabs=defaultTabsGroup-5fe2y4hn_kind_dropdown).
+For local development and testing, we recommend using the official documentation to [install the YTsaurus cluster via Kind](https://ytsaurus.tech/docs/en/overview/try-yt?tabs=defaultTabsGroup-5fe2y4hn_kind_dropdown). For production deployments, please follow the [YTsaurus Admin Guide](https://ytsaurus.tech/docs/en/admin-guide/install-ytsaurus).
 
 > [!NOTE]
 > The flink-connector-ytsaurus uses a [Java YTsaurus client](https://ytsaurus.tech/docs/en/api/java/examples) that uses RPC proxy.
 
-To open access to RPC proxy, modify [the configuration from the instructions](https://github.com/ytsaurus/ytsaurus-k8s-operator/blob/main/config/samples/cluster_v1_local.yaml) (Step 5). Add service `NodePort` to the `rpcProxies` section:
-
-```yaml
-rpcProxies:
-  - instanceCount: 1
-    serviceType: NodePort
-    loggers: *loggers
-    role: default
-  - instanceCount: 1
-    loggers: *loggers
-    role: heavy
-```
-
-### Step 2 - Setting up the YTsaurus cluster
-
-After starting the YTsaurus cluster, configure access to RPC proxy. Set the balancer address of the RPC proxy to which YTsaurus will forward requests:
-
-Place the HTTP proxy on port 8082 since port 8081 will be occupied by Apache Flink:
-
-```bash
-kubectl port-forward service/http-proxies-lb 8082:80
-```
-
-```bash
-yt --proxy localhost:8082 set --format json //sys/rpc_proxies/@balancers '{ "default": { "internal_rpc": { "default": ["localhost:8013"]} } }'
-```
-
-Forward the port to the RPC proxy:
-
-```bash
-kubectl port-forward service/rpc-proxies-lb 8013:9013
-```
-
-### Step 3 - Installing Apache Flink cluster
+### Step 2 - Installing Apache Flink cluster
 
 Install Apache Flink cluster using the [official documentation](https://nightlies.apache.org/flink/flink-docs-release-1.20/docs/try-flink/local_installation/#downloading-flink) and check [Supported Flink Version](#supported-flink-versions).
 
-### Step 4 - Install Flink Connector YTsaurus to Apache Flink cluster
+### Step 3 - Install Flink Connector YTsaurus to Apache Flink cluster
 
 Build the connector from source code (see [Building from Source](#building-from-source)). After assembling the connector, place the resulting jar file in the directory `{$FLINK_ROOT}/lib`.
+
+### Step 4 - Change Flink Web UI port
+
+Open the `conf/config.yaml` file and change the `rest.port` parameter from `8081` to `8083` to avoid port conflicts with YTsaurus.
 
 ### Step 5 - Start Apache Flink Cluster with Flink SQL Client
 
@@ -166,7 +137,7 @@ CREATE TABLE ytsaurus_simple_sink (
     PRIMARY KEY (id) NOT ENFORCED
 ) WITH (
     'connector' = 'ytsaurus',
-    'proxy' = 'localhost:8082',
+    'proxy' = 'localhost:8081',
     'path' = '//tmp/flink_simple_test_table',
     'credentials-source' = 'options',
     'username' = 'admin',
@@ -198,7 +169,7 @@ SELECT
 FROM simple_datagen_source;
 ```
 
-4) Monitor job progress at [localhost:8081](http://localhost:8081)
+4) Monitor job progress at [localhost:8083](http://localhost:8083)
 
 ![](../assets/images/ytsaurus_simple_sink_job_ui.png)
 
@@ -233,7 +204,6 @@ The YTsaurus connector supports a wide range of configuration options to customi
 |--------|------|---------|-------------|
 | `username` | String | - | YTsaurus username (when using `options` credentials source) |
 | `token` | String | - | YTsaurus token (when using `options` credentials source) |
-| `proxy-role` | String | - | Proxy role for authentication |
 
 ### Table Configuration
 
@@ -298,9 +268,10 @@ The YTsaurus connector supports a wide range of configuration options to customi
 
 ### Other Options
 
-| Option | Type | Default | Description                             |
-|--------|------|---------|-----------------------------------------|
-| `trackable-field` | String | - | Field name for tracking value|
+| Option | Type | Default | Description                  |
+|--------|------|---------|------------------------------|
+| `trackable-field` | String | - | Field name for tracking value |
+| `proxy-role` | String | - | Set proxy-role       |
 
 ## Schema Definition
 
@@ -390,7 +361,7 @@ CREATE TABLE partitioned_table (
     PRIMARY KEY (id) NOT ENFORCED
 ) WITH (
     'connector' = 'ytsaurus',
-    'proxy' = 'localhost:8082',
+    'proxy' = 'localhost:8081',
     'credentials-source' = 'options',
     'username' = 'admin',
     'token' = 'password',
@@ -480,7 +451,7 @@ CREATE TABLE lookup_table_sink (
     PRIMARY KEY (id) NOT ENFORCED
 ) WITH (
     'connector' = 'ytsaurus',
-    'proxy' = 'localhost:8082',
+    'proxy' = 'localhost:8081',
     'path' = '//tmp/lookup_table',
     'credentials-source' = 'options',
     'username' = 'admin',
@@ -533,7 +504,7 @@ CREATE TABLE lookup_table (
 ) WITH (
     'connector' = 'ytsaurus',
     'format' = 'yson',
-    'proxy' = 'localhost:8082',
+    'proxy' = 'localhost:8081',
     'credentials-source' = 'options',
     'username' = 'admin',
     'token' = 'password',
@@ -563,7 +534,7 @@ LEFT JOIN lookup_table FOR SYSTEM_TIME AS OF o.proc_time AS l
 ON o.user_id = l.id;
 ```
 
-Check Apache Flink UI [localhost:8081](http://localhost:8081).
+Check Apache Flink UI [localhost:8083](http://localhost:8083).
 
 ![](../assets/images/ytsaurus_lookup_join_job_ui.png)
 
@@ -585,7 +556,7 @@ CREATE TABLE ytsaurus_sink (
     PRIMARY KEY (user_id) NOT ENFORCED
 ) WITH (
     'connector' = 'ytsaurus',
-    'proxy' = 'your-cluster:8082',
+    'proxy' = 'localhost:8081',
     'path' = '//home/your-user/users_table',
     'credentials-source' = 'options',
     'username' = 'your-username',
@@ -611,7 +582,7 @@ CREATE TABLE events_table (
     PRIMARY KEY (event_id) NOT ENFORCED
 ) WITH (
     'connector' = 'ytsaurus',
-    'proxy' = 'your-cluster:8082',
+    'proxy' = 'localhost:8081',
     'path' = '//home/your-user/events',
     'credentials-source' = 'options',
     'username' = 'your-username',
@@ -644,7 +615,7 @@ CREATE TABLE user_lookup (
     PRIMARY KEY (user_id) NOT ENFORCED
 ) WITH (
     'connector' = 'ytsaurus',
-    'proxy' = 'your-cluster:8082',
+    'proxy' = 'localhost:8081',
     'path' = '//home/your-user/users',
     'credentials-source' = 'options',
     'username' = 'your-username',
@@ -670,6 +641,7 @@ CREATE TABLE multi_cluster_table (
     PRIMARY KEY (id) NOT ENFORCED
 ) WITH (
     'connector' = 'ytsaurus',
+    'proxy' = 'localhost:8081',
     'path-map' = 'cluster1://tmp/table1,cluster2://tmp/table2',
     'cluster-pick-strategy' = 'FirstAvailableClusterPickStrategy',
     'credentials-source' = 'options',

@@ -246,6 +246,7 @@ public class YTsaurusDynamicTableFactory implements DynamicTableSinkFactory, Dyn
     @Override
     public Set<ConfigOption<?>> optionalOptions() {
         return Set.of(
+                FactoryUtil.FORMAT,
                 PARTITION_KEY,
                 PARTITION_SCALE,
                 YT_USERNAME_OPTION,
