@@ -1,4 +1,4 @@
-name: Release Java SDK
+name: Release Flink Connector YTsaurus
 
 on:
   push:
@@ -30,3 +30,10 @@ jobs:
       - name: Publish
         run: |
           ./gradlew flink-connector-ytsaurus:publish -PossrhUsername=${{ secrets.OSSRH_USERNAME }} -PossrhPassword=${{ secrets.OSSRH_PASSWORD }} -Pversion=${{ steps.tag.outputs.RELEASE_VERSION }} -PsigningPassword=${{ secrets.GPG_PASSWORD }} -PsigningKey="${{ secrets.GPG_PRIVATE_KEY }}"
+
+      - name: Upload to Central Publisher Portal
+        env:
+          OSSRH_USERNAME: ${{ secrets.OSSRH_USERNAME }}
+          OSSRH_PASSWORD: ${{ secrets.OSSRH_PASSWORD }}
+        run: |
+          curl -v -u "$OSSRH_USERNAME:$OSSRH_PASSWORD" -X POST "https://ossrh-staging-api.central.sonatype.com/manual/upload/defaultRepository/tech.ytsaurus"
