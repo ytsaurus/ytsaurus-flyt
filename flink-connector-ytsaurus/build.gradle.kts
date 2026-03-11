@@ -94,8 +94,8 @@ publishing {
                 }
             }
             pom {
-                name.set("Flint YTsaurus Connector")
-                description.set("Flint YTsaurus Connector")
+                name.set("Flink YTsaurus Connector")
+                description.set("Flink YTsaurus Connector")
                 url.set("https://github.com/ytsaurus/ytsaurus-flyt/tree/main/flink-connector-ytsaurus")
                 licenses {
                     license {
