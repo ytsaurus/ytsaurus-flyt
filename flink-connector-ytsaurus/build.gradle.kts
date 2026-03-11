@@ -1,11 +1,16 @@
 group = "tech.ytsaurus.flyt.connectors.ytsaurus"
-version = "1.9.5"
+version = "1.9.6"
 
 plugins {
     id("com.peterabeles.gversion") version "1.10.3"
     id("java-library")
     id("maven-publish")
     id("signing")
+}
+
+java {
+    withSourcesJar()
+    withJavadocJar()
 }
 
 dependencies {
