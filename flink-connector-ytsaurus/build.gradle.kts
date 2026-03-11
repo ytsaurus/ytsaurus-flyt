@@ -4,6 +4,8 @@ version = "1.9.3"
 plugins {
     id("com.peterabeles.gversion") version "1.10.3"
     id("java-library")
+    id("maven-publish")
+    id("signing")
 }
 
 dependencies {
@@ -57,7 +59,7 @@ gversion {
     srcDir = "build/generated-src/version/java"
     classPackage = "tech.ytsaurus.flyt.connectors.ytsaurus"
     className = "YtConnectorInfo"
-    annotate     = true
+    annotate = true
 }
 
 tasks.compileJava {
@@ -70,4 +72,60 @@ tasks.shadowJar {
 
 tasks.withType<Checkstyle> {
     exclude("**/tech/ytsaurus/flyt/connectors/ytsaurus/YtConnectorInfo**")
+}
+
+publishing {
+    publications {
+        create<MavenPublication>("mavenJava") {
+            artifactId = "flink-connector-ytsaurus"
+            from(components["java"])
+
+            versionMapping {
+                usage("java-api") {
+                    fromResolutionOf("runtimeClasspath")
+                }
+                usage("java-runtime") {
+                    fromResolutionResult()
+                }
+            }
+            pom {
+                name.set("Flint YTsaurus Connector")
+                description.set("Flint YTsaurus Connector")
+                url.set("https://github.com/ytsaurus/ytsaurus-flyt/tree/main/flink-connector-ytsaurus")
+                licenses {
+                    license {
+                        name.set("The Apache License, Version 2.0")
+                        url.set("http://www.apache.org/licenses/LICENSE-2.0.txt")
+                    }
+                }
+            }
+        }
+    }
+
+    repositories {
+        maven {
+            val releasesRepoUrl =
+                uri("https://ossrh-staging-api.central.sonatype.com/service/local/staging/deploy/maven2/")
+            val snapshotsRepoUrl = uri("https://central.sonatype.com/repository/maven-snapshots/")
+            url = if (version.toString().endsWith("SNAPSHOT")) snapshotsRepoUrl else releasesRepoUrl
+
+            credentials {
+                username = project.properties["ossrhUsername"].toString()
+                password = project.properties["ossrhPassword"].toString()
+            }
+        }
+    }
+}
+
+signing {
+    setRequired({
+        !version.toString().endsWith("SNAPSHOT")
+    })
+
+    val signingKey: String? by project
+    val signingPassword: String? by project
+
+    useInMemoryPgpKeys(signingKey, signingPassword)
+
+    sign(publishing.publications["mavenJava"])
 }
