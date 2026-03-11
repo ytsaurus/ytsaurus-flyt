@@ -8,7 +8,7 @@ public interface PartitionScaleAccessor {
      * Get start of the partition range picked for raw instant.
      * <p>
      * For example, if current partitioning is by hour, then
-     * raw=2024-04-15 12:27:00 falls in range start=2024-04-15 12:00:00 <= raw < end=2024-04-15 13:00:00
+     * raw=2024-04-15 12:27:00 falls in range start=2024-04-15 12:00:00 &lt;= raw &lt; end=2024-04-15 13:00:00
      *
      * @param raw raw instant to get partition end for
      * @return end of partition for specified raw instant
@@ -19,7 +19,7 @@ public interface PartitionScaleAccessor {
      * Get end of the partition range picked for raw instant.
      * <p>
      * For example, if current partitioning is by hour, then
-     * raw=2024-04-15 12:27:00 falls in range start=2024-04-15 12:00:00 <= raw < end=2024-04-15 13:00:00
+     * raw=2024-04-15 12:27:00 falls in range start=2024-04-15 12:00:00 &lt;= raw &lt; end=2024-04-15 13:00:00
      *
      * @param raw raw instant to get partition end for
      * @return end of partition for specified raw instant

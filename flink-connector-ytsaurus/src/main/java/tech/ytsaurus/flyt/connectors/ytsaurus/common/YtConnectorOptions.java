@@ -32,7 +32,7 @@ public class YtConnectorOptions {
     /**
      * Schema for the YT dynamic table which comes in the form of a serialized YSON list
      *
-     * @see <a href="https://ytsaurus.tech/docs/en/user-guide/storage/static-schema>YT Documentation</a>
+     * @see <a href="https://ytsaurus.tech/docs/en/user-guide/storage/static-schema">YT Documentation</a>
      */
     public static final ConfigOption<String> YSON_SCHEMA = ConfigOptions.key("schema")
             .stringType()

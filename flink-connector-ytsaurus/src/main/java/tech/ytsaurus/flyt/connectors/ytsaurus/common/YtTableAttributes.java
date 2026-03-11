@@ -76,7 +76,7 @@ public class YtTableAttributes implements Serializable {
     }
 
     /**
-     * @deprecated use {@link #setCustomAttributes(Map)}
+     * @deprecated use YtTableAttributes#setCustomAttributes(Map)
      */
     @Deprecated
     public YtTableAttributes setCustomAttributesYson(String customAttributesYson) {

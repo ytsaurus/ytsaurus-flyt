@@ -37,6 +37,18 @@ allprojects {
         options.encoding = "UTF-8"
     }
 
+    tasks.withType<Javadoc> {
+        options {
+            (this as StandardJavadocDocletOptions).apply {
+                encoding = "UTF-8"
+                charSet = "UTF-8"
+                docEncoding = "UTF-8"
+                tags("apiNote:a:API Note:")
+                tags("implNote:a:Implementation:")
+            }
+        }
+    }
+
     tasks.assemble {
         dependsOn("shadowJar")
     }
