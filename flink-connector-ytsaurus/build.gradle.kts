@@ -1,5 +1,5 @@
 group = "tech.ytsaurus.flyt.connectors.ytsaurus"
-version = "1.9.4"
+version = "1.9.5"
 
 plugins {
     id("com.peterabeles.gversion") version "1.10.3"
@@ -97,6 +97,52 @@ publishing {
                         name.set("The Apache License, Version 2.0")
                         url.set("http://www.apache.org/licenses/LICENSE-2.0.txt")
                     }
+                }
+                developers {
+                    developer {
+                        id.set("DanilSabirov")
+                        name.set("Danil Sabirov")
+                        email.set("danil.sabirov.work@gmail.com")
+                        organization.set("Yandex LLC")
+                        organizationUrl.set("https://yandex.ru/company")
+                    }
+                    developer {
+                        id.set("TheSeems")
+                        name.set("Alexey Akhundov")
+                        email.set("me@theseems.ru")
+                        organization.set("Yandex LLC")
+                        organizationUrl.set("https://yandex.ru/company")
+
+                    }
+                    developer {
+                        id.set("Yahor")
+                        name.set("Yahor Burakevich")
+                        email.set("egor.burakevich93@gmail.com")
+                        organization.set("Yandex LLC")
+                        organizationUrl.set("https://yandex.ru/company")
+
+                    }
+                    developer {
+                        id.set("vovapraded")
+                        name.set("Vladimir Praded")
+                        email.set("vovatv2017@gmail.com")
+                        organization.set("Yandex LLC")
+                        organizationUrl.set("https://yandex.ru/company")
+
+                    }
+                    developer {
+                        id.set("smiralexan")
+                        name.set("Alexander Smirnov")
+                        email.set("smiralexan@gmail.com")
+                        organization.set("Yandex LLC")
+                        organizationUrl.set("https://yandex.ru/company")
+
+                    }
+                }
+                scm {
+                    connection.set("scm:git:git://github.com/ytsaurus/ytsaurus-flyt.git")
+                    developerConnection.set("scm:git:ssh://github.com/ytsaurus/ytsaurus-flyt.git")
+                    url.set("https://github.com/ytsaurus/ytsaurus-flyt/tree/main/flink-connector-ytsaurus")
                 }
             }
         }
