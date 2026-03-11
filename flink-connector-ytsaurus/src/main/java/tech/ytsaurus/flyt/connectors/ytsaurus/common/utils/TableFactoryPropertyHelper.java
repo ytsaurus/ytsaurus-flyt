@@ -20,7 +20,7 @@ import static org.apache.flink.table.factories.FactoryUtil.PROPERTY_VERSION;
 
 /**
  * Helper utility for discovering formats and validating all options for a {@link DynamicTableFactory}.
- * </p>
+ * <p>
  * In addition to {@link FactoryUtil.TableFactoryHelper} it provides functionality
  * to skip validation for options with certain prefix and remove this prefix from all table options.
  * </p>

@@ -39,7 +39,6 @@ public final class YtProducers {
      * @param clientConfig YT client config
      * @param converter    to convert user type to RowData
      * @param <T>          type of data in data stream
-     * @return DataStreamSink<T>    sink object
      */
     public static <T> DataStreamSink<T> writeToDynamicTable(DataStream<T> dataStream,
                                                             String path,
@@ -69,7 +68,7 @@ public final class YtProducers {
      * @param clientConfig YT client config
      * @param converter    to convert user type to RowData
      * @param <T>          type of data in data stream
-     * @return DataStreamSink<T>    sink object
+     * @return sink object
      */
     @SuppressWarnings("checkstyle:parameternumber")
     public static <T> DataStreamSink<T> writeToDynamicTable(DataStream<T> dataStream,
@@ -103,7 +102,7 @@ public final class YtProducers {
      * @param clientConfig YT client config
      * @param converter    to convert user type to RowData
      * @param <T>          type of data in data stream
-     * @return DataStreamSink<T>    sink object
+     * @return sink object
      */
     @SuppressWarnings("checkstyle:parameternumber")
     public static <T> DataStreamSink<T> writeToDynamicTable(DataStream<T> dataStream,
@@ -139,7 +138,7 @@ public final class YtProducers {
      * @param clientConfig YT client config
      * @param converter    to convert user type to RowData
      * @param <T>          type of data in data stream
-     * @return DataStreamSink<T>    sink object
+     * @return sink object
      */
     @SuppressWarnings("checkstyle:parameternumber")
     public static <T> DataStreamSink<T> writeToDynamicTable(DataStream<T> dataStream,
@@ -213,9 +212,9 @@ public final class YtProducers {
      * @param ysonSchema      string representation of YSON schema for the table
      * @param partitionConfig config containing settings for partitioning
      * @param clientConfig    YT client config
-     * @param converter    to convert user type to RowData
+     * @param converter       to convert user type to RowData
      * @param <T>             type of data in data stream
-     * @return DataStreamSink<T>    sink object
+     * @return sink object
      */
     public static <T> DataStreamSink<T> writeToDynamicTable(DataStream<T> dataStream,
                                                             Class<T> tClass,
@@ -238,7 +237,7 @@ public final class YtProducers {
      * @param clientConfig YT client config
      * @param converter    to convert user type to RowData
      * @param <T>          type of data in data stream
-     * @return DataStreamSink<T>    sink object
+     * @return sink object
      */
     public static <T> DataStreamSink<T> writeToDynamicTable(DataStream<T> dataStream,
                                                             Class<T> tClass,
