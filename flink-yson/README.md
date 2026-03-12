@@ -6,6 +6,25 @@ This project provides Apache Flink format support for [YSON (Yet anOther Seriali
 
 The format officially supports Apache Flink version `1.20.X`, but compatibility with other versions is not excluded.
 
+## Installation
+
+Maven
+
+```xml
+<dependency>
+    <groupId>tech.ytsaurus.flyt.formats.yson</groupId>
+    <artifactId>flink-yson</artifactId>
+    <version>1.1.0</version>
+    <classifier>all</classifier>
+</dependency>
+```
+
+Gradle
+
+```kotlin
+implementation("tech.ytsaurus.flyt.formats.yson:flink-yson:1.1.0:all")
+```
+
 ## Building from Source
 
 ### Prerequisites
