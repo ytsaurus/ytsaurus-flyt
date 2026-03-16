@@ -20,7 +20,7 @@ jobs:
           distribution: 'temurin'
 
       - name: Execute Gradle build
-        run: ./gradlew build
+        run: ./gradlew shadowJar
 
       - name: Parse tag
         id: tag
