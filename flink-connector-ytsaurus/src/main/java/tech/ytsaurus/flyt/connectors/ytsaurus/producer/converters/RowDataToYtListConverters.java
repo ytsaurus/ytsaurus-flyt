@@ -25,15 +25,14 @@ import org.apache.flink.table.types.logical.LogicalTypeRoot;
 import org.apache.flink.table.types.logical.MapType;
 import org.apache.flink.table.types.logical.RowType;
 import tech.ytsaurus.core.operations.YTreeBinarySerializer;
+import tech.ytsaurus.flyt.connectors.ytsaurus.utils.ChronoUtils;
+import tech.ytsaurus.flyt.connectors.ytsaurus.utils.ConverterUtils;
 import tech.ytsaurus.typeinfo.TypeName;
 import tech.ytsaurus.ysontree.YTree;
 import tech.ytsaurus.ysontree.YTreeBuilder;
 import tech.ytsaurus.ysontree.YTreeMapNode;
 import tech.ytsaurus.ysontree.YTreeNode;
 import tech.ytsaurus.ysontree.YTreeTextSerializer;
-
-import tech.ytsaurus.flyt.connectors.ytsaurus.utils.ChronoUtils;
-import tech.ytsaurus.flyt.connectors.ytsaurus.utils.ConverterUtils;
 
 import static java.time.format.DateTimeFormatter.ISO_LOCAL_DATE;
 import static org.apache.flink.formats.common.TimeFormats.ISO8601_TIMESTAMP_FORMAT;
@@ -296,7 +295,7 @@ public class RowDataToYtListConverters implements Serializable {
         ArrayData.ElementGetter valueGetter = ArrayData.createElementGetter(valueType);
 
         return (reuse, data) -> {
-            YTreeBuilder builder = YTree.mapBuilder();
+            YTreeBuilder builder = YTree.listBuilder(); // dict in YT is a list of pairs
             MapData mapData = (MapData) data;
             ArrayData keys = mapData.keyArray();
             ArrayData values = mapData.valueArray();
@@ -306,10 +305,14 @@ public class RowDataToYtListConverters implements Serializable {
                 Object rawValue = valueGetter.getElementOrNull(values, i);
                 Object value = valueConvertor.convert(null, rawValue);
 
-                builder.key(key).value(value);
+                // Each pair is a [key, value]
+                builder.value(YTree.listBuilder()
+                        .value(key)
+                        .value(value)
+                        .buildList());
             }
 
-            return builder.buildMap();
+            return builder.buildList();
         };
     }
 

@@ -298,17 +298,32 @@ public class YsonToRowDataConverters implements Serializable {
         final YsonToRowDataConverter valueConverter = createConverter(valueType);
 
         return yTreeNode -> {
-            Iterator<Map.Entry<String, YTreeNode>> fields = yTreeNode.asMap().entrySet().iterator();
             Map<Object, Object> result = new HashMap<>();
-            while (fields.hasNext()) {
-                Map.Entry<String, YTreeNode> entry = fields.next();
-                Object key = keyConverter.convert(YTree.stringNode(entry.getKey()));
-                Object value = valueConverter.convert(entry.getValue());
-                result.put(key, value);
+
+            if (yTreeNode.isMapNode()) {
+                // YSON map: {key=value, ...}
+                Iterator<Map.Entry<String, YTreeNode>> fields = yTreeNode.asMap().entrySet().iterator();
+                while (fields.hasNext()) {
+                    Map.Entry<String, YTreeNode> entry = fields.next();
+                    Object key = keyConverter.convert(YTree.stringNode(entry.getKey()));
+                    Object value = valueConverter.convert(entry.getValue());
+                    result.put(key, value);
+                }
+            } else if (yTreeNode.isListNode()) {
+                // YT dict: [[key, value], ...]
+                YTreeListNode listNode = yTreeNode.listNode();
+                for (int i = 0; i < listNode.size(); i++) {
+                    YTreeListNode pair = listNode.get(i).listNode();
+                    Object key = keyConverter.convert(pair.get(0));
+                    Object value = valueConverter.convert(pair.get(1));
+                    result.put(key, value);
+                }
             }
+
             return new GenericMapData(result);
         };
     }
+
 
     public YsonToRowDataConverter createRowConverter(RowType rowType) {
         final YsonToRowDataConverter[] fieldConverters =
