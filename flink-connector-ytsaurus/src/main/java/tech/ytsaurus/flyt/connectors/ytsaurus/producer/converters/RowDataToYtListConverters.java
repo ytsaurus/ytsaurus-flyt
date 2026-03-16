@@ -9,6 +9,7 @@ import java.time.ZoneOffset;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
 import lombok.extern.slf4j.Slf4j;
@@ -116,7 +117,7 @@ public class RowDataToYtListConverters implements Serializable {
             case ARRAY:
                 return createArrayConverter((ArrayType) type);
             case MAP:
-                return createMapConverter((MapType) type);
+                return createMapConverter((MapType) type, fieldNode);
             case MULTISET:
                 throw new RuntimeException("Unsupported type: MULTISET");
             case ROW:
@@ -282,7 +283,7 @@ public class RowDataToYtListConverters implements Serializable {
         };
     }
 
-    private RowDataToYtMapConverter createMapConverter(MapType mapType) {
+    private RowDataToYtMapConverter createMapConverter(MapType mapType, YTreeNode fieldNode) {
         LogicalType keyType = mapType.getKeyType();
         if (!keyType.is(LogicalTypeRoot.CHAR) && !keyType.is(LogicalTypeRoot.VARCHAR)) {
             throw new IllegalStateException(String.format(
@@ -293,7 +294,50 @@ public class RowDataToYtListConverters implements Serializable {
         LogicalType valueType = mapType.getValueType();
         RowDataToYtMapConverter valueConvertor = createConverter(valueType, null);
         ArrayData.ElementGetter valueGetter = ArrayData.createElementGetter(valueType);
+        if (isDictField(fieldNode)) {
+            log.info("Creating map converter as YT dict for field: {}", fieldNode);
+            return createMapAsYtDictConverter(valueConvertor, valueGetter);
+        } else {
+            log.info("Creating map converter as YSON map for field: {}", fieldNode);
+            return createYsonMapConverter(valueConvertor, valueGetter);
+        }
+    }
 
+    private boolean isDictField(YTreeNode fieldNode) {
+        return Optional.of(fieldNode)
+                .filter(YTreeNode::isMapNode)
+                .map(YTreeNode::asMap)
+                .map(map -> map.get("type_v3"))
+                .filter(YTreeNode::isMapNode)
+                .map(YTreeNode::asMap)
+                .map(map -> map.get("type_name"))
+                .filter(YTreeNode::isStringNode)
+                .map(YTreeNode::stringValue)
+                .filter("dict"::equals)
+                .isPresent();
+    }
+
+
+
+    private RowDataToYtListConverters.RowDataToYtMapConverter createYsonMapConverter(RowDataToYtMapConverter valueConvertor, ArrayData.ElementGetter valueGetter) {
+        return (reuse, data) -> {
+            YTreeBuilder builder = YTree.mapBuilder();
+            MapData mapData = (MapData) data;
+            ArrayData keys = mapData.keyArray();
+            ArrayData values = mapData.valueArray();
+
+            for (int i = 0; i < mapData.size(); i++) {
+                String key = keys.getString(i).toString();
+                Object rawValue = valueGetter.getElementOrNull(values, i);
+                Object value = valueConvertor.convert(null, rawValue);
+
+                builder.key(key).value(value);
+            }
+            return builder.buildMap();
+        };
+    }
+
+    private RowDataToYtMapConverter createMapAsYtDictConverter(RowDataToYtMapConverter valueConvertor, ArrayData.ElementGetter valueGetter) {
         return (reuse, data) -> {
             YTreeBuilder builder = YTree.listBuilder(); // dict in YT is a list of pairs
             MapData mapData = (MapData) data;
