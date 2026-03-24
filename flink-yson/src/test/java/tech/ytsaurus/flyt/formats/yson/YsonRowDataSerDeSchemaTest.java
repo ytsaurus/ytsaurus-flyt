@@ -10,11 +10,14 @@ import java.time.ZoneOffset;
 import java.util.HashMap;
 import java.util.Map;
 
+import javax.annotation.Nonnull;
+
 import org.apache.flink.formats.common.TimestampFormat;
 import org.apache.flink.table.data.DecimalData;
 import org.apache.flink.table.data.GenericArrayData;
 import org.apache.flink.table.data.GenericMapData;
 import org.apache.flink.table.data.GenericRowData;
+import org.apache.flink.table.data.MapData;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.data.StringData;
 import org.apache.flink.table.data.TimestampData;
@@ -332,7 +335,8 @@ public class YsonRowDataSerDeSchemaTest {
         RowType schema = (RowType) ROW(FIELD("val", STRING())).getLogicalType();
         RowData row = createDeserializer(schema).deserialize(toYsonBytes(yson));
 
-        Assertions.assertThat(row.getString(0).toString()).contains("a");
+        String result = row.getString(0).toString();
+        Assertions.assertThat(result).isEqualTo("{\"a\"=1;}");
     }
 
     @Test
@@ -347,9 +351,9 @@ public class YsonRowDataSerDeSchemaTest {
         RowType schema = (RowType) ROW(FIELD("val", STRING())).getLogicalType();
         RowData row = createDeserializer(schema).deserialize(toYsonBytes(yson));
 
-        Assertions.assertThat(row.getString(0)).isNotNull();
+        String result = row.getString(0).toString();
+        Assertions.assertThat(result).isEqualTo("[1;2;]");
     }
-
     // ===== BYTES =====
 
     @Test
@@ -486,7 +490,8 @@ public class YsonRowDataSerDeSchemaTest {
         RowType schema = (RowType) ROW(FIELD("val", DECIMAL(10, 2))).getLogicalType();
         RowData row = createDeserializer(schema).deserialize(toYsonBytes(yson));
 
-        Assertions.assertThat(row.getDecimal(0, 10, 2)).isNotNull();
+        Assertions.assertThat(row.getDecimal(0, 10, 2).toBigDecimal().doubleValue())
+                .isCloseTo(99.99, Offset.offset(0.001));
     }
 
     @Test
@@ -540,6 +545,14 @@ public class YsonRowDataSerDeSchemaTest {
     }
 
     // ===== MAP =====
+    @Nonnull
+    private static Map<String, Integer> convertToJavaStringIntegerMap(MapData map) {
+        Map<String, Integer> result = new HashMap<>();
+        for (int i = 0; i < map.size(); i++) {
+            result.put(map.keyArray().getString(i).toString(), map.valueArray().getInt(i));
+        }
+        return result;
+    }
 
     @Test
     public void testDeserializeMapFromMapNode() throws Exception {
@@ -554,7 +567,12 @@ public class YsonRowDataSerDeSchemaTest {
         RowType schema = (RowType) ROW(FIELD("val", MAP(STRING(), INT()))).getLogicalType();
         RowData row = createDeserializer(schema).deserialize(toYsonBytes(yson));
 
-        Assertions.assertThat(row.getMap(0).size()).isEqualTo(2);
+        MapData map = row.getMap(0);
+        Assertions.assertThat(map.size()).isEqualTo(2);
+
+        Map<String, Integer> result = convertToJavaStringIntegerMap(map);
+        Assertions.assertThat(result).containsEntry("k1", 1);
+        Assertions.assertThat(result).containsEntry("k2", 2);
     }
 
     @Test
@@ -570,11 +588,16 @@ public class YsonRowDataSerDeSchemaTest {
         RowType schema = (RowType) ROW(FIELD("val", MAP(STRING(), INT()))).getLogicalType();
         RowData row = createDeserializer(schema).deserialize(toYsonBytes(yson));
 
-        Assertions.assertThat(row.getMap(0).size()).isEqualTo(2);
+        MapData map = row.getMap(0);
+        Map<String, Integer> result = convertToJavaStringIntegerMap(map);
+
+        Assertions.assertThat(result).containsEntry("k1", 10);
+        Assertions.assertThat(result).containsEntry("k2", 20);
     }
 
+
     @Test
-    public void testDeserializeNestedMap() throws Exception {
+    public void testDeserializeNestedMapFromMapNode() throws Exception {
         YTreeNode yson = YTree.builder().beginMap()
                 .key("val").value(
                         YTree.builder().beginMap()
@@ -590,8 +613,46 @@ public class YsonRowDataSerDeSchemaTest {
         ).getLogicalType();
         RowData row = createDeserializer(schema).deserialize(toYsonBytes(yson));
 
-        Assertions.assertThat(row.getMap(0).size()).isEqualTo(1);
+        MapData outerMap = row.getMap(0);
+        Assertions.assertThat(outerMap.size()).isEqualTo(1);
+        Assertions.assertThat(outerMap.keyArray().getString(0).toString()).isEqualTo("outer");
+
+        MapData innerMap = outerMap.valueArray().getMap(0);
+        Assertions.assertThat(innerMap.size()).isEqualTo(1);
+        Assertions.assertThat(innerMap.keyArray().getString(0).toString()).isEqualTo("inner");
+        Assertions.assertThat(innerMap.valueArray().getInt(0)).isEqualTo(42);
     }
+
+    @Test
+    public void testDeserializeNestedMapFromListOfPairs() throws Exception {
+        YTreeNode yson = YTree.builder().beginMap()
+                .key("val").value(
+                        YTree.builder().beginList()
+                                .value(YTree.builder().beginList()
+                                        .value("outer")
+                                        .value(YTree.builder().beginList()
+                                                .value(YTree.builder().beginList()
+                                                        .value("inner").value(42).buildList())
+                                                .buildList())
+                                        .buildList())
+                                .buildList())
+                .buildMap();
+
+        RowType schema = (RowType) ROW(
+                FIELD("val", MAP(STRING(), MAP(STRING(), INT())))
+        ).getLogicalType();
+        RowData row = createDeserializer(schema).deserialize(toYsonBytes(yson));
+
+        MapData outerMap = row.getMap(0);
+        Assertions.assertThat(outerMap.size()).isEqualTo(1);
+        Assertions.assertThat(outerMap.keyArray().getString(0).toString()).isEqualTo("outer");
+
+        MapData innerMap = outerMap.valueArray().getMap(0);
+        Assertions.assertThat(innerMap.size()).isEqualTo(1);
+        Assertions.assertThat(innerMap.keyArray().getString(0).toString()).isEqualTo("inner");
+        Assertions.assertThat(innerMap.valueArray().getInt(0)).isEqualTo(42);
+    }
+
 
     // ===== NESTED ROW =====
 
