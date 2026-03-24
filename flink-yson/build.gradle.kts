@@ -24,6 +24,9 @@ dependencies {
     testImplementation(platform("org.junit:junit-bom:5.9.1"))
     testImplementation("org.junit.jupiter:junit-jupiter")
     testImplementation("org.mockito:mockito-core:3.4.6")
+    testImplementation("org.assertj:assertj-core:3.24.2")
+    testImplementation("org.apache.flink:flink-table-runtime:1.20.1")
+    testImplementation("org.apache.flink:flink-format-common:1.20.1")
 
     testCompileOnly("org.projectlombok:lombok:1.18.20")
     testAnnotationProcessor("org.projectlombok:lombok:1.18.20")
