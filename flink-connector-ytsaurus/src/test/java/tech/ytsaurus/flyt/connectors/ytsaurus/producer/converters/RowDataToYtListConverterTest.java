@@ -36,7 +36,8 @@ public class RowDataToYtListConverterTest {
                 "{name='targetTimestamp'; type='timestamp';}",
                 "{name='targetBytes'; type='yson';}",
                 "{name='targetInterval'; type='interval';}",
-                "{name='nested'; type='yson';}"
+                "{name='nested'; type='yson';}",
+                "{name='dictField'; type_v3={type_name='dict'; key='string'; value='string'};}"
         );
 
         LogicalType logicalType = new RowType(List.of(
@@ -48,7 +49,11 @@ public class RowDataToYtListConverterTest {
                         new DayTimeIntervalType(DayTimeIntervalType.DayTimeResolution.DAY_TO_SECOND)),
                 new RowType.RowField("nested",
                         new RowType(List.of(new RowType.RowField("nestedTarget", new VarBinaryType())))
-                )
+                ),
+                new RowType.RowField("dictField", new MapType(
+                        new VarCharType(),
+                        new VarCharType()
+                ))
         ));
 
         YTreeNode targetNode = YTree.mapBuilder().key("sample").value("test").buildMap();
@@ -56,13 +61,17 @@ public class RowDataToYtListConverterTest {
         GenericRowData nestedData = new GenericRowData(1);
         nestedData.setField(/* nestedTarget */ 0, new byte[]{1, 0, 1});
 
-        GenericRowData rowData = new GenericRowData(6);
+        Map<BinaryStringData, BinaryStringData> dictMapData = new HashMap<>();
+        dictMapData.put(new BinaryStringData("key1"), new BinaryStringData("value1"));
+
+        GenericRowData rowData = new GenericRowData(7);
         rowData.setField(/* targetDate */ 0, /* Start of the Epoch */ 0);
         rowData.setField(/* targetDatetime */ 1, TimestampData.fromEpochMillis(1000));
         rowData.setField(/* targetTimestamp */ 2, TimestampData.fromEpochMillis(1000));
         rowData.setField(/* targetBytes */ 3, targetNode.toBinary());
         rowData.setField(/* targetInterval */ 4, /* Start of the Epoch */ 0L);
         rowData.setField(/* nested */ 5, nestedData);
+        rowData.setField(/* dictField */ 6, new GenericMapData(dictMapData));
 
         Map<String, Object> result = convert(schema, logicalType, rowData);
         // Right now we don't support nested native chrono conversions
@@ -76,7 +85,16 @@ public class RowDataToYtListConverterTest {
         Assertions.assertEquals(
                 Map.of("nestedTarget", YTree.bytesNode(new byte[]{1, 0, 1})),
                 result.get("nested"));
+
+        // dict in YT is a list of [key, value] pairs
+        Assertions.assertEquals(
+                YTree.listBuilder()
+                        .value(YTree.listBuilder().value("key1").value("value1").buildList())
+                        .buildList(),
+                result.get("dictField"));
     }
+
+
 
 
     @Test
