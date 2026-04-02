@@ -2,7 +2,11 @@
 
 from pathlib import Path
 
-from ytsaurus_flyt.cli_helpers import job_command_relative_to_project
+from ytsaurus_flyt.cli_helpers import (
+    job_command_relative_to_project,
+    resolve_proxy_pool,
+    split_job_command_tokens,
+)
 
 
 def test_job_command_relative_to_project_rewrites_repo_path(tmp_path: Path) -> None:
@@ -19,6 +23,40 @@ def test_job_command_relative_to_project_rewrites_repo_path(tmp_path: Path) -> N
 
     assert job_command_relative_to_project(f"{proj}/pipeline.py", str(proj)) == "pipeline.py"
     assert job_command_relative_to_project(f"{sub}/main.py --a", str(proj)) == "pkg/main.py --a"
+
+
+def test_split_job_command_tokens_respects_quotes() -> None:
+    assert split_job_command_tokens("script.py --opt 'path with spaces'") == [
+        "script.py",
+        "--opt",
+        "path with spaces",
+    ]
+    assert split_job_command_tokens('script.py --opt "path with spaces"') == [
+        "script.py",
+        "--opt",
+        "path with spaces",
+    ]
+
+
+def test_split_job_command_tokens_unquoted_args() -> None:
+    assert split_job_command_tokens("script.py --opt arg") == ["script.py", "--opt", "arg"]
+
+
+def test_resolve_proxy_pool_cli_env_profile_order(monkeypatch) -> None:
+    monkeypatch.delenv("FLYT_PROXY", raising=False)
+    monkeypatch.delenv("YT_PROXY", raising=False)
+    monkeypatch.delenv("FLYT_POOL", raising=False)
+    monkeypatch.delenv("YT_POOL", raising=False)
+    assert resolve_proxy_pool("http://prof", "pool-prof", None, None) == ("http://prof", "pool-prof")
+
+    monkeypatch.setenv("FLYT_PROXY", "http://env")
+    monkeypatch.setenv("FLYT_POOL", "pool-env")
+    assert resolve_proxy_pool("http://prof", "pool-prof", None, None) == ("http://env", "pool-env")
+
+    assert resolve_proxy_pool("http://prof", "pool-prof", "http://cli", "pool-cli") == (
+        "http://cli",
+        "pool-cli",
+    )
 
 
 def test_job_command_relative_to_project_unchanged_if_outside_project(tmp_path: Path) -> None:

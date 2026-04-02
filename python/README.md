@@ -23,7 +23,7 @@ flyt run examples/simple_wordcount/pipeline.py
 ```
 
 - `flyt install` uploads the SquashFS runtime for the active profile.
-- `flyt run`, `validate`, and `build-layer` use the active profile unless you pass `--profile` or set `FLYT_PROFILE`. Override proxy/pool with `--proxy` / `--pool` or `FLYT_PROXY`, `YT_PROXY`, `FLYT_POOL`, `YT_POOL`.
+- `flyt run`, `validate`, and `build-layer` use the active profile unless you pass `--profile` or set `FLYT_PROFILE`. For proxy/pool, precedence is: `--proxy` / `--pool`, then `FLYT_PROXY` / `YT_PROXY` / `FLYT_POOL` / `YT_POOL`, then the profile.
 - Without `--wheel` / `--source-dir`, `flyt run` finds `pyproject.toml` next to the script and builds a wheel in a temp dir. The script path you pass is rewritten relative to that project (or `--source-dir`) so it matches the wheel layout.
 - With `--wheel` only, pass the script path as it appears inside the unpacked wheel (e.g. `pipeline.py`).
 

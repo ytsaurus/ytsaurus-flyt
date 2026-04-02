@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
+import shlex
 import shutil
 import tempfile
 from pathlib import Path
@@ -335,15 +336,18 @@ def validate(
     ctx.exit(0 if ok_all else 1)
 
 
-@cli.command()
+@cli.command(
+    "run",
+    context_settings={"allow_interspersed_args": False},
+)
 @click.pass_context
-@click.argument("job_command")
+@click.argument("job_argv", nargs=-1, required=True)
 @click.option(
     "--proxy",
     default=None,
-    help="YT HTTP proxy (overrides profile / env).",
+    help="YT HTTP proxy (overrides env / profile).",
 )
-@click.option("--pool", default=None, help="YT pool (overrides profile / env).")
+@click.option("--pool", default=None, help="YT pool (overrides env / profile).")
 @click.option(
     "--preset",
     type=click.Choice(["micro", "small", "large", "xlarge"], case_sensitive=False),
@@ -356,12 +360,13 @@ def validate(
 @click.option(
     "--detach",
     is_flag=True,
-    help="Submit the operation and exit without waiting for completion.",
+    help="Submit the operation and exit without waiting for completion. "
+    "Uses a persistent Cypress wheel path (same as --cache-wheel; requires wheel_cache_prefix or cypress_base_path).",
 )
 @click.option("--force-rebuild", "force_rebuild_layer", is_flag=True)
 def run(
     ctx: click.Context,
-    job_command: str,
+    job_argv: Tuple[str, ...],
     proxy: Optional[str],
     pool: Optional[str],
     preset: Optional[str],
@@ -374,7 +379,17 @@ def run(
     """Launch a PyFlink job. Uses the active profile and auto wheel build."""
     _setup_logging()
     _echo_profile_line(ctx)
+    job_command = shlex.join(list(job_argv))
     cfg, profile_data = _load_flyt_config_from_profile(ctx)
+    if detach:
+        wp = (cfg.wheel_cache_prefix or "").strip()
+        if not wp:
+            raise click.ClickException(
+                "Detached runs require a persistent wheel path on Cypress. "
+                "Set wheel_cache_prefix in the profile, or set cypress_base_path "
+                "(e.g. via `flyt profile add`) so flyt can use <cypress_base_path>/wheels."
+            )
+    cache_wheel_effective = cache_wheel or detach
     proxy_f, pool_f = _resolve_connection(profile_data, proxy, pool)
     _, _, pst = resolve_connection_from_profile(profile_data)
     preset_s = (preset or "").strip().lower() or (pst or "micro").strip().lower()
@@ -411,7 +426,7 @@ def run(
             preset=preset_enum,
             wheel_path=wheel_path,
             source_dir=source_dir,
-            cache_wheel=cache_wheel,
+            cache_wheel=cache_wheel_effective,
             sync=not detach,
             force_rebuild_layer=force_rebuild_layer,
             profile_name=resolve_effective_profile_name(gp),

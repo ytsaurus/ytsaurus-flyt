@@ -120,6 +120,9 @@ def apply_cypress_base_path(cfg: FlytConfig, cypress_base_path: str) -> FlytConf
         cfg = replace(cfg, squashfs_layer_cache_prefix=f"{base}/layers")
     if not tools:
         cfg = replace(cfg, squashfs_tools_cache_prefix=f"{base}/tools")
+    wheels = (cfg.wheel_cache_prefix or "").strip()
+    if not wheels:
+        cfg = replace(cfg, wheel_cache_prefix=f"{base}/wheels")
     return cfg
 
 

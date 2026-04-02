@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import posixpath
 from dataclasses import dataclass
 from typing import AbstractSet, List, Optional, Set, Tuple
 
@@ -108,7 +109,7 @@ def resolve_flink_lib_jars(
 
 
 def _resolved_jar_basename_key(yt_path: str) -> str:
-    base_name = os.path.basename(yt_path.rstrip("/"))
+    base_name = posixpath.basename(yt_path.rstrip("/"))
     try:
         return extract_jar_info(base_name).basename
     except (ValueError, JarInfoExtractionError):
@@ -173,7 +174,7 @@ def download_flink_lib_jars(yt_client: YtClient, yt_paths: List[str], output_dir
     os.makedirs(output_dir, exist_ok=True)
     local_paths: List[str] = []
     for yt_path in yt_paths:
-        base = os.path.basename(yt_path.rstrip("/"))
+        base = posixpath.basename(yt_path.rstrip("/"))
         local_path = os.path.join(output_dir, base)
         _read_yt_file_to_disk(yt_client, yt_path, local_path)
         local_paths.append(local_path)

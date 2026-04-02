@@ -6,6 +6,7 @@ import contextlib
 import hashlib
 import logging
 import os
+import posixpath
 import subprocess
 import sys
 import tempfile
@@ -34,7 +35,7 @@ def dedupe_file_paths_by_basename(paths: List[str]) -> List[str]:
     seen: Set[str] = set()
     out: List[str] = []
     for p in paths:
-        base = os.path.basename(p.rstrip("/"))
+        base = posixpath.basename(p.rstrip("/"))
         if base in seen:
             logger.warning(
                 "Skipping duplicate file basename %r (path %s)",

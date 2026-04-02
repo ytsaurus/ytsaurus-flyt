@@ -13,13 +13,21 @@ from ytsaurus_flyt.models import JobmanagerParams, OperationParams
 FLINK_STANDALONE_FLAG = "FLINK_STANDALONE"
 
 
+def _split_job_command_tokens_posix(job_command: str) -> list[str]:
+    """POSIX shell tokenization for job command strings (exec runs on Linux)."""
+    s = (job_command or "").strip()
+    if not s:
+        return []
+    return shlex.split(s, posix=True)
+
+
 def _job_args_for_shell(job_command: str) -> str:
     """Shell word list for ``set --`` (shlex-split + quote each token)."""
-    return " ".join(shlex.quote(p) for p in shlex.split(job_command.strip()))
+    return " ".join(shlex.quote(p) for p in _split_job_command_tokens_posix(job_command))
 
 
 def _extract_service_name(job_command: str) -> str:
-    parts = job_command.split()
+    parts = _split_job_command_tokens_posix(job_command)
     for part in parts:
         if "/" in part and not part.startswith("-"):
             segments = part.split("/")

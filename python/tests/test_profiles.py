@@ -34,6 +34,7 @@ def test_apply_cypress_base_path():
     out = apply_cypress_base_path(cfg, "//home/flyt/clusters/x")
     assert out.squashfs_layer_cache_prefix == "//home/flyt/clusters/x/layers"
     assert out.squashfs_tools_cache_prefix == "//home/flyt/clusters/x/tools"
+    assert out.wheel_cache_prefix == "//home/flyt/clusters/x/wheels"
 
 
 def test_profile_dict_to_flyt_config():
@@ -47,6 +48,7 @@ def test_profile_dict_to_flyt_config():
     }
     cfg = profile_dict_to_flyt_config(d)
     assert cfg.squashfs_layer_cache_prefix == "//home/flyt/clusters/t/layers"
+    assert cfg.wheel_cache_prefix == "//home/flyt/clusters/t/wheels"
 
 
 def test_resolve_connection_from_profile():
