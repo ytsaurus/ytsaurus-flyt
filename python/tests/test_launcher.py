@@ -6,24 +6,8 @@ from unittest.mock import MagicMock
 import pytest
 
 from ytsaurus_flyt.config import FlytConfig
-from ytsaurus_flyt.launcher import _normalize_job_command_for_wheel_sandbox, launch_vanilla_job
+from ytsaurus_flyt.launcher import launch_vanilla_job
 from ytsaurus_flyt.models import ClusterParams
-
-
-def test_normalize_strips_repo_path_to_basename():
-    assert _normalize_job_command_for_wheel_sandbox("examples/simple_wordcount/pipeline.py") == "pipeline.py"
-
-
-def test_normalize_preserves_plain_script():
-    assert _normalize_job_command_for_wheel_sandbox("pipeline.py") == "pipeline.py"
-
-
-def test_normalize_preserves_module_run():
-    assert _normalize_job_command_for_wheel_sandbox("-m pipeline") == "-m pipeline"
-
-
-def test_normalize_extra_args_after_path():
-    assert _normalize_job_command_for_wheel_sandbox("pkg/sub/main.py --foo") == "main.py --foo"
 
 
 @pytest.fixture

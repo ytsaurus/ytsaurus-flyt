@@ -13,7 +13,7 @@ from typing import Any, Dict, Optional, Tuple
 import click
 import yaml
 
-from ytsaurus_flyt.cli_helpers import find_pyproject_for_job, resolve_proxy_pool
+from ytsaurus_flyt.cli_helpers import find_pyproject_for_job, job_command_relative_to_project, resolve_proxy_pool
 from ytsaurus_flyt.config import DEFAULT_JAVA_HOME, FlytConfig
 from ytsaurus_flyt.flink_lib_jars import (
     download_flink_lib_jars,
@@ -384,6 +384,7 @@ def run(
         raise click.ClickException("Invalid preset %r. Use one of: micro, small, large, xlarge." % (preset_s,)) from e
 
     with contextlib.ExitStack() as stack:
+        proj: Optional[str] = None
         if not wheel_path and not source_dir:
             proj = find_pyproject_for_job(job_command)
             if proj:
@@ -394,6 +395,9 @@ def run(
                 raise click.ClickException(
                     "Pass --wheel or --source-dir, or add pyproject.toml next to the job script."
                 )
+
+        if proj:
+            job_command = job_command_relative_to_project(job_command, proj)
 
         gp = ctx.obj.get("profile")
         launch_vanilla_job(

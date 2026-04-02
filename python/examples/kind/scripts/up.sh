@@ -28,7 +28,7 @@ cleanup_recovery_pods() {
   while IFS= read -r entry; do
     name="${entry##*/}"
     case "$name" in
-      hp-0|ms-0|sch-0|ca-0|tnd-0|dnd-0|rp-0|qt-0|yqla-0|ytsaurus-ui-deployment-*|yt-strawberry-controller-init-job-*)
+      hp-0|ms-0|sch-0|ca-0|tnd-0|dnd-*|rp-0|qt-0|yqla-0|ytsaurus-ui-deployment-*|yt-strawberry-controller-init-job-*)
         kubectl delete -n "$KUBE_NAMESPACE" "$entry" --ignore-not-found=true >/dev/null 2>&1 || true
         ;;
     esac

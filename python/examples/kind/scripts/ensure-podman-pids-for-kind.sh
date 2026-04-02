@@ -54,9 +54,13 @@ fi
 
 ensure_block "$CONFIG"
 
-container="$(podman ps --filter name=flyt-local-control-plane --format '{{.Names}}' 2>/dev/null | head -1)"
+KIND_CLUSTER_NAME="${KIND_CLUSTER_NAME:-flyt-local}"
+kind_cp="${KIND_CLUSTER_NAME}-control-plane"
+container="$(
+  podman ps --filter "name=${kind_cp}" --format '{{.Names}}' 2>/dev/null | head -1
+)"
 if [[ -z "$container" ]]; then
-  echo "No running container named like flyt-local-control-plane. After editing containers.conf, recreate the Kind cluster."
+  echo "No running Podman container matching *${kind_cp}*. Set KIND_CLUSTER_NAME to your Kind cluster name (default: flyt-local). After editing containers.conf, recreate the Kind cluster."
   exit 0
 fi
 

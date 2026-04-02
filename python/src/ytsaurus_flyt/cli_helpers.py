@@ -45,6 +45,24 @@ def find_pyproject_for_job(job_command: str, cwd: Optional[str] = None) -> Optio
     return None
 
 
+def job_command_relative_to_project(job_command: str, project_dir: str) -> str:
+    """Rewrite the first ``.py`` path to be relative to ``project_dir`` (matches wheel unpack layout)."""
+    parts = job_command.strip().split()
+    if not parts:
+        return job_command
+    if parts[0].startswith("-") or not parts[0].endswith(".py"):
+        return job_command
+    sp = resolve_script_path(job_command)
+    if not sp:
+        return job_command
+    try:
+        rel = Path(sp).resolve().relative_to(Path(project_dir).resolve())
+    except ValueError:
+        return job_command
+    parts[0] = rel.as_posix()
+    return " ".join(parts)
+
+
 def resolve_proxy_pool(
     profile_proxy: Optional[str],
     profile_pool: Optional[str],

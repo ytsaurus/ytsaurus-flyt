@@ -21,6 +21,12 @@ def _check_mksquashfs() -> Tuple[bool, str]:
     return False, "mksquashfs not found (install squashfs-tools)"
 
 
+def _check_unzip() -> Tuple[bool, str]:
+    if shutil.which("unzip"):
+        return True, "unzip found"
+    return False, "unzip not found (needed to unpack service wheel in sandbox)"
+
+
 def _check_container_runtime() -> Tuple[bool, str]:
     try:
         get_container_runtime_command()
@@ -62,6 +68,8 @@ def validate_flyt_config(
             rows.append((f"Container runtime (Python {rv})", ok, msg))
     ok_sq, msg_sq = _check_mksquashfs()
     rows.append(("mksquashfs", ok_sq, msg_sq))
+    ok_uz, msg_uz = _check_unzip()
+    rows.append(("unzip", ok_uz, msg_uz))
 
     py = (config.runtime_python_version or "").strip()
     pbin = (config.python_bin or "").strip()

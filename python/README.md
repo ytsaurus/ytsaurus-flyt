@@ -28,12 +28,16 @@ flyt run examples/simple_wordcount/pipeline.py
 
 **Auto wheel:** if you omit `--wheel` and `--source-dir`, `flyt run` looks for `pyproject.toml` next to the job script and runs `pip wheel` into a temp directory.
 
+**Job command:** use the path to the entry script as on your machine (e.g. `examples/simple_wordcount/pipeline.py` from `python/`). After an auto wheel build, the first path is rewritten to be **relative to the project directory** (same layout as inside the wheel). With `--wheel` only, pass the path as it appears after `unzip` (e.g. `pipeline.py`).
+
+**`--cache-wheel`:** cached wheels are keyed by **SHA-256 of the wheel file** under `wheel_cache_prefix` (not only by service name).
+
 **`--profile` / `FLYT_PROFILE`:** choose a profile when the active one is not what you want (e.g. in CI).
 
 ## Other commands
 
 - `flyt profile import <file> --as <name> [--proxy URL] [--pool POOL] [--preset PRESET]`: copy a YAML file into `~/.config/flyt/profiles/<name>.yaml` with optional overrides (same defaults as `profile add` when `cypress_base_path` is missing).
-- `flyt validate`: check profile, `mksquashfs`, optional YT connectivity.
+- `flyt validate`: check profile, `mksquashfs`, `unzip`, optional YT connectivity.
 - `flyt jobshell` / `flyt jobshell --profile <name>`: Attach to the sandbox of the running `flyt run` job for that profile. Needs `tornado` (dependency) for the interactive shell.
 - `flyt build-layer`: build `.squashfs` locally; `--upload` pushes to Cypress (same layout as `flyt install`).
 

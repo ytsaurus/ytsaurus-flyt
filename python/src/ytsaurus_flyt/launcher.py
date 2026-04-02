@@ -29,25 +29,6 @@ from ytsaurus_flyt.yt_client import proxy_url_from_client
 logger = logging.getLogger(__name__)
 
 
-def _normalize_job_command_for_wheel_sandbox(job_command: str) -> str:
-    """Rewrite ``path/to/script.py`` to ``script.py`` for flat wheel layout; keep ``-m`` etc."""
-    parts = job_command.strip().split()
-    if not parts:
-        return job_command
-    first = parts[0]
-    if first.endswith(".py") and "/" in first:
-        base = os.path.basename(first)
-        if base != first:
-            logger.info(
-                "Job command normalized for sandbox wheel layout: %s to %s",
-                first,
-                base,
-            )
-            parts[0] = base
-            return " ".join(parts)
-    return job_command
-
-
 def _make_jobmanager_params(preset_params: ClusterParams) -> JobmanagerParams:
     return JobmanagerParams(
         cpu=preset_params.cpu,
@@ -83,7 +64,6 @@ def launch_vanilla_job(
     profile_name: Optional[str] = None,
 ) -> Any:
     """Submit a PyFlink job as a Vanilla operation (application mode, ``execute.wait()``)."""
-    job_command = _normalize_job_command_for_wheel_sandbox(job_command)
     if isinstance(preset, ClusterPreset):
         preset_params = preset.params
         preset_name = preset.name

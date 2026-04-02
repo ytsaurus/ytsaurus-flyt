@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import logging
 import os
 import subprocess
@@ -18,6 +19,14 @@ from ytsaurus_flyt.container_runtime import get_container_runtime_command, pytho
 logger = logging.getLogger(__name__)
 
 SERVICE_WHEEL_NAME = "service.whl"
+
+
+def _sha256_file(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def dedupe_file_paths_by_basename(paths: List[str]) -> List[str]:
@@ -146,13 +155,15 @@ def upload_wheel(
     cache_prefix: Optional[str] = None,
 ) -> Iterator[str]:
     if cache_prefix:
-        cache_path = f"{cache_prefix}/{SERVICE_WHEEL_NAME}"
+        digest = _sha256_file(wheel_path)
+        cache_path = f"{cache_prefix.rstrip('/')}/wheels/{digest}/{SERVICE_WHEEL_NAME}"
         if yt_client.exists(cache_path):
             logger.info("Using cached wheel at %s", cache_path)
             yield cache_path
             return
 
-        _yt_mkdir(yt_client, cache_prefix)
+        parent = cache_path.rsplit("/", 1)[0]
+        _yt_mkdir(yt_client, parent)
         _yt_write_file(yt_client, cache_path, wheel_path)
         logger.info("Cached wheel at %s", cache_path)
         yield cache_path
