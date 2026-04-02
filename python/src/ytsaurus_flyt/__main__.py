@@ -384,20 +384,23 @@ def run(
         raise click.ClickException("Invalid preset %r. Use one of: micro, small, large, xlarge." % (preset_s,)) from e
 
     with contextlib.ExitStack() as stack:
-        proj: Optional[str] = None
+        project_root: Optional[str] = None
         if not wheel_path and not source_dir:
             proj = find_pyproject_for_job(job_command)
             if proj:
                 logging.getLogger(__name__).info("Building wheel from %s", proj)
                 wdir = stack.enter_context(tempfile.TemporaryDirectory(prefix="flyt_wheel_"))
                 wheel_path = build_wheel(proj, output_dir=wdir)
+                project_root = proj
             else:
                 raise click.ClickException(
                     "Pass --wheel or --source-dir, or add pyproject.toml next to the job script."
                 )
+        elif source_dir:
+            project_root = str(Path(source_dir).expanduser().resolve())
 
-        if proj:
-            job_command = job_command_relative_to_project(job_command, proj)
+        if project_root:
+            job_command = job_command_relative_to_project(job_command, project_root)
 
         gp = ctx.obj.get("profile")
         launch_vanilla_job(

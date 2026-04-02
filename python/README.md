@@ -28,7 +28,7 @@ flyt run examples/simple_wordcount/pipeline.py
 
 **Auto wheel:** if you omit `--wheel` and `--source-dir`, `flyt run` looks for `pyproject.toml` next to the job script and runs `pip wheel` into a temp directory.
 
-**Job command:** use the path to the entry script as on your machine (e.g. `examples/simple_wordcount/pipeline.py` from `python/`). After an auto wheel build, the first path is rewritten to be **relative to the project directory** (same layout as inside the wheel). With `--wheel` only, pass the path as it appears after `unzip` (e.g. `pipeline.py`).
+**Job command:** use the path to the entry script as on your machine (e.g. `examples/simple_wordcount/pipeline.py` from `python/`). The first path is rewritten to be **relative to the project directory** when using auto wheel discovery or **`--source-dir`** (same layout as inside the wheel). With **`--wheel`** only, pass the path as after `unzip` (e.g. `pipeline.py`).
 
 **`--cache-wheel`:** cached wheels are keyed by **SHA-256 of the wheel file** under `wheel_cache_prefix` (not only by service name).
 
