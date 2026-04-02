@@ -1,0 +1,12 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "simple-java-udf-example"
+version = "0.0.1"
+description = "PyFlink job with a Java UDF (ytsaurus-flyt example)"
+requires-python = ">=3.8"
+
+[tool.setuptools]
+py-modules = ["pipeline"]

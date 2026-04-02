@@ -1,6 +1,6 @@
 <img width="64" src="https://raw.githubusercontent.com/ytsaurus/ytsaurus/main/yt/docs/images/logo.png"/><br/>
 
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://github.com/ytsaurus/spyt/blob/main/LICENSE)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://github.com/ytsaurus/ytsaurus-flyt/blob/main/LICENSE)
 [![Telegram](https://img.shields.io/badge/chat-on%20Telegram-2ba2d9.svg)](https://t.me/ytsaurus)
 
 ## YTsaurus
@@ -17,8 +17,16 @@ You can read [post about YTsaurus](https://medium.com/p/42e7f5fa5fc6) or check v
 
 ## FLYT
 
-The project that aims to integrate Apache Flink and YTsaurus.
+Integration between Apache Flink and YTsaurus. Java connectors and formatters live in the main [ytsaurus](https://github.com/ytsaurus/ytsaurus) repository; this repo ships the **Python launcher** [`ytsaurus-flyt`](python/).
 
-* [Apache Flink connectors](https://github.com/ytsaurus/ytsaurus-flyt/tree/main/flink-connector-ytsaurus) for working with YTsaurus [dynamic tables](https://ytsaurus.tech/docs/en/user-guide/dynamic-tables/overview)
-* [Apache Flink formatters](https://github.com/ytsaurus/ytsaurus-flyt/tree/main/flink-yson) for working with [YSON](https://ytsaurus.tech/docs/en/user-guide/storage/yson) format
-* tools that simplify the integration YTsaurus and Apache Flink
+### Quick start
+
+```bash
+pip install ytsaurus-flyt
+export YT_TOKEN=...
+flyt profile add my-dev --proxy http://localhost:50005 --pool default
+flyt install
+flyt run path/to/pipeline.py
+```
+
+See [python/README.md](python/README.md) and [python/ARCHITECTURE.md](python/ARCHITECTURE.md).

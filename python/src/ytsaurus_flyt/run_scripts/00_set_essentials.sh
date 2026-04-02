@@ -1,0 +1,10 @@
+export PYTHON_BIN={python_bin}
+export PYFLINK_CLIENT_EXECUTABLE={python_bin}
+export ROOT_DIR="$(pwd -P)"
+export FLINK_HOME="$ROOT_DIR/flink"
+export FLINK_LIB_DIR="$FLINK_HOME/lib"
+export FLINK_OPT_DIR="$FLINK_HOME/opt"
+export FLINK_PLUGINS_DIR="$FLINK_HOME/plugins"
+export FLINK_LOG_DIR="$FLINK_HOME/log"
+export FLINK_CONF_DIR="$FLINK_HOME/conf"
+export SERVICE_DIR="$ROOT_DIR/python"
