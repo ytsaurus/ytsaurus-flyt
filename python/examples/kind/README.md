@@ -24,7 +24,7 @@ Install **Kind**, **kubectl**, and **helm** on the host; see the [official YTsau
 3. **Create the Kind cluster** (e.g. `kind create cluster --name flyt-local`) and use that context. Optional: run `scripts/ensure-podman-pids-for-kind.sh` before `kind create` when using Podman.
 4. From `python/examples/kind` run **`./scripts/up.sh`**. It runs `bootstrap.sh` (operator Helm install, cert-manager if missing, YTsaurus CR), then **port-forward** UI / HTTP / RPC in the foreground.
 
-UI login: **admin** / **password**. For `flyt` and `yt`, use the same HTTP proxy as the forwards (often `localhost:50005`).
+UI login: **admin** / **password**. For `flyt` and the YTsaurus CLI (`yt`), use the same HTTP proxy as the forwards (`localhost:50005`).
 
 **Credentials for CLI:** set **`YT_TOKEN` to the same string as the UI password** (default **`password`**). Set **`YT_USER=admin`** if a tool needs a username (matches the UI login). This is specific to the bundled Kind demo; production clusters use real tokens.
 

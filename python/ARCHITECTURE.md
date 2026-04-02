@@ -1,10 +1,10 @@
 # Architecture
 
-**FLYT** turns a PyFlink job into a YTsaurus **Vanilla** operation in **application mode**. The launcher does not fork Flink: it gathers artifacts, builds a spec, submits. Settings live in `FlytConfig`, loaded from named **profiles** under `~/.config/flyt/profiles/<name>.yaml` (or `FLYT_CONFIG_DIR`). Use `flyt profile add` or edit those files.
+FLYT submits a PyFlink job as a YTsaurus Vanilla operation (application mode). The process builds a spec, uploads wheels/runtime/JARs, and submits it via the YTsaurus client; it does not run a local Flink cluster. Configuration is `FlytConfig`, usually from profiles in `~/.config/flyt/profiles/<name>.yaml` (or `FLYT_CONFIG_DIR`).
 
-**Cypress layout (defaults):** `flyt profile add` sets `cypress_base_path` to `//home/flyt/clusters/<profile_name>/` so SquashFS caches resolve to `.../layers` and `.../tools` under that cluster prefix. Shared JARs for `flink/lib` can live at **`//home/flyt/libraries/`** with `jar_scan_folder` pointing at that directory.
+By default `flyt profile add` sets `cypress_base_path` to `//home/flyt/clusters/<profile_name>/` so layer/tool caches live under that prefix. Optional shared JARs for `flink/lib` can sit under e.g. `//home/flyt/libraries/` with `jar_scan_folder` pointing there.
 
-**Approach:** ship Python and Flink as **one SquashFS runtime** built on the client and cached on Cypress by hash, instead of running `pip` on every job. Delivery is either **`layer_paths`** (mount SquashFS on the exec node) or **`sandbox_unpack`** (ship `.squashfs` as `file_paths` and unpack in the job sandbox). Wheels in the layer are built for `runtime_python_version`; `python_bin` on exec nodes must be that same interpreter (ABI), or imports like grpc break.
+The SquashFS runtime is built where you run `flyt` (Docker/Podman + `mksquashfs`), keyed by hash and cached on Cypress so exec nodes do not run `pip` per job. Delivery: `layer_paths` (mount SquashFS on the node) or `sandbox_unpack` (upload `.squashfs` as a file and unpack in the sandbox). Wheels in the layer target `runtime_python_version`; `python_bin` on workers must match that ABI.
 
 ```mermaid
 flowchart LR
@@ -23,9 +23,9 @@ flowchart LR
     W & R & J --> V
 ```
 
-**Flink lib JARs:** list basenames under **`embed_squashfs_layer_jar_basenames`** (layer) and/or **`runtime_jar_basenames`** (as `file_paths` to `flink/lib`). Latest semver per basename from **`jar_scan_folder`**. Only listed basenames are fetched.
+JARs: list basenames in `embed_squashfs_layer_jar_basenames` (inside the layer) and/or `runtime_jar_basenames` (staged as `file_paths` to `flink/lib`). Resolution picks the latest semver per basename under `jar_scan_folder`.
 
-**Modules:** the CLI calls `launcher`, which uses `spec`, `flink_lib_jars`, `layer_builder`, `wheel_utils`, `profiles`, and `validate_config` (`flyt validate`). The job script is built from **bash snippets** under `run_scripts/`.
+The code is split so the CLI, YTsaurus submission, and layer/image build logic can be tested independently. Job bootstrap is concatenated bash from `run_scripts/`.
 
 ```mermaid
 graph LR
@@ -35,5 +35,3 @@ graph LR
     L --> lb[layer_builder]
     L --> jlib[flink_lib_jars]
 ```
-
-Those JARs are resolved from Cypress; the Python side uploads and wires them into the layer or `file_paths`.
