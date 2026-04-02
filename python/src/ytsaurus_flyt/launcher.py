@@ -136,10 +136,12 @@ def launch_vanilla_job(
         operation_params = _make_operation_params(config, preset_params, pool)
 
         logger.info("Resolving Flink lib JARs...")
-        all_flink_lib_jar_yt_paths = resolve_flink_lib_jars(yt_client, config)
+        flink_jars = resolve_flink_lib_jars(yt_client, config)
+        all_flink_lib_jar_yt_paths = flink_jars.yt_paths
         jar_yt_for_squashfs, jar_yt_for_files = partition_flink_lib_jars_for_delivery(
             config,
             all_flink_lib_jar_yt_paths,
+            extra_runtime_basenames=flink_jars.extra_runtime_basenames,
         )
         if jar_yt_for_files:
             logger.info(

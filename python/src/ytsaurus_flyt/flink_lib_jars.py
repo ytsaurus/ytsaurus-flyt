@@ -13,7 +13,8 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import List, Optional, Set, Tuple
+from dataclasses import dataclass
+from typing import AbstractSet, List, Optional, Set, Tuple
 
 from yt.wrapper import YtClient
 
@@ -21,6 +22,18 @@ from ytsaurus_flyt.config import FlytConfig
 from ytsaurus_flyt.jar_utils import JarInfoExtractionError, extract_jar_info
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class FlinkLibJarsResolveResult:
+    """Result of :func:`resolve_flink_lib_jars`."""
+
+    yt_paths: List[str]
+    """Resolved Cypress paths to JAR files (latest version per basename)."""
+
+    extra_runtime_basenames: frozenset[str] = frozenset()
+    """Basenames from ``resolve_flink_lib_jars(..., extra_basenames=...)``; same delivery as config
+    :attr:`~ytsaurus_flyt.config.FlytConfig.runtime_jar_basenames` (``file_paths`` only), not the layer."""
 
 
 def _normalized_jar_basename(item: str) -> str:
@@ -53,24 +66,32 @@ def resolve_flink_lib_jars(
     yt_client: YtClient,
     config: FlytConfig,
     extra_basenames: Optional[List[str]] = None,
-) -> List[str]:
-    """Resolve latest matching JARs under ``jar_scan_folder`` for configured basenames."""
+) -> FlinkLibJarsResolveResult:
+    """Resolve latest matching JARs under ``jar_scan_folder`` for configured basenames.
+
+    ``extra_basenames`` adds basenames for programmatic callers only; those basenames are
+    tracked in :attr:`FlinkLibJarsResolveResult.extra_runtime_basenames` and must be passed to
+    :func:`partition_flink_lib_jars_for_delivery` so they use ``file_paths`` only, not the layer.
+    """
+    empty = FlinkLibJarsResolveResult([], frozenset())
+
     jar_scan_folder = (config.jar_scan_folder or "").strip().rstrip("/")
     if not jar_scan_folder:
         logger.warning("jar_scan_folder is not configured, skipping Flink lib JAR resolution")
-        return []
+        return empty
 
     basenames_to_resolve = _collect_config_jar_basenames(config)
-
+    extra_runtime: Set[str] = set()
     if extra_basenames:
         for x in extra_basenames:
             b = _normalized_jar_basename(x) if isinstance(x, str) else ""
             if b:
                 basenames_to_resolve.add(b)
+                extra_runtime.add(b)
 
     if not basenames_to_resolve:
         logger.info("No Flink lib JAR basenames to resolve")
-        return []
+        return empty
 
     logger.info("Resolving Flink lib JARs: %s", sorted(basenames_to_resolve))
 
@@ -105,7 +126,7 @@ def resolve_flink_lib_jars(
         logger.debug("Resolved %s to %s", basename, resolved_path)
         resolved_paths.append(resolved_path)
 
-    return resolved_paths
+    return FlinkLibJarsResolveResult(resolved_paths, frozenset(extra_runtime))
 
 
 def _resolved_jar_basename_key(yt_path: str) -> str:
@@ -119,8 +140,17 @@ def _resolved_jar_basename_key(yt_path: str) -> str:
 def partition_flink_lib_jars_for_delivery(
     config: FlytConfig,
     all_yt_paths: List[str],
+    *,
+    extra_runtime_basenames: Optional[AbstractSet[str]] = None,
 ) -> Tuple[List[str], List[str]]:
-    """Split JAR paths into (paths for SquashFS layer, paths for file_paths only)."""
+    """Split JAR paths into (paths for SquashFS layer, paths for file_paths only).
+
+    Basenames in ``extra_runtime_basenames`` (from ``resolve_flink_lib_jars(..., extra_basenames=...)``)
+    always use ``file_paths`` only, not the SquashFS layer, even if the same basename
+    appears in ``embed_squashfs_layer_jar_basenames``.
+    """
+    extra_runtime = frozenset(extra_runtime_basenames or ())
+
     embed = _basenames_from_config_list(
         list(config.embed_squashfs_layer_jar_basenames or []),
         "embed_squashfs_layer_jar_basenames",
@@ -131,13 +161,25 @@ def partition_flink_lib_jars_for_delivery(
     )
 
     if not embed and not runtime_only:
-        return (list(all_yt_paths), [])
+        if not extra_runtime:
+            return (list(all_yt_paths), [])
+        squashfs_paths: List[str] = []
+        file_paths_paths: List[str] = []
+        for yt_path in all_yt_paths:
+            bkey = _resolved_jar_basename_key(yt_path)
+            if bkey in extra_runtime:
+                file_paths_paths.append(yt_path)
+            else:
+                squashfs_paths.append(yt_path)
+        return (squashfs_paths, file_paths_paths)
 
-    squashfs_paths: List[str] = []
-    file_paths_paths: List[str] = []
+    squashfs_paths = []
+    file_paths_paths = []
     for yt_path in all_yt_paths:
         bkey = _resolved_jar_basename_key(yt_path)
-        if bkey in runtime_only:
+        if bkey in extra_runtime:
+            file_paths_paths.append(yt_path)
+        elif bkey in runtime_only:
             file_paths_paths.append(yt_path)
         elif bkey in embed:
             squashfs_paths.append(yt_path)

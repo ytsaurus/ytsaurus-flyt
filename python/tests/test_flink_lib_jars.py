@@ -58,6 +58,35 @@ def test_partition_both_lists_disjoint():
     }
 
 
+def test_partition_extra_runtime_basenames_when_no_embed_runtime_lists():
+    """extra_runtime_basenames always use file_paths; remaining JARs go to the layer."""
+    cfg = FlytConfig()
+    paths = [
+        "//lib/in-layer-1.0.0.jar",
+        "//lib/job-only-2.0.0.jar",
+    ]
+    sq, fp = partition_flink_lib_jars_for_delivery(
+        cfg,
+        paths,
+        extra_runtime_basenames={"job-only"},
+    )
+    assert sq == ["//lib/in-layer-1.0.0.jar"]
+    assert fp == ["//lib/job-only-2.0.0.jar"]
+
+
+def test_partition_extra_runtime_basenames_override_embed():
+    """Programmatic extra basenames use file_paths only, not embedded in SquashFS."""
+    cfg = FlytConfig(embed_squashfs_layer_jar_basenames=["flink-connector-ytsaurus"])
+    paths = ["//lib/flink-connector-ytsaurus-1.0.0.jar"]
+    sq, fp = partition_flink_lib_jars_for_delivery(
+        cfg,
+        paths,
+        extra_runtime_basenames={"flink-connector-ytsaurus"},
+    )
+    assert sq == []
+    assert fp == paths
+
+
 def test_resolve_includes_only_runtime_jar_basenames():
     """Only runtime_jar_basenames (no embed list) must still resolve from jar_scan_folder."""
     yt = MagicMock()
@@ -69,11 +98,33 @@ def test_resolve_includes_only_runtime_jar_basenames():
         jar_scan_folder="//home/flyt/libraries",
         runtime_jar_basenames=["flink-connector-ytsaurus.jar", "flink-yson"],
     )
-    out = resolve_flink_lib_jars(yt, cfg)
-    assert set(out) == {
+    result = resolve_flink_lib_jars(yt, cfg)
+    assert set(result.yt_paths) == {
         "//home/flyt/libraries/flink-connector-ytsaurus-1.0.0.jar",
         "//home/flyt/libraries/flink-yson-2.1.0.jar",
     }
+    assert result.extra_runtime_basenames == frozenset()
+
+
+def test_resolve_extra_basenames_tracked_for_partition():
+    yt = MagicMock()
+    yt.list.return_value = [
+        "flink-connector-ytsaurus-1.0.0.jar",
+        "extra-lib-1.0.0.jar",
+    ]
+    cfg = FlytConfig(
+        jar_scan_folder="//home/flyt/libraries",
+        embed_squashfs_layer_jar_basenames=["flink-connector-ytsaurus"],
+    )
+    result = resolve_flink_lib_jars(yt, cfg, extra_basenames=["extra-lib"])
+    assert result.extra_runtime_basenames == frozenset({"extra-lib"})
+    sq, fp = partition_flink_lib_jars_for_delivery(
+        cfg,
+        result.yt_paths,
+        extra_runtime_basenames=result.extra_runtime_basenames,
+    )
+    assert set(sq) == {"//home/flyt/libraries/flink-connector-ytsaurus-1.0.0.jar"}
+    assert set(fp) == {"//home/flyt/libraries/extra-lib-1.0.0.jar"}
 
 
 def test_download_flink_lib_jars_reads_chunked_stream(tmp_path):

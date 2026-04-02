@@ -3,6 +3,7 @@
 from ytsaurus_flyt.config import FlytConfig
 from ytsaurus_flyt.credentials import get_secure_credentials
 from ytsaurus_flyt.flink_lib_jars import (
+    FlinkLibJarsResolveResult,
     partition_flink_lib_jars_for_delivery,
     resolve_flink_lib_jars,
 )
@@ -27,6 +28,7 @@ __all__ = [
     "OperationParams",
     "build_vanilla_operation_spec",
     "ensure_runtime_layer",
+    "FlinkLibJarsResolveResult",
     "resolve_flink_lib_jars",
     "partition_flink_lib_jars_for_delivery",
     "get_secure_credentials",

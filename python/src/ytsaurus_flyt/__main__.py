@@ -293,8 +293,14 @@ def install(ctx: click.Context, force: bool, reuse_layers: Optional[str]) -> Non
     if not cfg.runtime_python_packages:
         raise click.ClickException("install requires runtime_python_packages in the profile.")
 
-    flink_lib_jar_yt_paths = resolve_flink_lib_jars(yt_client, cfg)
-    remote = ensure_runtime_layer(yt_client, cfg, flink_lib_jar_yt_paths, force_rebuild=force)
+    flink_jars = resolve_flink_lib_jars(yt_client, cfg)
+    flink_lib_jar_yt_paths = flink_jars.yt_paths
+    jar_for_squashfs, _ = partition_flink_lib_jars_for_delivery(
+        cfg,
+        flink_lib_jar_yt_paths,
+        extra_runtime_basenames=flink_jars.extra_runtime_basenames,
+    )
+    remote = ensure_runtime_layer(yt_client, cfg, jar_for_squashfs, force_rebuild=force)
     click.echo(f"Runtime layer: {remote}")
     if cfg.squashfs_layer_delivery == "sandbox_unpack":
         tool = ensure_unsquashfs_tool_remote(yt_client, cfg)
@@ -431,8 +437,12 @@ def build_layer(
     proxy, _ = _resolve_connection(profile_data, None, None)
     yt_client = make_yt_client(proxy)
 
-    all_lib = resolve_flink_lib_jars(yt_client, cfg)
-    jar_for_squashfs, _ = partition_flink_lib_jars_for_delivery(cfg, all_lib)
+    flink_jars = resolve_flink_lib_jars(yt_client, cfg)
+    jar_for_squashfs, _ = partition_flink_lib_jars_for_delivery(
+        cfg,
+        flink_jars.yt_paths,
+        extra_runtime_basenames=flink_jars.extra_runtime_basenames,
+    )
 
     with tempfile.TemporaryDirectory(prefix="flyt_build_layer_") as tmp:
         jar_dir = os.path.join(tmp, "jars")
