@@ -1,13 +1,4 @@
-"""Resolve extra JARs for Flink ``lib/`` from Cypress.
-
-All artifacts resolved here are staged into ``flink/lib`` on the exec node: either
-embedded in the SquashFS layer or attached as Vanilla ``file_paths``, per
-:func:`partition_flink_lib_jars_for_delivery`.
-
-Filenames under :attr:`~ytsaurus_flyt.config.FlytConfig.jar_scan_folder` must follow
-``<basename>-<version>.jar`` (see :func:`jar_utils.extract_jar_info`). List basenames in
-``runtime_jar_basenames`` / ``embed_squashfs_layer_jar_basenames``.
-"""
+"""Resolve JARs from Cypress for Flink ``lib/`` (SquashFS layer vs Vanilla ``file_paths``)."""
 
 from __future__ import annotations
 
@@ -26,18 +17,11 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class FlinkLibJarsResolveResult:
-    """Result of :func:`resolve_flink_lib_jars`."""
-
     yt_paths: List[str]
-    """Resolved Cypress paths to JAR files (latest version per basename)."""
-
     extra_runtime_basenames: frozenset[str] = frozenset()
-    """Basenames from ``resolve_flink_lib_jars(..., extra_basenames=...)``; same delivery as config
-    :attr:`~ytsaurus_flyt.config.FlytConfig.runtime_jar_basenames` (``file_paths`` only), not the layer."""
 
 
 def _normalized_jar_basename(item: str) -> str:
-    """Strip whitespace and optional ``.jar`` suffix so config matches :func:`jar_utils.extract_jar_info`."""
     s = (item or "").strip()
     if s.lower().endswith(".jar"):
         s = s[:-4]
@@ -56,7 +40,6 @@ def _basenames_from_config_list(items: List[str], field_name: str) -> Set[str]:
 
 
 def _collect_config_jar_basenames(config: FlytConfig) -> Set[str]:
-    """All basenames that must be resolved from ``jar_scan_folder`` (for layer and/or file_paths)."""
     b_run = _basenames_from_config_list(config.runtime_jar_basenames, "runtime_jar_basenames")
     b_emb = _basenames_from_config_list(config.embed_squashfs_layer_jar_basenames, "embed_squashfs_layer_jar_basenames")
     return b_run | b_emb
@@ -67,12 +50,7 @@ def resolve_flink_lib_jars(
     config: FlytConfig,
     extra_basenames: Optional[List[str]] = None,
 ) -> FlinkLibJarsResolveResult:
-    """Resolve latest matching JARs under ``jar_scan_folder`` for configured basenames.
-
-    ``extra_basenames`` adds basenames for programmatic callers only; those basenames are
-    tracked in :attr:`FlinkLibJarsResolveResult.extra_runtime_basenames` and must be passed to
-    :func:`partition_flink_lib_jars_for_delivery` so they use ``file_paths`` only, not the layer.
-    """
+    """Latest JAR per basename under ``jar_scan_folder``. Optional ``extra_basenames`` → ``extra_runtime_basenames``."""
     empty = FlinkLibJarsResolveResult([], frozenset())
 
     jar_scan_folder = (config.jar_scan_folder or "").strip().rstrip("/")
@@ -143,12 +121,7 @@ def partition_flink_lib_jars_for_delivery(
     *,
     extra_runtime_basenames: Optional[AbstractSet[str]] = None,
 ) -> Tuple[List[str], List[str]]:
-    """Split JAR paths into (paths for SquashFS layer, paths for file_paths only).
-
-    Basenames in ``extra_runtime_basenames`` (from ``resolve_flink_lib_jars(..., extra_basenames=...)``)
-    always use ``file_paths`` only, not the SquashFS layer, even if the same basename
-    appears in ``embed_squashfs_layer_jar_basenames``.
-    """
+    """Return ``(squashfs_paths, file_paths_paths)``. ``extra_runtime_basenames`` always go to ``file_paths``."""
     extra_runtime = frozenset(extra_runtime_basenames or ())
 
     embed = _basenames_from_config_list(
@@ -194,7 +167,6 @@ def partition_flink_lib_jars_for_delivery(
 
 
 def download_flink_lib_jars(yt_client: YtClient, yt_paths: List[str], output_dir: str) -> List[str]:
-    """Download given Cypress file paths into ``output_dir``; return local paths (same order)."""
     if not yt_paths:
         return []
 
