@@ -108,6 +108,12 @@ class FlytConfig:
     max_failed_job_count: int = 10
     """Passed to the Vanilla operation builder (``max_failed_job_count``)."""
 
+    pre_built_layer_paths: List[str] = field(default_factory=list)
+    """Pre-built Cypress layer paths (e.g. Porto layers) to use as ``layer_paths``
+    instead of building a SquashFS layer.  When non-empty, ``ensure_runtime_layer``
+    is skipped entirely.
+    """
+
     def __post_init__(self) -> None:
         d = (self.squashfs_layer_delivery or "").strip()
         c = (self.squashfs_compression or "").strip().lower()
@@ -161,7 +167,9 @@ SQUASHFS_VALIDATE_RUNTIME_VERSION_MSG = "required (e.g. 3.10); must match python
 
 
 def require_squashfs_runtime_config(config: FlytConfig) -> None:
-    """Raise if SquashFS layer prerequisites are missing (launcher / layer build)."""
+    """Raise if SquashFS layer prerequisites are missing."""
+    if config.pre_built_layer_paths:
+        return
     if not config.runtime_python_packages:
         raise ValueError("runtime_python_packages is required (e.g. apache-flink) to build the SquashFS runtime layer.")
     if not (config.runtime_python_version or "").strip():

@@ -79,12 +79,6 @@ def launch_vanilla_job(
     )
 
     require_squashfs_runtime_config(config)
-    rv = (config.runtime_python_version or "").strip()
-    logger.info(
-        "SquashFS layer targets Python %s; exec node python_bin must be that "
-        "interpreter (same ABI). If python_bin is an older 3.x, expect grpc/pyflink import errors (e.g. cygrpc).",
-        rv,
-    )
 
     logger.info("Fetching credentials...")
     secure_vault = get_secure_credentials(yt_client, extra_secrets=extra_secrets)
@@ -118,28 +112,36 @@ def launch_vanilla_job(
         logger.info("Resolving Flink lib JARs...")
         flink_jars = resolve_flink_lib_jars(yt_client, config)
         all_flink_lib_jar_yt_paths = flink_jars.yt_paths
-        jar_yt_for_squashfs, jar_yt_for_files = partition_flink_lib_jars_for_delivery(
-            config,
-            all_flink_lib_jar_yt_paths,
-            extra_runtime_basenames=flink_jars.extra_runtime_basenames,
-        )
-        if jar_yt_for_files:
-            logger.info(
-                "Flink lib JARs attached as file_paths (not in SquashFS): %s",
-                sorted(os.path.basename(p.rstrip("/")) for p in jar_yt_for_files),
-            )
-        squashfs_remote = ensure_runtime_layer(
-            yt_client,
-            config,
-            jar_yt_for_squashfs,
-            force_rebuild=force_rebuild_layer,
-        )
-        if config.squashfs_layer_delivery == "sandbox_unpack":
-            operation_params.file_paths.append(squashfs_remote)
-            operation_params.file_paths.append(ensure_unsquashfs_tool_remote(yt_client, config))
+
+        if config.pre_built_layer_paths:
+            logger.info("Using pre-built layer paths: %s", config.pre_built_layer_paths)
+            operation_params.layer_paths = list(config.pre_built_layer_paths)
+            operation_params.file_paths.extend(all_flink_lib_jar_yt_paths)
         else:
-            operation_params.layer_paths = [squashfs_remote]
-        operation_params.file_paths.extend(jar_yt_for_files)
+            rv = (config.runtime_python_version or "").strip()
+            logger.info("SquashFS layer targets Python %s", rv)
+            jar_yt_for_squashfs, jar_yt_for_files = partition_flink_lib_jars_for_delivery(
+                config,
+                all_flink_lib_jar_yt_paths,
+                extra_runtime_basenames=flink_jars.extra_runtime_basenames,
+            )
+            if jar_yt_for_files:
+                logger.info(
+                    "Flink lib JARs attached as file_paths (not in SquashFS): %s",
+                    sorted(os.path.basename(p.rstrip("/")) for p in jar_yt_for_files),
+                )
+            squashfs_remote = ensure_runtime_layer(
+                yt_client,
+                config,
+                jar_yt_for_squashfs,
+                force_rebuild=force_rebuild_layer,
+            )
+            if config.squashfs_layer_delivery == "sandbox_unpack":
+                operation_params.file_paths.append(squashfs_remote)
+                operation_params.file_paths.append(ensure_unsquashfs_tool_remote(yt_client, config))
+            else:
+                operation_params.layer_paths = [squashfs_remote]
+            operation_params.file_paths.extend(jar_yt_for_files)
 
         operation_params.file_paths.append(wheel_remote_path)
         operation_params.file_paths = dedupe_file_paths_by_basename(operation_params.file_paths)
