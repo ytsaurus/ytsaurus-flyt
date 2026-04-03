@@ -29,7 +29,7 @@ __version__ = "0.1.0"
 
 
 def __getattr__(name):
-    """Lazy imports for modules that depend on yt.wrapper."""
+    """Lazy imports for modules that depend on the YTsaurus client."""
     _lazy = {
         "launch_vanilla_job": "ytsaurus_flyt.launcher",
         "build_vanilla_operation_spec": "ytsaurus_flyt.spec",
