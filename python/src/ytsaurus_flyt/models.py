@@ -18,6 +18,7 @@ def parse_memory(memory: Union[str, int]) -> int:
         "gb": 1024 * 1024 * 1024,
         "mb": 1024 * 1024,
         "kb": 1024,
+        "bb": 1,
         "b": 1,
     }
     match = re.match(r"(\d+)(.*)", memory)
@@ -25,11 +26,8 @@ def parse_memory(memory: Union[str, int]) -> int:
         raise ValueError(f"Cannot parse memory value: {memory!r}")
     value = int(match.group(1))
     unit = match.group(2).lower().strip()
-    if not unit:
-        unit = "b"
-    elif len(unit) == 1:
-        if unit != "b":
-            unit = unit + "b"
+    if len(unit) <= 1:
+        unit = unit + "b"
     if unit not in units:
         raise ValueError(f"Unknown memory unit: {unit!r} in {memory!r}")
     return value * units[unit]
