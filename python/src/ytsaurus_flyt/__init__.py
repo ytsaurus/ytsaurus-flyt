@@ -43,5 +43,6 @@ def __getattr__(name):
     }
     if name in _lazy:
         import importlib
+
         return getattr(importlib.import_module(_lazy[name]), name)
     raise AttributeError(f"module 'ytsaurus_flyt' has no attribute {name!r}")
