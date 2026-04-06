@@ -46,7 +46,7 @@ publishing {
             }
             pom {
                 name.set("Flink YSON")
-                description.set("Flint YSON")
+                description.set("Flink YSON")
                 url.set("https://github.com/ytsaurus/ytsaurus-flyt/tree/main/flink-yson")
                 licenses {
                     license {

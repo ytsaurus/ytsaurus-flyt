@@ -1,0 +1,14 @@
+# Operator Helm overrides (Kind). kube-rbac-proxy image and manager limits; see README.
+controllerManager:
+  kubeRbacProxy:
+    image:
+      repository: quay.io/brancz/kube-rbac-proxy
+      tag: v0.14.2
+  manager:
+    resources:
+      limits:
+        cpu: "2"
+        memory: 1Gi
+      requests:
+        cpu: 100m
+        memory: 256Mi

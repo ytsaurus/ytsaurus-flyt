@@ -1,0 +1,20 @@
+proxy: "http://localhost:50005"
+yt_ui_base_url: "http://localhost:50004"
+
+pool: "default"
+preset: "micro"
+
+cypress_base_path: "//home/flyt/clusters/simple-java-udf"
+service_name: "simple-java-udf"
+squashfs_layer_delivery: "sandbox_unpack"
+
+jar_scan_folder: "//home/flyt/libraries"
+runtime_jar_basenames:
+  - "simple-java-udf"
+
+runtime_python_packages:
+  - "apache-flink==1.20.1"
+runtime_python_version: "3.8"
+
+java_home: "/usr/lib/jvm/java-11-openjdk-amd64"
+python_bin: "/usr/bin/python3"
