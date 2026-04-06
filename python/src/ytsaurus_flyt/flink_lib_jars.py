@@ -15,6 +15,8 @@ from ytsaurus_flyt.jar_utils import JarInfoExtractionError, extract_jar_info
 
 logger = logging.getLogger(__name__)
 
+_JAR_EXT = ".jar"
+
 
 @dataclass(frozen=True)
 class FlinkLibJarsResolveResult:
@@ -24,8 +26,8 @@ class FlinkLibJarsResolveResult:
 
 def _normalized_jar_basename(item: str) -> str:
     s = (item or "").strip()
-    if s.lower().endswith(".jar"):
-        s = s[:-4]
+    if s.lower().endswith(_JAR_EXT):
+        s = s[: -len(_JAR_EXT)]
     return s
 
 
