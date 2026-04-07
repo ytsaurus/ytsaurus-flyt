@@ -163,16 +163,22 @@ def launch_vanilla_job(
         op = run_operation(spec, sync=False, client=yt_client)  # type: ignore[union-attr]
 
         op_id = getattr(op, "id", "unknown")
-        base = str(proxy_url).rstrip("/")
-        tracking_url = f"{base}/?page=operation&mode=detail&id={op_id}&tab=details"
-        logger.info(
-            "Operation %s started. Track: %s (Flink :27050 is in-cluster; see stderr for port-forward).",
-            op_id,
-            tracking_url,
-        )
-        ui_base = (config.yt_ui_base_url or "").strip()
+        ui_base = (config.yt_ui_base_url or "").strip().rstrip("/")
+        base = ui_base or (str(proxy_url).rstrip("/") if proxy_url != "unknown" else "")
+        if base:
+            tracking_url = f"{base}/?page=operation&mode=detail&id={op_id}&tab=details"
+            logger.info(
+                "Operation %s started. Track: %s (Flink :27050 is in-cluster; see stderr for port-forward).",
+                op_id,
+                tracking_url,
+            )
+        else:
+            logger.info(
+                "Operation %s started (Flink :27050 is in-cluster; see stderr for port-forward).",
+                op_id,
+            )
         if ui_base:
-            logger.info("Web UI base: %s", ui_base.rstrip("/"))
+            logger.info("Web UI base: %s", ui_base)
 
         if sync and op is not None:
             logger.info("Waiting for completion...")

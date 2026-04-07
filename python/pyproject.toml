@@ -4,14 +4,18 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ytsaurus-flyt"
-version = "0.1.0"
+version = "0.1.1"
 description = "Launch PyFlink jobs on YTsaurus Vanilla operations"
 keywords = ["flink", "pyflink", "ytsaurus", "vanilla-operations", "data-pipeline"]
 readme = "README.md"
 license = {text = "Apache-2.0"}
 requires-python = ">=3.8"
 authors = [
-    {name = "YTsaurus"},
+    {name = "Danil Sabirov", email = "danil.sabirov.work@gmail.com"},
+    {name = "Alexey Akhundov", email = "me@theseems.ru"},
+    {name = "Yahor Burakevich", email = "egor.burakevich93@gmail.com"},
+    {name = "Vladimir Praded", email = "vovatv2017@gmail.com"},
+    {name = "Alexander Smirnov", email = "smiralexan@gmail.com"},
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
