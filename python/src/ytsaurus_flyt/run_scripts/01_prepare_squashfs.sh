@@ -50,12 +50,12 @@ if [ ! -d "$FLINK_LIB_DIR" ]; then
         fi
         if [ ! -f "$PYTHON_BIN" ]; then
             echo "  $PYTHON_BIN does not exist." 1>&2
-            ls -la /usr/bin/python* 1>&2 2>&1 || echo "  no /usr/bin/python*" 1>&2
+            ls -la /usr/bin/python* 1>&2 || echo "  no /usr/bin/python*" 1>&2
         fi
         if [ ! -d "$ROOT_DIR/python-runtime" ] && [ ! -d "/python-runtime" ]; then
             echo "  python-runtime/ not found at $ROOT_DIR or /." 1>&2
             echo "  Sandbox contents:" 1>&2
-            ls "$ROOT_DIR/" 1>&2 2>&1
+            ls "$ROOT_DIR/" 1>&2
         fi
         echo "  Ensure your layer contains pyflink in python-runtime/, or" 1>&2
         echo "  pre-populate flink/lib/ in your layer." 1>&2
