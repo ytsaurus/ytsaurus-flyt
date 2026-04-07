@@ -31,16 +31,14 @@ classifiers = [
 dependencies = [
     "ytsaurus-client>=0.13",
     "click>=7.1,<7.2",
-    "PyYAML>=5.4.1,<6; python_version < '3.11'",
-    "PyYAML>=6.0.1,<7; python_version >= '3.11'",
+    "PyYAML>=6.0.1,<7",
     "tornado>=5.1,<7",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pip>=21",
-    "pytest>=6.2.5,<7; python_version < '3.11'",
-    "pytest>=7.0; python_version >= '3.11'",
+    "pytest>=6.2.5",
     "pytest-cov",
     "ruff>=0.4",
 ]
