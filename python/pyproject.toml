@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=68.0", "wheel"]
+requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "ytsaurus-flyt"
-version = "0.1.1"
+version = "0.1.2"
 description = "Launch PyFlink jobs on YTsaurus Vanilla operations"
 keywords = ["flink", "pyflink", "ytsaurus", "vanilla-operations", "data-pipeline"]
 readme = "README.md"
@@ -30,15 +30,16 @@ classifiers = [
 ]
 dependencies = [
     "ytsaurus-client>=0.13",
-    "click>=8.0",
-    "pyyaml>=6.0",
-    "tornado>=6.0",
+    "click>=7.1,<7.2",
+    "PyYAML>=5.4.1,<6; python_version < '3.11'",
+    "PyYAML>=6.0.1,<7; python_version >= '3.11'",
+    "tornado>=5.1,<7",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pip>=24.0",
-    "pytest>=7.0",
+    "pip>=21",
+    "pytest>=6.2.5",
     "pytest-cov",
     "ruff>=0.4",
 ]
@@ -69,3 +70,6 @@ line-length = 120
 [tool.ruff.lint]
 select = ["E", "F", "I", "W"]
 ignore = ["E501"]
+
+[tool.uv]
+package = true

@@ -8,7 +8,6 @@ Runtime is a SquashFS image (PyFlink + optional JARs for `flink/lib`), cached on
 
 ```bash
 pip install ytsaurus-flyt
-# dev: cd python && pip install -e .
 ```
 
 ## Typical flow
@@ -79,6 +78,18 @@ Default `squashfs_layer_delivery` from `flyt profile add` is `layer_paths`. For 
 | SMALL | 2 | 8G | 4648M |
 | LARGE | 4 | 16G | 9296M |
 | XLARGE | 8 | 32G | 24G |
+
+
+## Development
+
+This repo uses [uv](https://docs.astral.sh/uv/):
+
+```bash
+cd python
+uv sync --extra dev
+uv run pytest
+uv run ruff check src tests
+```
 
 ## License
 
