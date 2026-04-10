@@ -64,7 +64,7 @@ ytsaurus_flyt = ["run_scripts/*.sh"]
 testpaths = ["tests"]
 
 [tool.ruff]
-target-version = "py38"
+target-version = "py39"
 line-length = 120
 
 [tool.ruff.lint]
