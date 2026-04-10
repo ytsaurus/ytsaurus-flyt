@@ -10,17 +10,6 @@ Runtime is a SquashFS image (PyFlink + optional JARs for `flink/lib`), cached on
 pip install ytsaurus-flyt
 ```
 
-Development (this repo uses [uv](https://docs.astral.sh/uv/) and a lockfile):
-
-```bash
-cd python
-uv sync --extra dev
-uv run pytest
-uv run ruff check src tests
-```
-
-After changing dependencies in `pyproject.toml`, refresh the lockfile with `uv lock`. Equivalent with pip: `pip install -e ".[dev]"` from `python/`.
-
 ## Typical flow
 
 A profile stores proxy, pool, and `FlytConfig` defaults (under `~/.config/flyt/profiles/<name>.yaml`). You can keep several profiles for the same cluster.
@@ -89,6 +78,18 @@ Default `squashfs_layer_delivery` from `flyt profile add` is `layer_paths`. For 
 | SMALL | 2 | 8G | 4648M |
 | LARGE | 4 | 16G | 9296M |
 | XLARGE | 8 | 32G | 24G |
+
+
+## Development
+
+This repo uses [uv](https://docs.astral.sh/uv/):
+
+```bash
+cd python
+uv sync --extra dev
+uv run pytest
+uv run ruff check src tests
+```
 
 ## License
 
