@@ -8,8 +8,18 @@ Runtime is a SquashFS image (PyFlink + optional JARs for `flink/lib`), cached on
 
 ```bash
 pip install ytsaurus-flyt
-# dev: cd python && pip install -e .
 ```
+
+Development (this repo uses [uv](https://docs.astral.sh/uv/) and a lockfile):
+
+```bash
+cd python
+uv sync --extra dev
+uv run pytest
+uv run ruff check src tests
+```
+
+After changing dependencies in `pyproject.toml`, refresh the lockfile with `uv lock`. Equivalent with pip: `pip install -e ".[dev]"` from `python/`.
 
 ## Typical flow
 

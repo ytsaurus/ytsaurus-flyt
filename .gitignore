@@ -1,4 +1,5 @@
 .idea
+.cursor/rules
 .gradle
 build
 # Python
