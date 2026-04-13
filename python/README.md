@@ -56,7 +56,7 @@ Default `squashfs_layer_delivery` is `layer_paths`. For Kind local dev, use `san
 
 | Command | Description |
 |---------|-------------|
-| `flyt run <script>` | Build wheel, upload runtime, submit Vanilla job |
+| `flyt run <script>` | Build wheel, upload runtime, submit [Vanilla](https://ytsaurus.tech/docs/en/user-guide/data-processing/operations/vanilla) job |
 | `flyt install` | Upload SquashFS runtime for the active profile |
 | `flyt validate` | Check profile, tools (`mksquashfs`, `unzip`), optional connectivity |
 | `flyt build-layer` | Build local `.squashfs`; `--upload` to push to Cypress |
@@ -78,7 +78,7 @@ JAR filenames follow `<basename>-<version>.jar`. Place them under `jar_scan_fold
 | Profile field | Where the JAR ends up |
 |---|---|
 | `embed_squashfs_layer_jar_basenames` | Baked into the SquashFS layer |
-| `runtime_jar_basenames` | Staged as `file_paths` into `flink/lib` at runtime |
+| `runtime_jar_basenames` | Staged as [`file_paths`](https://ytsaurus.tech/docs/en/user-guide/data-processing/operations/operations-options#user-script-options) into `flink/lib` at runtime |
 
 Do not put the same basename in both lists.
 
@@ -87,7 +87,7 @@ Do not put the same basename in both lists.
 - `YT_TOKEN` / `FLYT_YT_TOKEN`.
 - Kind demo ([examples/kind/README.md](examples/kind/README.md)): UI password works as `YT_TOKEN`; set `YT_USER=admin` if needed.
 - Do not set `YT_TOKEN` to an empty string — it blocks the YTsaurus client from using `~/.yt/token`. Unset or use a real token.
-- Optional `FLYT_SECURE_<KEY>` for extra `secure_vault` keys.
+- Optional `FLYT_SECURE_<KEY>` for extra [`secure_vault`](https://ytsaurus.tech/docs/en/user-guide/data-processing/operations/operations-options#general-options-for-all-operation-types) keys.
 - Programmatic: `extra_secrets` on `get_secure_credentials` / `launch_vanilla_job` if secrets come from outside env.
 
 ## Presets
