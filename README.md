@@ -14,19 +14,3 @@ YTsaurus is a distributed storage and processing platform for big data with supp
 You can read [post about YTsaurus](https://medium.com/p/42e7f5fa5fc6) or check video:
 
 [![video about YTsaurus](https://raw.githubusercontent.com/ytsaurus/ytsaurus/main/yt/docs/images/ytsaurus-promo-video.png)](https://youtu.be/4Q2EB_uimLs)
-
-## FLYT
-
-This repo ships the **Python launcher / CLI** [`ytsaurus-flyt`](python/) for running [PyFlink](https://nightlies.apache.org/flink/flink-docs-release-1.20/docs/dev/python/overview/) jobs inside YTSaurus.
-
-### Quick start
-
-```bash
-pip install ytsaurus-flyt
-export YT_TOKEN=...
-flyt profile add my-cluster --proxy http://localhost:50005
-flyt install
-flyt run python/examples/simple_wordcount/pipeline.py
-```
-
-See [python/README.md](python/README.md) and [python/ARCHITECTURE.md](python/ARCHITECTURE.md).
