@@ -21,5 +21,5 @@ The project that aims to integrate Apache Flink and YTsaurus.
 
 * [Apache Flink connectors](https://github.com/ytsaurus/ytsaurus-flyt/tree/main/flink-connector-ytsaurus) for working with YTsaurus [dynamic tables](https://ytsaurus.tech/docs/en/user-guide/dynamic-tables/overview)
 * [Apache Flink formatters](https://github.com/ytsaurus/ytsaurus-flyt/tree/main/flink-yson) for working with [YSON](https://ytsaurus.tech/docs/en/user-guide/storage/yson) format
-* [Python launcher / CLI](https://github.com/ytsaurus/ytsaurus-flyt/tree/main/flink-yson) for launching PyFlink jobs inside Vanilla operations
+* [Python launcher / CLI](https://github.com/ytsaurus/ytsaurus-flyt/tree/main/python) for launching PyFlink jobs inside Vanilla operations
 * tools that simplify the integration YTsaurus and Apache Flink
