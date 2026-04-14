@@ -17,16 +17,9 @@ You can read [post about YTsaurus](https://medium.com/p/42e7f5fa5fc6) or check v
 
 ## FLYT
 
-Integration between Apache Flink and YTsaurus. Java connectors and formatters live in the main [ytsaurus](https://github.com/ytsaurus/ytsaurus) repository; this repo ships the **Python launcher** [`ytsaurus-flyt`](python/).
+The project that aims to integrate Apache Flink and YTsaurus.
 
-### Quick start
-
-```bash
-pip install ytsaurus-flyt
-export YT_TOKEN=...
-flyt profile add my-dev --proxy http://localhost:50005 --pool default
-flyt install
-flyt run path/to/pipeline.py
-```
-
-See [python/README.md](python/README.md) and [python/ARCHITECTURE.md](python/ARCHITECTURE.md).
+* [Apache Flink connectors](https://github.com/ytsaurus/ytsaurus-flyt/tree/main/flink-connector-ytsaurus) for working with YTsaurus [dynamic tables](https://ytsaurus.tech/docs/en/user-guide/dynamic-tables/overview)
+* [Apache Flink formatters](https://github.com/ytsaurus/ytsaurus-flyt/tree/main/flink-yson) for working with [YSON](https://ytsaurus.tech/docs/en/user-guide/storage/yson) format
+* [Python launcher / CLI](https://github.com/ytsaurus/ytsaurus-flyt/tree/main/python) for launching PyFlink jobs inside [Vanilla](https://ytsaurus.tech/docs/en/user-guide/data-processing/operations/vanilla) operations
+* tools that simplify the integration YTsaurus and Apache Flink
