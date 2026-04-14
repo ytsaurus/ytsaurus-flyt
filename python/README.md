@@ -7,7 +7,6 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for internals.
 
 ```bash
 pip install ytsaurus-flyt
-# dev: cd python && pip install -e .
 ```
 
 ## Quick start
@@ -102,6 +101,17 @@ Do not put the same basename in both lists.
 ## API
 
 `FlytConfig`, `FlytConfig.from_yaml()`, `launch_vanilla_job()`, `ClusterPreset` — see the package and [ARCHITECTURE.md](ARCHITECTURE.md).
+
+## Development
+
+This repo uses [uv](https://docs.astral.sh/uv/):
+
+```bash
+cd python
+uv sync --extra dev
+uv run pytest
+uv run ruff check src tests
+```
 
 ## License
 
