@@ -1,6 +1,6 @@
 <img width="64" src="https://raw.githubusercontent.com/ytsaurus/ytsaurus/main/yt/docs/images/logo.png"/><br/>
 
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://github.com/ytsaurus/spyt/blob/main/LICENSE)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://github.com/ytsaurus/ytsaurus-flyt/blob/main/LICENSE)
 [![Telegram](https://img.shields.io/badge/chat-on%20Telegram-2ba2d9.svg)](https://t.me/ytsaurus)
 
 ## YTsaurus
