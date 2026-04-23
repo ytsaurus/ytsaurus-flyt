@@ -304,7 +304,7 @@ public class RowDataToYtListConverters implements Serializable {
     }
 
     private boolean isDictField(YTreeNode fieldNode) {
-        return Optional.of(fieldNode)
+        return Optional.ofNullable(fieldNode)
                 .filter(YTreeNode::isMapNode)
                 .map(YTreeNode::asMap)
                 .map(map -> map.get("type_v3"))
