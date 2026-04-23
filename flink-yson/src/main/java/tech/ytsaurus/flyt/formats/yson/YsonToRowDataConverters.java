@@ -313,13 +313,25 @@ public class YsonToRowDataConverters implements Serializable {
                 // YT dict: [[key, value], ...]
                 YTreeListNode listNode = yTreeNode.listNode();
                 for (int i = 0; i < listNode.size(); i++) {
-                    YTreeListNode pair = listNode.get(i).listNode();
-                    Object key = keyConverter.convert(pair.get(0));
-                    Object value = valueConverter.convert(pair.get(1));
-                    result.put(key, value);
+                    YTreeNode node = listNode.get(i);
+                    if (node.isListNode() && node.listNode().size() == 2) {
+                        YTreeListNode pairNode = node.listNode();
+                        Object key = keyConverter.convert(pairNode.get(0));
+                        Object value = valueConverter.convert(pairNode.get(1));
+                        result.put(key, value);
+                    } else {
+                        throw new YsonParseException(
+                                "Malformed YT dict entry at index " + i + ": expected a list node with exactly 2 " +
+                                        "elements (key-value pair), but got: " + node
+                        );
+                    }
                 }
+            } else {
+                throw new YsonParseException(
+                        "Unsupported node type for map conversion: expected map node or list node, but got: "
+                                + yTreeNode.getClass().getSimpleName()
+                );
             }
-
             return new GenericMapData(result);
         };
     }
