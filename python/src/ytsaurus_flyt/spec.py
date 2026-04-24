@@ -10,7 +10,7 @@ from yt.wrapper.spec_builders import VanillaSpecBuilder
 from ytsaurus_flyt.config import FlytConfig
 from ytsaurus_flyt.models import JobmanagerParams, OperationParams
 
-FLINK_STANDALONE_FLAG = "FLINK_STANDALONE"
+FLINK_VANILLA_FLAG = "FLINK_VANILLA"
 
 
 def _split_job_command_tokens_posix(job_command: str) -> list[str]:
@@ -110,7 +110,7 @@ def build_vanilla_operation_spec(
         **DEFAULT_ENVIRONMENT,
         "JAVA_HOME": config.java_home,
         "FLINK_ENV_JAVA_OPTS": f"-Xmx{max_heap_size_str}",
-        FLINK_STANDALONE_FLAG: "True",
+        FLINK_VANILLA_FLAG: "True",
         **config.extra_environment,
     }
 
