@@ -204,71 +204,166 @@ public class YtDynamicTableWriter implements Serializable {
         this.dataMetrics = dataMetrics;
     }
 
-    @SneakyThrows
+
     public void open() {
-        log.info("Open writer for table: {}", path.getFullPath());
+        try {
+            log.info("Open writer for table: {}", path.getFullPath());
 
-        schemaToCreate = TableSchema.fromYTree(YTreeTextSerializer.deserialize(ysonSchemaString));
-        schemaToWrite = schemaToCreate.toWrite();
+            schemaToCreate = TableSchema.fromYTree(YTreeTextSerializer.deserialize(ysonSchemaString));
+            schemaToWrite = schemaToCreate.toWrite();
 
-        createAndMountTableIfNeeded();
+            createAndMountTableIfNeeded();
 
-        acquireLockForTable(LockMode.SHARED);
+            acquireLockForTable(LockMode.SHARED);
 
-        log.info("Lock for write acquired. {}", path.getFullPath());
+            log.info("Lock for write acquired. {}", path.getFullPath());
 
-        transactionDataBuffer = new ArrayList<>();
-        uncommittedRows =
-                new ArrayList<>(ytWriterOptions.getRowsInTransactionLimit() +
-                        ytWriterOptions.getRowsInModificationLimit());
-        unflushedRows = new ArrayList<>(ytWriterOptions.getRowsInModificationLimit());
-        error = new AtomicReference<>();
-        lastTransactionCommit = new AtomicLong(System.currentTimeMillis());
-        lastModificationFlush = new AtomicLong(System.currentTimeMillis());
-        rowsInTransaction = new AtomicInteger(0);
-        rowsInBuffer = new AtomicInteger(0);
-        lastCommitTimestamp = new AtomicLong(0);
-        lastNonCommittedTrackableField = new AtomicLong(0);
-        maxCommittedTrackableField = new AtomicLong(0);
-        lastCommittedTrackableField = new AtomicLong(0);
-        sumCommittedRows = new AtomicLong(0);
-        sumFailedRows = new AtomicLong(0);
-        resetModificationBuffer();
-        commitTransactionLock = new ReentrantLock();
-        flushModificationLock = new ReentrantLock();
-        transactionCommitter = Executors.newSingleThreadScheduledExecutor();
-        modificationFlusher = Executors.newSingleThreadScheduledExecutor();
+            transactionDataBuffer = new ArrayList<>();
+            uncommittedRows =
+                    new ArrayList<>(ytWriterOptions.getRowsInTransactionLimit() +
+                            ytWriterOptions.getRowsInModificationLimit());
+            unflushedRows = new ArrayList<>(ytWriterOptions.getRowsInModificationLimit());
+            error = new AtomicReference<>();
+            lastTransactionCommit = new AtomicLong(System.currentTimeMillis());
+            lastModificationFlush = new AtomicLong(System.currentTimeMillis());
+            rowsInTransaction = new AtomicInteger(0);
+            rowsInBuffer = new AtomicInteger(0);
+            lastCommitTimestamp = new AtomicLong(0);
+            lastNonCommittedTrackableField = new AtomicLong(0);
+            maxCommittedTrackableField = new AtomicLong(0);
+            lastCommittedTrackableField = new AtomicLong(0);
+            sumCommittedRows = new AtomicLong(0);
+            sumFailedRows = new AtomicLong(0);
+            resetModificationBuffer();
+            commitTransactionLock = new ReentrantLock();
+            flushModificationLock = new ReentrantLock();
+            transactionCommitter = Executors.newSingleThreadScheduledExecutor();
+            modificationFlusher = Executors.newSingleThreadScheduledExecutor();
 
-        addMetrics();
+            addMetrics();
 
-        transactionCommitter.scheduleAtFixedRate(() -> {
-            if (lastTransactionCommit.get() + ytWriterOptions.getCommitTransactionPeriod().toMillis()
-                    < System.currentTimeMillis()) {
-                commitTransactionLock.lock();
-                try {
-                    commitTransaction();
-                } catch (Exception e) {
-                    error.set(e);
-                } finally {
-                    commitTransactionLock.unlock();
+            transactionCommitter.scheduleAtFixedRate(() -> {
+                if (lastTransactionCommit.get() + ytWriterOptions.getCommitTransactionPeriod().toMillis()
+                        < System.currentTimeMillis()) {
+                    commitTransactionLock.lock();
+                    try {
+                        commitTransaction();
+                    } catch (Exception e) {
+                        error.set(e);
+                    } finally {
+                        commitTransactionLock.unlock();
+                    }
                 }
-            }
-        }, 0L, ytWriterOptions.getCommitTransactionPeriod().toMillis(), TimeUnit.MILLISECONDS);
-        modificationFlusher.scheduleAtFixedRate(() -> {
-            if (lastModificationFlush.get() + ytWriterOptions.getFlushModificationPeriod().toMillis()
-                    < System.currentTimeMillis()) {
-                flushModificationLock.lock();
-                try {
-                    flushModification();
-                } catch (Exception e) {
-                    error.set(e);
-                } finally {
-                    flushModificationLock.unlock();
+            }, 0L, ytWriterOptions.getCommitTransactionPeriod().toMillis(), TimeUnit.MILLISECONDS);
+            modificationFlusher.scheduleAtFixedRate(() -> {
+                if (lastModificationFlush.get() + ytWriterOptions.getFlushModificationPeriod().toMillis()
+                        < System.currentTimeMillis()) {
+                    flushModificationLock.lock();
+                    try {
+                        flushModification();
+                    } catch (Exception e) {
+                        error.set(e);
+                    } finally {
+                        flushModificationLock.unlock();
+                    }
                 }
+            }, 0L, ytWriterOptions.getFlushModificationPeriod().toMillis(), TimeUnit.MILLISECONDS);
+            log.info("YT writer options to {} : {}", path.getFullPath(), ytWriterOptions);
+            log.info("YT connection to {} started with schema: {}", path.getFullPath(), schemaToCreate);
+
+        } catch (Exception e) {
+            log.error("Error open yt writer: {}", path.getFullPath(), e);
+
+            List<Exception> errorsAsync = closeAsyncTasks();
+            errorsAsync.forEach(e::addSuppressed);
+
+            List<Exception> errorsResources = closeResources();
+            errorsResources.forEach(e::addSuppressed);
+
+            throw e;
+        }
+    }
+
+    private List<Exception> closeAsyncTasks() {
+        log.info("Close async tasks: {}", path.getFullPath());
+        List<Exception> errors = new ArrayList<>();
+
+        if (transactionCommitter != null) {
+            try {
+                transactionCommitter.shutdown();
+                boolean terminated = transactionCommitter
+                        .awaitTermination(ytWriterOptions.getTransactionTimeout().toMillis(), TimeUnit.MILLISECONDS);
+                if (!terminated) {
+                    log.warn("Failed to terminate committer for writer {}", path.getFullPath());
+                    transactionCommitter.shutdownNow();
+                } else {
+                    log.info("Transaction commiter closed successfully for writer {}", path.getFullPath());
+                }
+            } catch (InterruptedException e) {
+                log.error("Writer {} closure interrupted", path.getFullPath(), e);
+                transactionCommitter.shutdownNow();
+                Thread.currentThread().interrupt();
+                errors.add(e);
+            } catch (Exception e) {
+                log.error("Error closing transactionCommitter tasks: {}.", path.getFullPath(), e);
+                errors.add(e);
             }
-        }, 0L, ytWriterOptions.getFlushModificationPeriod().toMillis(), TimeUnit.MILLISECONDS);
-        log.info("YT writer options to {} : {}", path.getFullPath(), ytWriterOptions);
-        log.info("YT connection to {} started with schema: {}", path.getFullPath(), schemaToCreate);
+        }
+
+        if (modificationFlusher != null) {
+            try {
+                modificationFlusher.shutdown();
+                boolean terminated = modificationFlusher
+                        .awaitTermination(ytWriterOptions.getTransactionTimeout().toMillis(), TimeUnit.MILLISECONDS);
+                if (!terminated) {
+                    log.warn("Failed to terminate flusher for writer {}", path.getFullPath());
+                    modificationFlusher.shutdownNow();
+                } else {
+                    log.info("Modification flusher closed successfully for writer {}", path.getFullPath());
+                }
+            } catch (InterruptedException e) {
+                log.error("Writer {} closure interrupted", path.getFullPath(), e);
+                modificationFlusher.shutdownNow();
+                Thread.currentThread().interrupt();
+                errors.add(e);
+            } catch (Exception e) {
+                log.error("Error closing modificationFlusher tasks: {}.", path.getFullPath(), e);
+                errors.add(e);
+            }
+        }
+        return errors;
+    }
+
+    private List<Exception> closeResources() {
+        log.info("Close resources for: {}", path.getFullPath());
+        List<Exception> errors = new ArrayList<>();
+
+        try {
+            if (client != null) {
+                client.close();
+                log.info("Client closed successfully: {}", path.getFullPath());
+            }
+        } catch (Exception e) {
+            log.error("Error closing client {} ", path.getFullPath());
+            errors.add(e);
+        }
+
+        try {
+            releaseLock();
+            log.info("Release lock success [{}:{}]", path.getFullPath(), acquiredLock);
+        } catch (Exception e) {
+            log.error("Error release lock [{}:{}]", path.getFullPath(), acquiredLock);
+            errors.add(e);
+        }
+
+        try {
+            clearMetrics();
+            log.info("Metrics closed successfully for writer {}", path.getFullPath());
+        } catch (Exception e) {
+            log.error("Error close metrics for writer {}", path.getFullPath());
+            errors.add(e);
+        }
+        return errors;
     }
 
     private void addMetrics() {
@@ -342,47 +437,33 @@ public class YtDynamicTableWriter implements Serializable {
 
     public void close() {
         log.info("Begin closing writer {}", path.getFullPath());
+        List<Exception> errors = new ArrayList<>();
+
+        List<Exception> errorsAsync = closeAsyncTasks();
+
         try {
-            if (transactionCommitter != null) {
-                transactionCommitter.shutdown();
-                boolean terminated = transactionCommitter
-                        .awaitTermination(ytWriterOptions.getTransactionTimeout().toMillis(), TimeUnit.MILLISECONDS);
-                if (!terminated) {
-                    log.warn("Failed to terminate committer for writer {}", path.getFullPath());
-                    transactionCommitter.shutdownNow();
-                } else {
-                    log.info("Transaction commiter closed successfully for writer {}", path.getFullPath());
-                }
-            }
-            if (modificationFlusher != null) {
-                modificationFlusher.shutdown();
-                boolean terminated = modificationFlusher
-                        .awaitTermination(ytWriterOptions.getTransactionTimeout().toMillis(), TimeUnit.MILLISECONDS);
-                if (!terminated) {
-                    log.warn("Failed to terminate flusher for writer {}", path.getFullPath());
-                    modificationFlusher.shutdownNow();
-                } else {
-                    log.info("Modification flusher closed successfully for writer {}", path.getFullPath());
-                }
-            }
             flushData();
             log.info("Data flushed successfully for writer {}", path.getFullPath());
-            clearMetrics();
-            log.info("Metrics closed successfully for writer {}", path.getFullPath());
-            client.close();
-            log.info("Writer {} closed successfully", path.getFullPath());
-
-            releaseLock();
-
-        } catch (InterruptedException e) {
-            log.error("Writer {} closure interrupted", path.getFullPath(), e);
-            transactionCommitter.shutdownNow();
-            modificationFlusher.shutdownNow();
-            Thread.currentThread().interrupt();
         } catch (Exception e) {
-            log.error("Unexpected failure closing writer {}", path.getFullPath(), e);
-            throw e;
+            log.error("Error flushing data. {}", path.getFullPath(), e);
+            errors.add(e);
         }
+
+        List<Exception> errorsResources = closeResources();
+
+        errors.addAll(errorsAsync);
+        errors.addAll(errorsResources);
+        if (!errors.isEmpty()) {
+            Exception root = errors.get(0);
+            errors.stream()
+                    .skip(1)
+                    .forEach(root::addSuppressed);
+
+            log.error("Error closing yt writer: {}", path.getFullPath());
+            throw new RuntimeException(root);
+        }
+
+        log.info("Writer {} closed successfully", path.getFullPath());
     }
 
     private void clearMetrics() {
