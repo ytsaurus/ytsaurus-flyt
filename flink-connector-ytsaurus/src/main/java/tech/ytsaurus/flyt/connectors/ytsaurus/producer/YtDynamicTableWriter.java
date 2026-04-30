@@ -204,7 +204,7 @@ public class YtDynamicTableWriter implements Serializable {
         this.dataMetrics = dataMetrics;
     }
 
-    @SneakyThrows
+
     public void open() {
         try {
             log.info("Open writer for table: {}", path.getFullPath());
