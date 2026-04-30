@@ -7,8 +7,10 @@ import java.util.stream.Collectors;
 import javax.annotation.Nullable;
 
 import lombok.Builder;
+import lombok.NonNull;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.flink.api.common.serialization.DeserializationSchema;
+import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.configuration.ReadableConfig;
 import org.apache.flink.table.connector.ChangelogMode;
 import org.apache.flink.table.connector.Projection;
@@ -29,7 +31,6 @@ import org.apache.flink.table.types.DataType;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.util.Preconditions;
 import org.apache.flink.util.function.SerializableFunction;
-
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.ComplexYtPath;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.LookupMethod;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.cache.LookupCacheBuilder;
@@ -200,46 +201,73 @@ public class YtDynamicTableSource
     }
 
     @Override
-    public ScanRuntimeProvider getScanRuntimeProvider(ScanContext runtimeProviderContext) {
-        final YtRowDataInputFormat.Builder builder =
-                YtRowDataInputFormat.builder()
-                        .setYsonSchemaString(ysonSchemaString)
-                        .setCredentialsProvider(credentialsProvider);
-        ComplexYtPath path;
+    public ScanRuntimeProvider getScanRuntimeProvider(ScanContext context) {
+        Preconditions.checkNotNull(
+                converter, "Value decoding format must not be null.");
+        final DeserializationSchema<RowData> deserializer =
+                converter.createRuntimeDecoder(context, physicalRowDataType);
+        final TypeInformation<RowData> typeInfo =
+                context.createTypeInformation(physicalRowDataType);
+        log.info("Limit = {}", limit);
         if (pathMap.size() == 1) {
-            path = pathMap.values().iterator().next();
+            return getSingleClusterInputFormatProvider(deserializer, typeInfo);
         } else {
-            Preconditions.checkNotNull(clusterPickStrategy,
-                    "Strategy must be present when given multiple paths");
-            clusterPickStrategy.open(options);
-            log.info("Using {} strategy for scan: {}", clusterPickStrategy.getName(), compilePathName());
-            String ytCluster = clusterPickStrategy.pickCluster();
-            path = pathMap.get(ytCluster);
-            log.info("Strategy {} for {} scan picked cluster {}, so path is: {}",
-                    clusterPickStrategy.getName(),
-                    compilePathName(),
-                    ytCluster,
-                    path);
+            return getMultiClusterInputFormatProvider(deserializer, typeInfo);
         }
+    }
+
+    private @NonNull InputFormatProvider getSingleClusterInputFormatProvider(
+            DeserializationSchema<RowData> deserializer, TypeInformation<RowData> typeInfo) {
+        ComplexYtPath path = pathMap.values().iterator().next();
+        fillTableName(path);
+        return InputFormatProvider.of(
+                YtRowDataInputFormat.builder()
+                        .path(path)
+                        .ysonSchemaString(ysonSchemaString)
+                        .credentialsProvider(credentialsProvider)
+                        .limit(limit)
+                        .deserializer(deserializer)
+                        .rowDataTypeInfo(typeInfo)
+                        .build()
+        );
+    }
+
+    private void fillTableName(ComplexYtPath path) {
         if (path.isPartitioned()) {
-//            It will throw in runtime to fix lookup initialization
-//            throw new UnsupportedOperationException("Partition table unsupported");
             log.warn("Ignore partition error for scan table");
         } else {
             path.setTableName(path.getBaseTableName());
         }
-        builder.setPath(path);
+    }
 
+    private @NonNull InputFormatProvider getMultiClusterInputFormatProvider(
+            DeserializationSchema<RowData> deserializer, TypeInformation<RowData> typeInfo) {
         Preconditions.checkNotNull(
-                converter, "Value decoding format must not be null.");
+                clusterPickStrategy,
+                "Strategy must be present when given multiple paths"
+        );
 
-        builder.setDeserializer(converter.createRuntimeDecoder(runtimeProviderContext, physicalRowDataType));
-        builder.setLimit(limit);
-        log.info("Limit = {}", limit);
-        builder.setRowDataTypeInfo(
-                runtimeProviderContext.createTypeInformation(physicalRowDataType));
+        for (ComplexYtPath path : pathMap.values()) {
+            fillTableName(path);
+        }
 
-        return InputFormatProvider.of(builder.build());
+        clusterPickStrategy.open(options);
+
+        log.info("Using {} strategy for scan: {}",
+                clusterPickStrategy.getName(),
+                compilePathName());
+
+        return InputFormatProvider.of(
+                YtRowDataMultiClusterInputFormat.builder()
+                        .pathMap(pathMap)
+                        .clusterPickStrategy(clusterPickStrategy)
+                        .ysonSchemaString(ysonSchemaString)
+                        .credentialsProvider(credentialsProvider)
+                        .limit(limit)
+                        .deserializer(deserializer)
+                        .rowDataTypeInfo(typeInfo)
+                        .build()
+        );
     }
 
     @Override
