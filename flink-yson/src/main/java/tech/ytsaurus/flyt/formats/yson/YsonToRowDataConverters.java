@@ -298,17 +298,44 @@ public class YsonToRowDataConverters implements Serializable {
         final YsonToRowDataConverter valueConverter = createConverter(valueType);
 
         return yTreeNode -> {
-            Iterator<Map.Entry<String, YTreeNode>> fields = yTreeNode.asMap().entrySet().iterator();
             Map<Object, Object> result = new HashMap<>();
-            while (fields.hasNext()) {
-                Map.Entry<String, YTreeNode> entry = fields.next();
-                Object key = keyConverter.convert(YTree.stringNode(entry.getKey()));
-                Object value = valueConverter.convert(entry.getValue());
-                result.put(key, value);
+
+            if (yTreeNode.isMapNode()) {
+                // YSON map: {key=value, ...}
+                Iterator<Map.Entry<String, YTreeNode>> fields = yTreeNode.asMap().entrySet().iterator();
+                while (fields.hasNext()) {
+                    Map.Entry<String, YTreeNode> entry = fields.next();
+                    Object key = keyConverter.convert(YTree.stringNode(entry.getKey()));
+                    Object value = valueConverter.convert(entry.getValue());
+                    result.put(key, value);
+                }
+            } else if (yTreeNode.isListNode()) {
+                // YT dict: [[key, value], ...]
+                YTreeListNode listNode = yTreeNode.listNode();
+                for (int i = 0; i < listNode.size(); i++) {
+                    YTreeNode node = listNode.get(i);
+                    if (node.isListNode() && node.listNode().size() == 2) {
+                        YTreeListNode pairNode = node.listNode();
+                        Object key = keyConverter.convert(pairNode.get(0));
+                        Object value = valueConverter.convert(pairNode.get(1));
+                        result.put(key, value);
+                    } else {
+                        throw new YsonParseException(
+                                "Malformed YT dict entry at index " + i + ": expected a list node with exactly 2 " +
+                                        "elements (key-value pair), but got: " + node
+                        );
+                    }
+                }
+            } else {
+                throw new YsonParseException(
+                        "Unsupported node type for map conversion: expected map node or list node, but got: "
+                                + yTreeNode.getClass().getSimpleName()
+                );
             }
             return new GenericMapData(result);
         };
     }
+
 
     public YsonToRowDataConverter createRowConverter(RowType rowType) {
         final YsonToRowDataConverter[] fieldConverters =
