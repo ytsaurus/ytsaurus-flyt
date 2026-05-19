@@ -431,9 +431,7 @@ def run(
         # launch_vanilla_job returns (sync=False), killing the daemon thread
         # before it has a chance to find the job.
         watcher: contextlib.AbstractContextManager = (
-            FlinkUIWatcher(proxy=proxy_f, open_in_browser=not headless)
-            if not detach
-            else contextlib.nullcontext()
+            FlinkUIWatcher(proxy=proxy_f, open_in_browser=not headless) if not detach else contextlib.nullcontext()
         )
         with watcher:
             launch_vanilla_job(
