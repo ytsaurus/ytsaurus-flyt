@@ -7,9 +7,7 @@ import re
 import socket
 import threading
 import webbrowser
-from typing import List, Optional, Tuple
-
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, List, Optional, Tuple
 
 if TYPE_CHECKING:
     from yt.wrapper import YtClient
