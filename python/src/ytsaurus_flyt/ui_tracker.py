@@ -29,10 +29,22 @@ class _OpIdCapture(logging.Handler):
 
     def __init__(self) -> None:
         super().__init__()
-        self.op_id: Optional[str] = None
+        self._op_id: Optional[str] = None
+        self._event = threading.Event()
+
+    @property
+    def op_id(self) -> Optional[str]:
+        return self._op_id
+
+    def wait(self, stop: threading.Event) -> Optional[str]:
+        """Block until op_id is captured or stop is set; return op_id or None."""
+        while not stop.is_set():
+            if self._event.wait(timeout=1):
+                return self._op_id
+        return None
 
     def emit(self, record: logging.LogRecord) -> None:
-        if self.op_id is not None:
+        if self._event.is_set():
             return
         try:
             msg = record.getMessage()
@@ -42,12 +54,13 @@ class _OpIdCapture(logging.Handler):
             return
         m = _OP_ID_RE.search(msg)
         if m:
-            self.op_id = m.group(1)
+            self._op_id = m.group(1)
+            self._event.set()
 
 
 def _list_running_jobs(client: "YtClient", op_id: str) -> Optional[List[dict]]:
     try:
-        resp = client.list_jobs(op_id, state="running")
+        resp = client.list_jobs(op_id, job_state="running")
     except Exception as exc:
         logger.debug("list_jobs(%s) failed: %s", op_id, exc)
         return None
@@ -166,12 +179,7 @@ def _thread_main(
     stop: threading.Event,
     open_in_browser: bool,
 ) -> None:
-    # Wait for op ID to appear in logs
-    while not stop.is_set() and capture.op_id is None:
-        if stop.wait(1):
-            return
-
-    op_id = capture.op_id
+    op_id = capture.wait(stop)
     if not op_id:
         return
 
@@ -187,6 +195,9 @@ class FlinkUIWatcher:
     yt-client 'Operation started' log line, then polls list_jobs/get_job for the
     running job's IPv6, TCP-probes port 27050, and logs the URL when it comes up.
     Handles job restarts. Optionally opens the URL in the default browser.
+
+    Not useful with ``sync=False`` (detach mode) since the process exits before
+    the watcher can find the job — skip it in that case.
 
     Usage::
 

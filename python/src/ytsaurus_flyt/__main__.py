@@ -427,7 +427,15 @@ def run(
         from ytsaurus_flyt.ui_tracker import FlinkUIWatcher  # noqa: PLC0415
 
         gp = ctx.obj.get("profile")
-        with FlinkUIWatcher(proxy=proxy_f, open_in_browser=not headless):
+        # Watcher is pointless in detach mode: the process exits right after
+        # launch_vanilla_job returns (sync=False), killing the daemon thread
+        # before it has a chance to find the job.
+        watcher: contextlib.AbstractContextManager = (
+            FlinkUIWatcher(proxy=proxy_f, open_in_browser=not headless)
+            if not detach
+            else contextlib.nullcontext()
+        )
+        with watcher:
             launch_vanilla_job(
                 config=cfg,
                 yt_client=make_yt_client(proxy_f),
