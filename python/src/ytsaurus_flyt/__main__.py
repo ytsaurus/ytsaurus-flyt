@@ -364,6 +364,12 @@ def validate(
     "Uses a persistent Cypress wheel path (same as --cache-wheel; requires wheel_cache_prefix or cypress_base_path).",
 )
 @click.option("--force-rebuild", "force_rebuild_layer", is_flag=True)
+@click.option(
+    "--headless",
+    is_flag=True,
+    default=False,
+    help="Do not open Flink Web UI in the browser when it becomes reachable.",
+)
 def run(
     ctx: click.Context,
     job_argv: Tuple[str, ...],
@@ -375,6 +381,7 @@ def run(
     cache_wheel: bool,
     detach: bool,
     force_rebuild_layer: bool,
+    headless: bool,
 ) -> None:
     """Launch a PyFlink job. Uses the active profile and auto wheel build."""
     _setup_logging()
@@ -417,20 +424,29 @@ def run(
         if project_root:
             job_command = job_command_relative_to_project(job_command, project_root)
 
+        from ytsaurus_flyt.ui_tracker import FlinkUIWatcher  # noqa: PLC0415
+
         gp = ctx.obj.get("profile")
-        launch_vanilla_job(
-            config=cfg,
-            yt_client=make_yt_client(proxy_f),
-            job_command=job_command,
-            pool=pool_f,
-            preset=preset_enum,
-            wheel_path=wheel_path,
-            source_dir=source_dir,
-            cache_wheel=cache_wheel_effective,
-            sync=not detach,
-            force_rebuild_layer=force_rebuild_layer,
-            profile_name=resolve_effective_profile_name(gp),
+        # Watcher is pointless in detach mode: the process exits right after
+        # launch_vanilla_job returns (sync=False), killing the daemon thread
+        # before it has a chance to find the job.
+        watcher: contextlib.AbstractContextManager = (
+            FlinkUIWatcher(proxy=proxy_f, open_in_browser=not headless) if not detach else contextlib.nullcontext()
         )
+        with watcher:
+            launch_vanilla_job(
+                config=cfg,
+                yt_client=make_yt_client(proxy_f),
+                job_command=job_command,
+                pool=pool_f,
+                preset=preset_enum,
+                wheel_path=wheel_path,
+                source_dir=source_dir,
+                cache_wheel=cache_wheel_effective,
+                sync=not detach,
+                force_rebuild_layer=force_rebuild_layer,
+                profile_name=resolve_effective_profile_name(gp),
+            )
 
 
 @cli.command("build-layer")
