@@ -138,6 +138,22 @@ def _monitor(
             return
 
 
+def _announce_ui_url(url: str, *, open_in_browser: bool) -> None:
+    bar = "=" * (len(url) + 4)
+    logger.info("%s", bar)
+    logger.info("  Flink Web UI: %s", url)
+    logger.info("%s", bar)
+    if not open_in_browser:
+        return
+    try:
+        opened = webbrowser.open(url)
+    except Exception as exc:
+        logger.warning("Could not auto-open Flink Web UI in a browser: %s. Open the URL above manually.", exc)
+        return
+    if not opened:
+        logger.info("Browser did not open automatically. Open the URL above manually.")
+
+
 def _watch_loop(
     client: "YtClient",
     op_id: str,
@@ -160,12 +176,7 @@ def _watch_loop(
 
         url = f"http://[{host}]:{FLINK_UI_PORT}"
         if first:
-            logger.info("Flink Web UI: %s", url)
-            if open_in_browser:
-                try:
-                    webbrowser.open(url)
-                except Exception:
-                    pass
+            _announce_ui_url(url, open_in_browser=open_in_browser)
             first = False
         else:
             logger.info("Job restarted (%s). Flink Web UI: %s", job_id, url)
@@ -213,7 +224,7 @@ class FlinkUIWatcher:
         self._thread: Optional[threading.Thread] = None
 
     def __enter__(self) -> "FlinkUIWatcher":
-        logging.getLogger().addHandler(self._capture)
+        logging.getLogger("Yt").addHandler(self._capture)
         self._thread = threading.Thread(
             target=_thread_main,
             args=(self._proxy, self._capture, self._stop, self._open),
@@ -225,4 +236,4 @@ class FlinkUIWatcher:
 
     def __exit__(self, *_: object) -> None:
         self._stop.set()
-        logging.getLogger().removeHandler(self._capture)
+        logging.getLogger("Yt").removeHandler(self._capture)
