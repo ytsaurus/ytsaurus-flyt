@@ -216,6 +216,21 @@ def profile_select(name: str) -> None:
     click.echo(f"Active profile: {name!r}")
 
 
+@profile_cli.command("update")
+@click.argument("name")
+@click.argument("file", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+def profile_update(name: str, file: Path) -> None:
+    """Replace an existing profile's body with the YAML at FILE."""
+    if not profile_yaml_path(name).is_file():
+        raise click.ClickException(f"Unknown profile: {name!r}. Use `flyt profile add` or `flyt profile import`.")
+    with open(file, encoding="utf-8") as f:
+        raw = yaml.safe_load(f)
+    if not isinstance(raw, dict):
+        raise click.ClickException("Profile file must contain a YAML mapping (object).")
+    save_profile_dict(name, dict(raw))
+    click.echo(f"Updated profile {name!r} from {file} at {profile_yaml_path(name)}")
+
+
 @profile_cli.command("remove")
 @click.argument("name")
 def profile_remove(name: str) -> None:
