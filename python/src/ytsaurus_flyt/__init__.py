@@ -1,5 +1,8 @@
 """ytsaurus-flyt: Run PyFlink jobs on YTsaurus Vanilla operations."""
 
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _pkg_version
+
 from ytsaurus_flyt.config import FlytConfig
 from ytsaurus_flyt.models import (
     ClusterParams,
@@ -24,8 +27,6 @@ __all__ = [
     "validate_flyt_config",
     "make_yt_client",
 ]
-
-from importlib.metadata import PackageNotFoundError, version as _pkg_version
 
 try:
     __version__ = _pkg_version("ytsaurus-flyt")
