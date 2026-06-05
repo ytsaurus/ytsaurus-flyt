@@ -1,5 +1,5 @@
 group = "tech.ytsaurus.flyt.connectors.ytsaurus"
-version = "1.10.1"
+version = "1.10.2"
 
 plugins {
     id("com.peterabeles.gversion") version "1.10.3"
@@ -73,6 +73,7 @@ tasks.compileJava {
 
 tasks.shadowJar {
     mergeServiceFiles()
+    relocate("com.google.protobuf", "tech.ytsaurus.flyt.connectors.ytsaurus.shaded.com.google.protobuf")
 }
 
 tasks.withType<Checkstyle> {
