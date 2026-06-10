@@ -3,8 +3,14 @@ name: Build Gradle project
 on:
   push:
     branches: [ "main" ]
+    paths-ignore:
+      - 'python/**'
+      - '.github/workflows/flyt-python-build.yml'
   pull_request:
     branches: [ "main" ]
+    paths-ignore:
+      - 'python/**'
+      - '.github/workflows/flyt-python-build.yml'
 
 jobs:
   build:
