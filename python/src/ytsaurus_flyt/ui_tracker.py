@@ -184,6 +184,58 @@ def _watch_loop(
         _monitor(client, op_id, job_id, host, stop)
 
 
+def find_ui_url_for_operation(client: "YtClient", op_id: str, *, probe: bool = True) -> Optional[str]:
+    """Synchronously resolve the Flink Web UI URL for a running operation, or ``None``.
+
+    Finds a running job with an IPv6 exec address; with ``probe`` (default) only
+    returns hosts where port 27050 actually accepts connections.
+    """
+    found = _find_job_with_ipv6(client, op_id)
+    if not found:
+        return None
+    _, ipv6s = found
+    for host in ipv6s:
+        if not probe or _probe_tcp(host, FLINK_UI_PORT):
+            return f"http://[{host}]:{FLINK_UI_PORT}"
+    return None
+
+
+_TERMINAL_OP_STATES = frozenset({"aborted", "completed", "failed"})
+
+
+def _operation_state(client: "YtClient", op_id: str) -> str:
+    try:
+        return str(client.get_operation_state(op_id))
+    except Exception as exc:
+        logger.debug("get_operation_state(%s) failed: %s", op_id, exc)
+        return "unknown"
+
+
+def wait_ui_url_for_operation(
+    client: "YtClient",
+    op_id: str,
+    *,
+    poll_interval_s: float = _JOB_POLL_S,
+    stop: Optional[threading.Event] = None,
+) -> Tuple[Optional[str], str]:
+    """Block until the Flink Web UI is reachable or the operation reaches a terminal state.
+
+    Returns ``(url, operation_state)``; ``url`` is ``None`` when the operation
+    finished (or ``stop`` was set) before the UI came up.
+    """
+    stop = stop or threading.Event()
+    while not stop.is_set():
+        url = find_ui_url_for_operation(client, op_id)
+        if url:
+            return url, _operation_state(client, op_id)
+        state = _operation_state(client, op_id)
+        if state in _TERMINAL_OP_STATES:
+            return None, state
+        if stop.wait(poll_interval_s):
+            break
+    return None, _operation_state(client, op_id)
+
+
 def _thread_main(
     proxy: str,
     capture: _OpIdCapture,

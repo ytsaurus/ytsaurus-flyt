@@ -231,3 +231,61 @@ def test_profile_import_writes_and_overrides(monkeypatch, tmp_path: Path) -> Non
     )
     assert dup.exit_code != 0
     assert "already exists" in dup.output
+
+
+def test_ui_prints_url_for_resolved_operation(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("FLYT_CONFIG_DIR", str(tmp_path))
+    _write_profile(tmp_path, "p1")
+    monkeypatch.setattr("ytsaurus_flyt.__main__.make_yt_client", lambda _p: object())
+    monkeypatch.setattr(
+        "ytsaurus_flyt.jobshell_resolve.list_running_flyt_operations",
+        lambda _c, _n: [{"id": "op-abc"}],
+    )
+    monkeypatch.setattr(
+        "ytsaurus_flyt.ui_tracker.find_ui_url_for_operation",
+        lambda _c, _o, **_kw: "http://[::1]:27050",
+    )
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ui"], catch_exceptions=False)
+    assert result.exit_code == 0
+    assert "op-abc" in result.output
+    assert "http://[::1]:27050" in result.output
+
+
+def test_ui_fails_when_no_running_operation(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("FLYT_CONFIG_DIR", str(tmp_path))
+    _write_profile(tmp_path, "p1")
+    monkeypatch.setattr("ytsaurus_flyt.__main__.make_yt_client", lambda _p: object())
+    monkeypatch.setattr(
+        "ytsaurus_flyt.jobshell_resolve.list_running_flyt_operations",
+        lambda _c, _n: [],
+    )
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ui"], catch_exceptions=False)
+    assert result.exit_code != 0
+    assert "No running flyt operation" in result.output
+
+
+def test_ui_wait_fails_on_terminal_state(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("FLYT_CONFIG_DIR", str(tmp_path))
+    _write_profile(tmp_path, "p1")
+    monkeypatch.setattr("ytsaurus_flyt.__main__.make_yt_client", lambda _p: object())
+    monkeypatch.setattr(
+        "ytsaurus_flyt.ui_tracker.wait_ui_url_for_operation",
+        lambda _c, _o, **_kw: (None, "failed"),
+    )
+    runner = CliRunner()
+    result = runner.invoke(cli, ["ui", "--operation", "op-x", "--wait"], catch_exceptions=False)
+    assert result.exit_code != 0
+    assert "failed" in result.output
+
+
+def test_run_detach_short_flag_is_accepted(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("FLYT_CONFIG_DIR", str(tmp_path))
+    _write_profile(tmp_path, "p1")
+    runner = CliRunner()
+    # No wheel_cache_prefix in the profile: -d must hit the detach validation error,
+    # proving the short flag maps to --detach.
+    result = runner.invoke(cli, ["run", "-d", "x.py"], catch_exceptions=False)
+    assert result.exit_code != 0
+    assert "Detached runs require a persistent wheel path" in result.output

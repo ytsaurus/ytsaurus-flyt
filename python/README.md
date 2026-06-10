@@ -60,6 +60,7 @@ Default `squashfs_layer_delivery` is `layer_paths`. For Kind local dev, use `san
 | `flyt validate` | Check profile, tools (`mksquashfs`, `unzip`), optional connectivity |
 | `flyt build-layer` | Build local `.squashfs`; `--upload` to push to Cypress |
 | `flyt jobshell` | Interactive shell into a running job (needs `tornado`) |
+| `flyt ui` | Print the Flink Web UI URL of a running flyt operation (`--wait`, `--open`) |
 
 Run `flyt <cmd> --help` for all flags.
 
@@ -69,6 +70,8 @@ Without `--wheel` / `--source-dir`, `flyt run` finds `pyproject.toml` next to th
 With `--wheel` only, pass the script path as it appears inside the unpacked wheel (e.g. `pipeline.py`).
 
 `--force-rebuild` ignores a cached SquashFS on Cypress and rebuilds the layer.
+
+`-d` / `--detach` submits the operation, waits until it materializes, prints the tracking link and exits. Requires a persistent wheel path (`wheel_cache_prefix` or `cypress_base_path`). Use `flyt ui --wait` afterwards to find the Flink Web UI.
 
 ## JARs
 

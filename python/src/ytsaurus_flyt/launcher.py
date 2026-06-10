@@ -2,6 +2,7 @@
 
 import logging
 import os
+import time
 from contextlib import ExitStack
 from typing import Any, Dict, Optional, Union
 
@@ -27,6 +28,19 @@ from ytsaurus_flyt.wheel_utils import dedupe_file_paths_by_basename, upload_serv
 from ytsaurus_flyt.yt_client import proxy_url_from_client
 
 logger = logging.getLogger(__name__)
+
+_MATERIALIZE_POLL_S = 2.0
+_MATERIALIZE_TIMEOUT_S = 300.0
+
+
+def _wait_operation_materialized(op: Any, timeout: float = _MATERIALIZE_TIMEOUT_S) -> str:
+    """Poll until the operation is running (materialized) or finished; return the last state."""
+    deadline = time.monotonic() + timeout
+    state = op.get_state()
+    while not (state.is_running() or state.is_finished()) and time.monotonic() < deadline:
+        time.sleep(_MATERIALIZE_POLL_S)
+        state = op.get_state()
+    return str(state)
 
 
 def _make_jobmanager_params(preset_params: ClusterParams) -> JobmanagerParams:
@@ -184,5 +198,9 @@ def launch_vanilla_job(
             logger.info("Waiting for completion...")
             op.wait()
             logger.info("Operation %s finished successfully.", op_id)
+        elif op is not None:
+            logger.info("Waiting for the operation to materialize (detach mode)...")
+            state = _wait_operation_materialized(op)
+            logger.info("Operation %s is %s. Detaching.", op_id, state)
 
         return op

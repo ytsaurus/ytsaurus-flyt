@@ -373,9 +373,10 @@ def validate(
 @click.option("--source-dir", "source_dir", default=None)
 @click.option("--cache-wheel", is_flag=True)
 @click.option(
+    "-d",
     "--detach",
     is_flag=True,
-    help="Submit the operation and exit without waiting for completion. "
+    help="Submit the operation, wait until it materializes, print the tracking link and exit. "
     "Uses a persistent Cypress wheel path (same as --cache-wheel; requires wheel_cache_prefix or cypress_base_path).",
 )
 @click.option("--force-rebuild", "force_rebuild_layer", is_flag=True)
@@ -565,6 +566,69 @@ def jobshell(ctx: click.Context, jobshell_profile: Optional[str]) -> None:
     if token:
         env["YT_TOKEN"] = token
     os.execve(yt_bin, argv, env)
+
+
+@cli.command("ui")
+@click.pass_context
+@click.option("--proxy", default=None, help="YT HTTP proxy (overrides env / profile).")
+@click.option(
+    "--operation",
+    "operation_id",
+    default=None,
+    help="Operation ID (default: newest running flyt operation for the profile).",
+)
+@click.option(
+    "--wait",
+    is_flag=True,
+    help="Wait until the Flink Web UI is reachable or the operation reaches a terminal state.",
+)
+@click.option("--open", "open_browser", is_flag=True, help="Open the URL in the default browser.")
+def ui(
+    ctx: click.Context,
+    proxy: Optional[str],
+    operation_id: Optional[str],
+    wait: bool,
+    open_browser: bool,
+) -> None:
+    """Find and print the Flink Web UI URL of a running flyt operation."""
+    _setup_logging()
+    _echo_profile_line(ctx)
+    _, profile_data = _load_flyt_config_from_profile(ctx)
+    proxy_f, _ = _resolve_connection(profile_data, proxy, None)
+    yt_client = make_yt_client(proxy_f)
+
+    from ytsaurus_flyt.jobshell_resolve import list_running_flyt_operations  # noqa: PLC0415
+    from ytsaurus_flyt.ui_tracker import find_ui_url_for_operation, wait_ui_url_for_operation  # noqa: PLC0415
+
+    op_id = (operation_id or "").strip()
+    if not op_id:
+        gp = ctx.obj.get("profile")
+        name = resolve_effective_profile_name(gp)
+        ops = list_running_flyt_operations(yt_client, name) if name else []
+        if not ops:
+            raise click.ClickException(
+                "No running flyt operation found for this profile. "
+                "Pass --operation <id>, or start one with `flyt run ...`."
+            )
+        op_id = str(ops[0]["id"])
+        click.echo(f"Operation: {op_id}")
+
+    if wait:
+        url, state = wait_ui_url_for_operation(yt_client, op_id)
+        if not url:
+            raise click.ClickException(f"Operation {op_id} reached state {state!r} before the Flink UI came up.")
+    else:
+        url = find_ui_url_for_operation(yt_client, op_id)
+        if not url:
+            raise click.ClickException(
+                f"Flink UI not reachable for operation {op_id} (job not running yet, or port 27050 not open). "
+                "Use --wait to block until it comes up."
+            )
+    click.echo(url)
+    if open_browser:
+        import webbrowser  # noqa: PLC0415
+
+        webbrowser.open(url)
 
 
 def main() -> None:
