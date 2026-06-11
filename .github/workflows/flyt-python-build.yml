@@ -3,8 +3,14 @@ name: FLYT Python Build
 on:
   push:
     branches: [main, master]
+    paths:
+      - 'python/**'
+      - '.github/workflows/flyt-python-build.yml'
   pull_request:
     branches: [main, master]
+    paths:
+      - 'python/**'
+      - '.github/workflows/flyt-python-build.yml'
 
 jobs:
   python:
