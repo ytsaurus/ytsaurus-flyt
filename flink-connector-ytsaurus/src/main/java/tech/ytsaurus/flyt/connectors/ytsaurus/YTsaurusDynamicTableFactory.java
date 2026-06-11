@@ -2,7 +2,9 @@ package tech.ytsaurus.flyt.connectors.ytsaurus;
 
 import java.time.Duration;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -239,14 +241,14 @@ public class YTsaurusDynamicTableFactory implements DynamicTableSinkFactory, Dyn
     @Override
     public Set<ConfigOption<?>> requiredOptions() {
         return Set.of(YSON_SCHEMA,
-                CREDENTIALS_SOURCE,
-                PROXY);
+                CREDENTIALS_SOURCE);
     }
 
     @Override
     public Set<ConfigOption<?>> optionalOptions() {
         return Set.of(
                 FactoryUtil.FORMAT,
+                PROXY,
                 PARTITION_KEY,
                 PARTITION_SCALE,
                 YT_USERNAME_OPTION,
@@ -295,7 +297,15 @@ public class YTsaurusDynamicTableFactory implements DynamicTableSinkFactory, Dyn
     }
 
     protected void validateOptions(FactoryUtil.FactoryHelper<DynamicTableFactory> helper) {
-        helper.validateExcept(LOCKS_OPTIONS_PREFIX, CLUSTER_PICK_STRATEGY.key());
+        helper.validateExcept(validationExcludedPrefixes().toArray(new String[0]));
+    }
+
+    protected List<String> validationExcludedPrefixes() {
+        List<String> excludedPrefixes = new ArrayList<>();
+        excludedPrefixes.add(LOCKS_OPTIONS_PREFIX);
+        excludedPrefixes.add(CLUSTER_PICK_STRATEGY.key());
+        CLUSTER_PICK_STRATEGY.deprecatedKeys().forEach(excludedPrefixes::add);
+        return excludedPrefixes;
     }
 
     protected CredentialsProvider getAndValidateCredentialsProvider(Configuration options) {

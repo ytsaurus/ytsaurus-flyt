@@ -2,6 +2,8 @@ package tech.ytsaurus.flyt.connectors.ytsaurus.consumer.cluster;
 
 import java.io.IOException;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 import org.apache.flink.configuration.ConfigOption;
@@ -61,12 +63,23 @@ public abstract class SimpleClusterPickStrategy implements ClusterPickStrategy {
 
     protected <T> T mandatory(ConfigOption<T> option) {
         checkOpen();
-        return options.get(option);
+        return options.get(withDeprecatedKeys(option));
     }
 
     protected <T> T optional(ConfigOption<T> option) {
         checkOpen();
-        return options.getOptional(option).orElse(null);
+        return options.getOptional(withDeprecatedKeys(option)).orElse(null);
+    }
+
+    private <T> ConfigOption<T> withDeprecatedKeys(ConfigOption<T> option) {
+        String canonicalPrefix = CLUSTER_PICK_STRATEGY.key() + ".";
+        if (!option.key().startsWith(canonicalPrefix)) {
+            return option;
+        }
+        String suffix = option.key().substring(CLUSTER_PICK_STRATEGY.key().length());
+        List<String> deprecatedKeys = new ArrayList<>();
+        CLUSTER_PICK_STRATEGY.deprecatedKeys().forEach(base -> deprecatedKeys.add(base + suffix));
+        return deprecatedKeys.isEmpty() ? option : option.withDeprecatedKeys(deprecatedKeys.toArray(new String[0]));
     }
 
     protected void checkOpen() {
