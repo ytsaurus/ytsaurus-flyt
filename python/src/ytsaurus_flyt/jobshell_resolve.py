@@ -34,18 +34,22 @@ def operation_title_for_profile(job_command: str, profile_name: Optional[str]) -
     return f"FLYT: {job_command}"
 
 
+def list_running_flyt_operations(yt_client: YtClient, profile_name: str) -> List[dict]:
+    """Running operations whose title contains this profile's marker, newest first."""
+    marker = flyt_profile_marker(profile_name)
+    resp = yt_client.list_operations(state="running", filter=marker, limit=LIST_OPERATIONS_LIMIT)
+    ops = list(resp.get("operations") or [])
+    ops.sort(key=lambda o: str(o.get("start_time") or ""), reverse=True)
+    return ops
+
+
 def resolve_default_jobshell_argv(yt_client: YtClient, profile_name: str) -> Optional[List[str]]:
     """Return ``[\"run-job-shell\", job_id]`` for this profile's running operation, or ``None``.
 
     Matches **running** operations whose title contains the profile marker (newest first), then
     picks a **running** job (prefers jobmanager-like task).
     """
-    marker = flyt_profile_marker(profile_name)
-    resp = yt_client.list_operations(state="running", filter=marker, limit=LIST_OPERATIONS_LIMIT)
-    ops = list(resp.get("operations") or [])
-    ops.sort(key=lambda o: str(o.get("start_time") or ""), reverse=True)
-
-    for op in ops:
+    for op in list_running_flyt_operations(yt_client, profile_name):
         op_id = op.get("id")
         if not op_id:
             continue
