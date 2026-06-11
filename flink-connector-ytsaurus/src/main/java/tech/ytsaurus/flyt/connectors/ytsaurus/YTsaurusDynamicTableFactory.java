@@ -239,14 +239,14 @@ public class YTsaurusDynamicTableFactory implements DynamicTableSinkFactory, Dyn
     @Override
     public Set<ConfigOption<?>> requiredOptions() {
         return Set.of(YSON_SCHEMA,
-                CREDENTIALS_SOURCE,
-                PROXY);
+                CREDENTIALS_SOURCE);
     }
 
     @Override
     public Set<ConfigOption<?>> optionalOptions() {
         return Set.of(
                 FactoryUtil.FORMAT,
+                PROXY,
                 PARTITION_KEY,
                 PARTITION_SCALE,
                 YT_USERNAME_OPTION,
