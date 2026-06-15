@@ -199,6 +199,8 @@ def launch_vanilla_job(
             op.wait()
             logger.info("Operation %s finished successfully.", op_id)
         elif op is not None:
+            # Must stay inside the ExitStack: holds the temp wheel until YT
+            # snapshot-locks file_paths, so detached jobs survive its cleanup.
             logger.info("Waiting for the operation to materialize (detach mode)...")
             state = _wait_operation_materialized(op)
             logger.info("Operation %s is %s. Detaching.", op_id, state)

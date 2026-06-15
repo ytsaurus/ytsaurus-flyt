@@ -71,7 +71,7 @@ With `--wheel` only, pass the script path as it appears inside the unpacked whee
 
 `--force-rebuild` ignores a cached SquashFS on Cypress and rebuilds the layer.
 
-`-d` / `--detach` submits the operation, waits until it materializes, prints the tracking link and exits. Requires a persistent wheel path (`wheel_cache_prefix` or `cypress_base_path`). Use `flyt ui --wait` afterwards to find the Flink Web UI.
+`-d` / `--detach` submits the operation, waits until it materializes, prints the tracking link and exits. Use `flyt ui --wait` afterwards to find the Flink Web UI. Add `--cache-wheel` to reuse the uploaded wheel across runs (needs `wheel_cache_prefix` or `cypress_base_path`).
 
 ## JARs
 
