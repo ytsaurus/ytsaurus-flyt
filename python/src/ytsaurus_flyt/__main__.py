@@ -377,7 +377,8 @@ def validate(
     "--detach",
     is_flag=True,
     help="Submit the operation, wait until it materializes, print the tracking link and exit. "
-    "Uses a persistent Cypress wheel path (same as --cache-wheel; requires wheel_cache_prefix or cypress_base_path).",
+    "Pass --cache-wheel to reuse a persistent Cypress wheel across runs; otherwise a temporary "
+    "wheel is used (safe: YT snapshot-locks file_paths once the operation materializes).",
 )
 @click.option("--force-rebuild", "force_rebuild_layer", is_flag=True)
 @click.option(
@@ -404,15 +405,6 @@ def run(
     _echo_profile_line(ctx)
     job_command = shlex.join(list(job_argv))
     cfg, profile_data = _load_flyt_config_from_profile(ctx)
-    if detach:
-        wp = (cfg.wheel_cache_prefix or "").strip()
-        if not wp:
-            raise click.ClickException(
-                "Detached runs require a persistent wheel path on Cypress. "
-                "Set wheel_cache_prefix in the profile, or set cypress_base_path "
-                "(e.g. via `flyt profile add`) so flyt can use <cypress_base_path>/wheels."
-            )
-    cache_wheel_effective = cache_wheel or detach
     proxy_f, pool_f = _resolve_connection(profile_data, proxy, pool)
     _, _, pst = resolve_connection_from_profile(profile_data)
     preset_s = (preset or "").strip().lower() or (pst or "micro").strip().lower()
@@ -458,7 +450,7 @@ def run(
                 preset=preset_enum,
                 wheel_path=wheel_path,
                 source_dir=source_dir,
-                cache_wheel=cache_wheel_effective,
+                cache_wheel=cache_wheel,
                 sync=not detach,
                 force_rebuild_layer=force_rebuild_layer,
                 profile_name=resolve_effective_profile_name(gp),

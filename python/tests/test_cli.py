@@ -280,12 +280,39 @@ def test_ui_wait_fails_on_terminal_state(monkeypatch, tmp_path: Path) -> None:
     assert "failed" in result.output
 
 
-def test_run_detach_short_flag_is_accepted(monkeypatch, tmp_path: Path) -> None:
+def test_run_detach_short_flag_maps_to_sync_false(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("FLYT_CONFIG_DIR", str(tmp_path))
     _write_profile(tmp_path, "p1")
+    captured: dict = {}
+
+    def fake_launch(**kwargs):  # type: ignore[no-untyped-def]
+        captured.update(kwargs)
+
+    monkeypatch.setattr("ytsaurus_flyt.__main__.launch_vanilla_job", fake_launch)
+    monkeypatch.setattr("ytsaurus_flyt.__main__.make_yt_client", lambda _p: object())
+
     runner = CliRunner()
-    # No wheel_cache_prefix in the profile: -d must hit the detach validation error,
-    # proving the short flag maps to --detach.
-    result = runner.invoke(cli, ["run", "-d", "x.py"], catch_exceptions=False)
-    assert result.exit_code != 0
-    assert "Detached runs require a persistent wheel path" in result.output
+    # -d must reach the launcher with sync=False and no forced wheel cache,
+    # proving the short flag maps to --detach without requiring a persistent path.
+    result = runner.invoke(cli, ["run", "-d", "--wheel", "svc.whl", "x.py"], catch_exceptions=False)
+    assert result.exit_code == 0
+    assert captured["sync"] is False
+    assert captured["cache_wheel"] is False
+
+
+def test_run_detach_with_cache_wheel_opts_into_persistent(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("FLYT_CONFIG_DIR", str(tmp_path))
+    _write_profile(tmp_path, "p1")
+    captured: dict = {}
+
+    def fake_launch(**kwargs):  # type: ignore[no-untyped-def]
+        captured.update(kwargs)
+
+    monkeypatch.setattr("ytsaurus_flyt.__main__.launch_vanilla_job", fake_launch)
+    monkeypatch.setattr("ytsaurus_flyt.__main__.make_yt_client", lambda _p: object())
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["run", "-d", "--cache-wheel", "--wheel", "svc.whl", "x.py"], catch_exceptions=False)
+    assert result.exit_code == 0
+    assert captured["sync"] is False
+    assert captured["cache_wheel"] is True
