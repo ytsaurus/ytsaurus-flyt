@@ -350,6 +350,52 @@ public class YtDynamicTableWriterPoolClientTest {
                 null);
     }
 
+    @Test
+    void testMultipleOperationsErrorReporting() throws Exception {
+        var pool = makePool(TestPoolSettings.builder()
+                .clientPool(CountingTestYtClientPool.ofSingle(makeTestClient())));
+
+        WriterClassifier classifier1 = WriterClassifier.plain("table1");
+        WriterClassifier classifier2 = WriterClassifier.plain("table2");
+
+        var writer1 = pool.getOrAcquire(classifier1);
+        var writer2 = pool.getOrAcquire(classifier2);
+
+        var failingWriter1 = Mockito.spy(writer1);
+        var failingWriter2 = Mockito.spy(writer2);
+        Mockito.doThrow(new RuntimeException("Test error 1")).when(failingWriter1).close();
+        Mockito.doThrow(new RuntimeException("Test error 2")).when(failingWriter2).close();
+
+        var method = YtDynamicTableWriterPool.class.getDeclaredMethod(
+                "multipleOperations", java.util.function.Consumer.class, String.class);
+        method.setAccessible(true);
+
+        var writersList = new ArrayList<YtDynamicTableWriter>(List.of(failingWriter1, failingWriter2));
+        var poolSpy = Mockito.spy(pool);
+        Mockito.when(poolSpy.getWriters()).thenReturn(writersList);
+
+        RuntimeException exception = Assertions.assertThrows(RuntimeException.class, () -> {
+            try {
+                method.invoke(poolSpy,
+                        (java.util.function.Consumer<YtDynamicTableWriter>) YtDynamicTableWriter::close, "close");
+            } catch (java.lang.reflect.InvocationTargetException e) {
+                Throwable cause = e.getCause();
+                if (cause instanceof RuntimeException) {
+                    throw (RuntimeException) cause;
+                }
+                throw new RuntimeException(cause);
+            }
+        });
+
+        Assertions.assertTrue(exception.getMessage().contains("Failure to close 2 writer(-s)"));
+        Assertions.assertTrue(exception.getMessage().contains("Writer at '"));
+        Assertions.assertTrue(exception.getMessage().contains("Test error 1"));
+        Assertions.assertTrue(exception.getMessage().contains("Test error 2"));
+        Assertions.assertEquals(2, exception.getSuppressed().length);
+        Assertions.assertEquals("Test error 1", exception.getSuppressed()[0].getMessage());
+        Assertions.assertEquals("Test error 2", exception.getSuppressed()[1].getMessage());
+    }
+
     @Builder
     @Value
     private static class TestPoolSettings {

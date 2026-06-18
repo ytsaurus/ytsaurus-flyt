@@ -11,6 +11,7 @@ import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.api.common.functions.RuntimeContext;
 import org.apache.flink.metrics.MetricGroup;
 import org.apache.flink.table.data.RowData;
+import org.apache.flink.table.data.TimestampData;
 import org.apache.flink.table.types.DataType;
 import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.RowType;
@@ -37,6 +38,9 @@ import org.apache.flink.table.types.logical.RowType;
  * // In commit callback (metrics updated here!):
  * dataMetrics.onCommit();
  *
+ * // Or for ack-driven sinks:
+ * dataMetrics.onCommitExtracted(record);
+ *
  * // In close():
  * dataMetrics.close();
  * }</pre>
@@ -62,7 +66,7 @@ public class DataMetricsWriterDelegate implements Serializable {
     private final DataType dataType;
 
     private transient DataMetricsTimestampProcessor processor;
-    private transient Map<String, Integer> columnIndices;
+    private transient Map<String, RowData.FieldGetter> fieldGetters;
     private transient Map<String, Long> pendingValues;
     private transient boolean initialized;
 
@@ -77,8 +81,8 @@ public class DataMetricsWriterDelegate implements Serializable {
      * <p>If config is null or empty, returns a no-op delegate that does nothing.
      * This allows callers to avoid null checks.
      *
-     * @param config    data metrics configuration (may be null)
-     * @param dataType  physical row data type for column index resolution
+     * @param config   data metrics configuration (may be null)
+     * @param dataType physical row data type for column index resolution
      * @return delegate instance (never null)
      */
     public static DataMetricsWriterDelegate create(
@@ -109,7 +113,7 @@ public class DataMetricsWriterDelegate implements Serializable {
             return;
         }
 
-        columnIndices = computeColumnIndices();
+        fieldGetters = computeFieldGetters();
         pendingValues = new HashMap<>();
         processor = new DataMetricsTimestampProcessor(
                 config.getMetricTablePathAlias(),
@@ -120,7 +124,7 @@ public class DataMetricsWriterDelegate implements Serializable {
         log.info("Data metrics initialized for alias '{}' with {} metrics, column mappings: {}",
                 config.getMetricTablePathAlias(),
                 config.getMetrics().size(),
-                columnIndices);
+                fieldGetters.keySet());
     }
 
     /**
@@ -136,13 +140,59 @@ public class DataMetricsWriterDelegate implements Serializable {
             return;
         }
 
+        mergeValues(pendingValues, extractValues(record));
+    }
+
+    public Map<String, Long> extractValues(RowData record) {
+        Map<String, Long> values = new HashMap<>();
+        if (!initialized || record == null) {
+            return values;
+        }
+
         for (DataMetricsMetricConfig metric : config.getMetrics()) {
-            Integer columnIndex = columnIndices.get(metric.getMetricName());
-            if (columnIndex != null && columnIndex < record.getArity() && !record.isNullAt(columnIndex)) {
-                long timestamp = record.getLong(columnIndex);
-                pendingValues.merge(metric.getMetricName(), timestamp, Long::max);
+            RowData.FieldGetter getter = fieldGetters.get(metric.getMetricName());
+            if (getter == null) {
+                continue;
+            }
+            Long timestamp = extractTimestampValue(getter.getFieldOrNull(record));
+            if (timestamp != null) {
+                mergeAggregateMetric(values, metric.getMetricName(), timestamp);
             }
         }
+        return values;
+    }
+
+    public void onCommit(Map<String, Long> values) {
+        if (!initialized || processor == null || values == null) {
+            return;
+        }
+
+        for (Map.Entry<String, Long> entry : values.entrySet()) {
+            processor.updateMetric(entry.getKey(), entry.getValue());
+        }
+        processor.updateCommitTimestamp();
+    }
+
+    public void onCommitExtracted(RowData record) {
+        onCommit(extractValues(record));
+    }
+
+    /**
+     * Extract long timestamp value from field value.
+     * Handles BIGINT (direct Long) and TIMESTAMP types (converts to milliseconds).
+     */
+    private Long extractTimestampValue(Object value) {
+        if (value == null) {
+            return null;
+        }
+        if (value instanceof Long) {
+            return (Long) value;
+        }
+        if (value instanceof TimestampData) {
+            return ((TimestampData) value).getMillisecond();
+        }
+        log.warn("Unexpected timestamp value type: {}", value.getClass().getName());
+        return null;
     }
 
     /**
@@ -156,12 +206,8 @@ public class DataMetricsWriterDelegate implements Serializable {
             return;
         }
 
-        for (Map.Entry<String, Long> entry : pendingValues.entrySet()) {
-            processor.updateMetric(entry.getKey(), entry.getValue());
-        }
+        onCommit(pendingValues);
         pendingValues.clear();
-
-        processor.updateCommitTimestamp();
     }
 
     /**
@@ -171,7 +217,7 @@ public class DataMetricsWriterDelegate implements Serializable {
     public void close() {
         initialized = false;
         processor = null;
-        columnIndices = null;
+        fieldGetters = null;
         pendingValues = null;
     }
 
@@ -185,13 +231,21 @@ public class DataMetricsWriterDelegate implements Serializable {
         return pendingValues;
     }
 
-    private Map<String, Integer> computeColumnIndices() {
-        Map<String, Integer> indices = new HashMap<>();
+    /**
+     * Merges one metric sample into {@code target}.
+     * TODO: support aggregate (min / max / last); currently always max.
+     */
+    private static void mergeAggregateMetric(Map<String, Long> target, String metricName, long value) {
+        target.merge(metricName, value, Long::max);
+    }
+
+    private Map<String, RowData.FieldGetter> computeFieldGetters() {
+        Map<String, RowData.FieldGetter> getters = new HashMap<>();
         LogicalType logicalType = dataType.getLogicalType();
 
         if (!(logicalType instanceof RowType)) {
             log.warn("DataType is not RowType, cannot compute column indices: {}", logicalType);
-            return indices;
+            return getters;
         }
 
         RowType rowType = (RowType) logicalType;
@@ -200,13 +254,49 @@ public class DataMetricsWriterDelegate implements Serializable {
             String columnName = metric.getColumnName();
             int index = rowType.getFieldIndex(columnName);
             if (index >= 0) {
-                indices.put(metric.getMetricName(), index);
+                LogicalType columnType = rowType.getTypeAt(index);
+                RowData.FieldGetter getter = buildFieldGetter(columnType, index);
+                if (getter != null) {
+                    getters.put(metric.getMetricName(), getter);
+                } else {
+                    throw new IllegalArgumentException(String.format(
+                            "Column '%s' has unsupported type '%s' for metric '%s', expected BIGINT or TIMESTAMP",
+                            columnName,
+                            columnType,
+                            metric.getMetricName()));
+                }
             } else {
-                log.warn("Column '{}' not found in schema for metric '{}'",
-                        columnName, metric.getMetricName());
+                throw new IllegalArgumentException(String.format(
+                        "Column '%s' not found in schema for metric '%s'",
+                        columnName, metric.getMetricName()));
             }
         }
 
-        return indices;
+        return getters;
+    }
+
+    private void mergeValues(Map<String, Long> target, Map<String, Long> values) {
+        for (Map.Entry<String, Long> entry : values.entrySet()) {
+            mergeAggregateMetric(target, entry.getKey(), entry.getValue());
+        }
+    }
+
+    /**
+     * Build a FieldGetter for the given column type.
+     * Uses Flink's RowData.createFieldGetter for optimized field access.
+     * Returns null if the type is not BIGINT or TIMESTAMP.
+     */
+    private RowData.FieldGetter buildFieldGetter(LogicalType columnType, int index) {
+        switch (columnType.getTypeRoot()) {
+            case BIGINT:
+                log.debug("Column index={} mapped as BIGINT", index);
+                return RowData.createFieldGetter(columnType, index);
+            case TIMESTAMP_WITHOUT_TIME_ZONE:
+            case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
+                log.debug("Column index={} mapped as TIMESTAMP", index);
+                return RowData.createFieldGetter(columnType, index);
+            default:
+                return null;
+        }
     }
 }
