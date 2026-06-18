@@ -191,12 +191,25 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
             }
         }
         if (!writerExceptions.isEmpty()) {
+            StringBuilder errorDetails = new StringBuilder();
             for (int i = 0; i < writerExceptions.size(); i++) {
                 Exception exception = writerExceptions.get(i);
                 String writerPath = writerPaths.get(i);
                 log.error("Error to {} writer for table at '{}'", operationName, writerPath, exception);
+
+                errorDetails.append(String.format("Writer at '%s': %s", writerPath, exception.getMessage()));
+                if (i < writerExceptions.size() - 1) {
+                    errorDetails.append("; ");
+                }
             }
-            throw new RuntimeException(String.format("Failure to %s writer(-s). Check logs above.", operationName));
+
+            RuntimeException exceptionWithDetails = new RuntimeException(
+                    String.format("Failure to %s %d writer(-s): %s", operationName, writerExceptions.size(),
+                            errorDetails));
+            for (Exception e : writerExceptions) {
+                exceptionWithDetails.addSuppressed(e);
+            }
+            throw exceptionWithDetails;
         }
     }
 

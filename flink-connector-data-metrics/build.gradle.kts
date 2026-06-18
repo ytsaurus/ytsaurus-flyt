@@ -1,5 +1,5 @@
 group = "tech.ytsaurus.flyt.connectors.datametrics"
-version = "1.0.0"
+version = "1.0.1"
 
 plugins {
     id("java-library")
