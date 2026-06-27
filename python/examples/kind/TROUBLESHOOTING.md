@@ -24,10 +24,6 @@ cd python/examples/kind
 ./scripts/up.sh
 ```
 
-## FLYT SquashFS: `cannot import name 'cygrpc'` (grpc)
-
-This was an ABI mismatch between the layer's wheels and the exec node's `/usr/bin/python3`. It no longer applies: `flyt build layer` bundles a relocatable CPython (`runtime_python_version`) into the layer, and the job runs against that bundled interpreter — not the node's. If you still see it, rebuild the layer (`flyt build layer --upload <path>`) so it contains the bundled `python-dist/`, and make sure the profile references the rebuilt layer in `squashfs_layer_paths`.
-
 ## UI: ECONNREFUSED, ECONNABORTED, XSRF 503
 
 You may see `Failed to get cluster version`, `ECONNABORTED` in the browser, `connect ECONNREFUSED` to a ClusterIP, or XSRF failing with 503.

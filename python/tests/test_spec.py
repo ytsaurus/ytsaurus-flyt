@@ -141,7 +141,7 @@ def test_build_vanilla_operation_spec_environment_no_hardcoded_flink_paths():
 
 
 def test_build_vanilla_operation_spec_java_opts_heap_only():
-    config = FlytConfig(service_name="t", java_home="/jdk", python_bin="/py")
+    config = FlytConfig(service_name="t")
     op = OperationParams(file_paths=[], pool="pool")
     jm = _jobmanager_from_preset()
     builder = build_vanilla_operation_spec(
@@ -159,7 +159,7 @@ def test_build_vanilla_operation_spec_java_opts_heap_only():
 
 
 def test_build_vanilla_operation_spec_java_opts_with_off_heap():
-    config = FlytConfig(service_name="t", java_home="/jdk", python_bin="/py")
+    config = FlytConfig(service_name="t")
     op = OperationParams(file_paths=[], pool="pool")
     jm = _jobmanager_from_preset()
     builder = build_vanilla_operation_spec(
