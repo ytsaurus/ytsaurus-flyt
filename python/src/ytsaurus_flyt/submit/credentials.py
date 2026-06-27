@@ -1,11 +1,5 @@
-"""Credential resolution for ytsaurus-flyt Vanilla operations.
-
-Supports:
-- Optional ``extra_secrets`` dict for programmatic callers (e.g. internal wrappers)
-  that resolve credentials outside this package
-- ``FLYT_SECURE_<NAME>`` mapped to secure_vault key NAME (e.g. ``FLYT_SECURE_MY_SECRET``)
-- YT client token fallback for ``YT_USER`` / ``YT_TOKEN`` when not set in env or extras
-"""
+"""Build the Vanilla operation secure_vault from ``extra_secrets``, ``FLYT_SECURE_*`` env vars,
+and a ``YT_USER`` / ``YT_TOKEN`` fallback."""
 
 import logging
 import os
@@ -37,12 +31,8 @@ def get_secure_credentials(
     yt_client: YtClient,
     extra_secrets: Optional[Dict[str, str]] = None,
 ) -> Dict[str, str]:
-    """Build secure_vault dict for the Vanilla operation.
-
-    Merge order: ``extra_secrets`` first, then ``FLYT_SECURE_*`` environment variables
-    (env wins on duplicate keys), then ``YT_USER`` / ``YT_TOKEN`` if still missing
-    (from env or YT client).
-    """
+    """Merge order: ``extra_secrets``, then ``FLYT_SECURE_*`` env (wins on dup keys), then
+    ``YT_USER`` / ``YT_TOKEN`` if still missing (from env or the YT client)."""
     extra = dict(extra_secrets or {})
 
     def _get_value(key: str, default: Optional[str] = None) -> Optional[str]:

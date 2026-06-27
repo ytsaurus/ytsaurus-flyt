@@ -78,27 +78,11 @@ SEMVER_UNKNOWN = SemanticVersion("0.0.0-UNKNOWN")
 
 
 def extract_jar_info(jar_path: str) -> JarInfo:
-    """Extract basename and version from a JAR filename.
+    """Parse ``<basename>-<version>.jar`` into a JarInfo (version starts at the first
+    dash-separated part containing a dot). Raises JarInfoExtractionError if unparseable.
 
-    Relies on the convention that JAR basenames do not contain dots,
-    while version parts always contain dots. The first part with a dot
-    marks the beginning of the version string.
-
-    Pattern: ``<basename>-<version>.jar``
-
-    Examples::
-
-        >>> extract_jar_info("flink-connector-yt-0.2.0-SNAPSHOT.jar")
-        JarInfo(basename='flink-connector-yt', version=..., path='flink-connector-yt-0.2.0-SNAPSHOT.jar')
-
-    Args:
-        jar_path: Path or filename of the JAR.
-
-    Returns:
-        JarInfo with basename, version, and original path.
-
-    Raises:
-        JarInfoExtractionError: If the filename cannot be parsed.
+        >>> extract_jar_info("flink-connector-yt-0.2.0-SNAPSHOT.jar").basename
+        'flink-connector-yt'
     """
     jar_full_name = Path(jar_path).stem
     jar_name_parts = jar_full_name.split(JAR_NAME_PARTS_SEPARATOR)

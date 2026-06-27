@@ -2,7 +2,7 @@
 
 from unittest.mock import MagicMock
 
-from ytsaurus_flyt.jobshell_resolve import (
+from ytsaurus_flyt.tracking.jobshell_resolve import (
     flyt_profile_marker,
     operation_title_for_profile,
     resolve_default_jobshell_argv,
