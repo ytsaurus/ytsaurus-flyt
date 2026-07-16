@@ -320,11 +320,12 @@ public class RowDataToYtListConverters implements Serializable {
     }
 
     /**
-     * Extracts nested type schema from the parent fieldNode's type_v3 and wraps it
-     * so type-checking methods work correctly for nested types.
+     * Extracts and wraps nested type_v3 schema so type-checking works for nested types.
      *
-     * Example: extractNestedFieldNode({name='dictOfDicts'; type_v3={type_name='dict'; key='string'; value={type_name='dict'; ...}}}, "value")
-     * returns {type_v3={type_name='dict'; key='string'; value='string'}}
+     * For example, given a fieldNode like:
+     * {name='dictOfDicts'; type_v3={type_name='dict'; key='string'; value={type_name='dict'; ...}}}
+     * calling extractNestedFieldNode(fieldNode, "value") returns:
+     * {type_v3={type_name='dict'; key='string'; value='string'}}
      */
     private YTreeNode extractNestedFieldNode(YTreeNode fieldNode, String childKey) {
         return Optional.ofNullable(fieldNode)
