@@ -324,8 +324,6 @@ public class RowDataToYtListConverterTest {
     @Test
     void testDictOfArraysOfDictsConversion() {
         // dict<string, array<dict<string, string>>>
-        // The inner dict must still be recognized as a YT dict even though it is reached
-        // through an array layer (extractNestedFieldNode uses "item" for arrays, "value" for dicts).
         RowType rowType = new RowType(List.of(
                 new RowType.RowField("dictOfArraysOfDicts", new MapType(
                         new VarCharType(),

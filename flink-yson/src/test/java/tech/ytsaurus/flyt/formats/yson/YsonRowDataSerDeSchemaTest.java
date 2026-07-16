@@ -832,9 +832,6 @@ public class YsonRowDataSerDeSchemaTest {
 
     @Test
     public void testDeserializeDictOfArraysOfMaps() throws Exception {
-        // MAP<string, ARRAY<MAP<string, int>>> where the three levels arrive as DIFFERENT YSON
-        // representations: outer is a YT dict (list of pairs), middle is a list, inner is a YSON
-        // map node. Verifies the map/dict branch is chosen per-node at runtime.
         // [["ok", [ {"ik":7} ]]]
         YTreeNode yson = YTree.builder().beginMap()
                 .key("val").value(
