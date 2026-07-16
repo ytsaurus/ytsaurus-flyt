@@ -392,7 +392,7 @@ public class YsonToRowDataConverters implements Serializable {
         };
     }
 
-    private static final class YsonParseException extends RuntimeException {
+    static final class YsonParseException extends RuntimeException {
         private static final long serialVersionUID = 1L;
 
         YsonParseException(String message) {

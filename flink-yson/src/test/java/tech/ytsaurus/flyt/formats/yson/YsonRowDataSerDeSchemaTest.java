@@ -335,8 +335,7 @@ public class YsonRowDataSerDeSchemaTest {
         RowType schema = (RowType) ROW(FIELD("val", STRING())).getLogicalType();
         RowData row = createDeserializer(schema).deserialize(toYsonBytes(yson));
 
-        String result = row.getString(0).toString();
-        Assertions.assertThat(result).isEqualTo("{\"a\"=1;}");
+        Assertions.assertThat(row.getString(0).toString()).isEqualTo("{\"a\"=1;}");
     }
 
     @Test
@@ -351,9 +350,9 @@ public class YsonRowDataSerDeSchemaTest {
         RowType schema = (RowType) ROW(FIELD("val", STRING())).getLogicalType();
         RowData row = createDeserializer(schema).deserialize(toYsonBytes(yson));
 
-        String result = row.getString(0).toString();
-        Assertions.assertThat(result).isEqualTo("[1;2;]");
+        Assertions.assertThat(row.getString(0).toString()).isEqualTo("[1;2;]");
     }
+
     // ===== BYTES =====
 
     @Test
@@ -544,7 +543,76 @@ public class YsonRowDataSerDeSchemaTest {
         Assertions.assertThat(row.getArray(0).getString(1)).isEqualTo(StringData.fromString("b"));
     }
 
+    // ===== ARRAY OF MAPS =====
+
+    @Test
+    public void testDeserializeArrayOfMaps() throws Exception {
+        // [{"k1":1}, {"k2":2}]
+        YTreeNode yson = YTree.builder().beginMap()
+                .key("val").value(
+                        YTree.builder().beginList()
+                                .value(YTree.builder().beginMap()
+                                        .key("k1").value(1)
+                                        .buildMap())
+                                .value(YTree.builder().beginMap()
+                                        .key("k2").value(2)
+                                        .buildMap())
+                                .buildList())
+                .buildMap();
+
+        RowType schema = (RowType) ROW(FIELD("val", ARRAY(MAP(STRING(), INT())))).getLogicalType();
+        RowData row = createDeserializer(schema).deserialize(toYsonBytes(yson));
+
+        Assertions.assertThat(row.getArray(0).size()).isEqualTo(2);
+
+        MapData first = row.getArray(0).getMap(0);
+        Assertions.assertThat(first.size()).isEqualTo(1);
+        Assertions.assertThat(first.keyArray().getString(0).toString()).isEqualTo("k1");
+        Assertions.assertThat(first.valueArray().getInt(0)).isEqualTo(1);
+
+        MapData second = row.getArray(0).getMap(1);
+        Assertions.assertThat(second.size()).isEqualTo(1);
+        Assertions.assertThat(second.keyArray().getString(0).toString()).isEqualTo("k2");
+        Assertions.assertThat(second.valueArray().getInt(0)).isEqualTo(2);
+    }
+
+    // ===== ARRAY OF DICTS =====
+
+    @Test
+    public void testDeserializeArrayOfDicts() throws Exception {
+        // [[["k1",1]], [["k2",2]]]
+        YTreeNode yson = YTree.builder().beginMap()
+                .key("val").value(
+                        YTree.builder().beginList()
+                                .value(YTree.builder().beginList()
+                                        .value(YTree.builder().beginList()
+                                                .value("k1").value(1).buildList())
+                                        .buildList())
+                                .value(YTree.builder().beginList()
+                                        .value(YTree.builder().beginList()
+                                                .value("k2").value(2).buildList())
+                                        .buildList())
+                                .buildList())
+                .buildMap();
+
+        RowType schema = (RowType) ROW(FIELD("val", ARRAY(MAP(STRING(), INT())))).getLogicalType();
+        RowData row = createDeserializer(schema).deserialize(toYsonBytes(yson));
+
+        Assertions.assertThat(row.getArray(0).size()).isEqualTo(2);
+
+        MapData first = row.getArray(0).getMap(0);
+        Assertions.assertThat(first.size()).isEqualTo(1);
+        Assertions.assertThat(first.keyArray().getString(0).toString()).isEqualTo("k1");
+        Assertions.assertThat(first.valueArray().getInt(0)).isEqualTo(1);
+
+        MapData second = row.getArray(0).getMap(1);
+        Assertions.assertThat(second.size()).isEqualTo(1);
+        Assertions.assertThat(second.keyArray().getString(0).toString()).isEqualTo("k2");
+        Assertions.assertThat(second.valueArray().getInt(0)).isEqualTo(2);
+    }
+
     // ===== MAP =====
+
     @Nonnull
     private static Map<String, Integer> convertToJavaStringIntegerMap(MapData map) {
         Map<String, Integer> result = new HashMap<>();
@@ -556,6 +624,7 @@ public class YsonRowDataSerDeSchemaTest {
 
     @Test
     public void testDeserializeMapFromMapNode() throws Exception {
+        // {"k1":1, "k2":2}
         YTreeNode yson = YTree.builder().beginMap()
                 .key("val").value(
                         YTree.builder().beginMap()
@@ -575,8 +644,11 @@ public class YsonRowDataSerDeSchemaTest {
         Assertions.assertThat(result).containsEntry("k2", 2);
     }
 
+    // ===== DICT =====
+
     @Test
-    public void testDeserializeMapFromListOfPairs() throws Exception {
+    public void testDeserializeDictFromListOfPairs() throws Exception {
+        // [["k1",10], ["k2",20]]
         YTreeNode yson = YTree.builder().beginMap()
                 .key("val").value(
                         YTree.builder().beginList()
@@ -590,14 +662,71 @@ public class YsonRowDataSerDeSchemaTest {
 
         MapData map = row.getMap(0);
         Map<String, Integer> result = convertToJavaStringIntegerMap(map);
-
         Assertions.assertThat(result).containsEntry("k1", 10);
         Assertions.assertThat(result).containsEntry("k2", 20);
     }
 
+    @Test
+    void testDeserializeDictFromBrokenPairShouldFail_singleElementPair() {
+        // [["k1"]]  — pair has only key, no value
+        YTreeNode yson = YTree.builder().beginMap()
+                .key("val").value(
+                        YTree.builder().beginList()
+                                .value(YTree.builder().beginList().value("k1").buildList())
+                                .buildList())
+                .buildMap();
+
+        RowType schema = (RowType) ROW(FIELD("val", MAP(STRING(), INT()))).getLogicalType();
+
+        Assertions.assertThatThrownBy(
+                        () -> createDeserializer(schema, false, false, TimestampFormat.SQL)
+                                .deserialize(toYsonBytes(yson)))
+                .isInstanceOf(IOException.class)
+                .cause()
+                .isInstanceOf(YsonToRowDataConverters.YsonParseException.class);
+    }
 
     @Test
-    public void testDeserializeNestedMapFromMapNode() throws Exception {
+    void testDeserializeDictFromBrokenPairShouldFail_nonListElement() {
+        // ["k1"]  — element is scalar, not a pair
+        YTreeNode yson = YTree.builder().beginMap()
+                .key("val").value(
+                        YTree.builder().beginList()
+                                .value("k1")
+                                .buildList())
+                .buildMap();
+
+        RowType schema = (RowType) ROW(FIELD("val", MAP(STRING(), INT()))).getLogicalType();
+
+        Assertions.assertThatThrownBy(
+                        () -> createDeserializer(schema, false, false, TimestampFormat.SQL)
+                                .deserialize(toYsonBytes(yson)))
+                .isInstanceOf(IOException.class)
+                .cause()
+                .isInstanceOf(YsonToRowDataConverters.YsonParseException.class);
+    }
+
+    @Test
+    void testDeserializeMapFromScalarShouldFail() {
+        YTreeNode yson = YTree.builder().beginMap()
+                .key("val").value("not_a_map")
+                .buildMap();
+
+        RowType schema = (RowType) ROW(FIELD("val", MAP(STRING(), INT()))).getLogicalType();
+
+        Assertions.assertThatThrownBy(
+                        () -> createDeserializer(schema, false, false, TimestampFormat.SQL)
+                                .deserialize(toYsonBytes(yson)))
+                .isInstanceOf(IOException.class)
+                .cause()
+                .isInstanceOf(YsonToRowDataConverters.YsonParseException.class);
+    }
+
+    // ===== MAP OF MAPS =====
+
+    @Test
+    public void testDeserializeMapOfMaps() throws Exception {
+        // {"outer": {"inner": 42}}
         YTreeNode yson = YTree.builder().beginMap()
                 .key("val").value(
                         YTree.builder().beginMap()
@@ -623,8 +752,11 @@ public class YsonRowDataSerDeSchemaTest {
         Assertions.assertThat(innerMap.valueArray().getInt(0)).isEqualTo(42);
     }
 
+    // ===== DICT OF DICTS =====
+
     @Test
-    public void testDeserializeNestedMapFromListOfPairs() throws Exception {
+    public void testDeserializeDictOfDicts() throws Exception {
+        // [["outer", [["inner", 42]]]]
         YTreeNode yson = YTree.builder().beginMap()
                 .key("val").value(
                         YTree.builder().beginList()
@@ -653,6 +785,148 @@ public class YsonRowDataSerDeSchemaTest {
         Assertions.assertThat(innerMap.valueArray().getInt(0)).isEqualTo(42);
     }
 
+    // ===== MAP OF DICTS =====
+
+    @Test
+    public void testDeserializeMapOfDicts() throws Exception {
+        // {"outer": [["inner", 42]]}
+        YTreeNode yson = YTree.builder().beginMap()
+                .key("val").value(
+                        YTree.builder().beginMap()
+                                .key("outer").value(
+                                        YTree.builder().beginList()
+                                                .value(YTree.builder().beginList()
+                                                        .value("inner").value(42).buildList())
+                                                .buildList())
+                                .buildMap())
+                .buildMap();
+
+        RowType schema = (RowType) ROW(
+                FIELD("val", MAP(STRING(), MAP(STRING(), INT())))
+        ).getLogicalType();
+        RowData row = createDeserializer(schema).deserialize(toYsonBytes(yson));
+
+        MapData outerMap = row.getMap(0);
+        Assertions.assertThat(outerMap.size()).isEqualTo(1);
+        Assertions.assertThat(outerMap.keyArray().getString(0).toString()).isEqualTo("outer");
+
+        MapData innerMap = outerMap.valueArray().getMap(0);
+        Assertions.assertThat(innerMap.size()).isEqualTo(1);
+        Assertions.assertThat(innerMap.keyArray().getString(0).toString()).isEqualTo("inner");
+        Assertions.assertThat(innerMap.valueArray().getInt(0)).isEqualTo(42);
+    }
+
+    // ===== DICT OF MAPS =====
+
+    @Test
+    public void testDeserializeDictOfMaps() throws Exception {
+        // [["outer", {"inner": 42}]]
+        YTreeNode yson = YTree.builder().beginMap()
+                .key("val").value(
+                        YTree.builder().beginList()
+                                .value(YTree.builder().beginList()
+                                        .value("outer")
+                                        .value(YTree.builder().beginMap()
+                                                .key("inner").value(42)
+                                                .buildMap())
+                                        .buildList())
+                                .buildList())
+                .buildMap();
+
+        RowType schema = (RowType) ROW(
+                FIELD("val", MAP(STRING(), MAP(STRING(), INT())))
+        ).getLogicalType();
+        RowData row = createDeserializer(schema).deserialize(toYsonBytes(yson));
+
+        MapData outerMap = row.getMap(0);
+        Assertions.assertThat(outerMap.size()).isEqualTo(1);
+        Assertions.assertThat(outerMap.keyArray().getString(0).toString()).isEqualTo("outer");
+
+        MapData innerMap = outerMap.valueArray().getMap(0);
+        Assertions.assertThat(innerMap.size()).isEqualTo(1);
+        Assertions.assertThat(innerMap.keyArray().getString(0).toString()).isEqualTo("inner");
+        Assertions.assertThat(innerMap.valueArray().getInt(0)).isEqualTo(42);
+    }
+
+    // ===== MAP OF ARRAYS =====
+
+    @Test
+    public void testDeserializeMapOfArrays() throws Exception {
+        // {"k1": [1,2], "k2": [3,4]}
+        YTreeNode yson = YTree.builder().beginMap()
+                .key("val").value(
+                        YTree.builder().beginMap()
+                                .key("k1").value(YTree.builder().beginList()
+                                        .value(1).value(2).buildList())
+                                .key("k2").value(YTree.builder().beginList()
+                                        .value(3).value(4).buildList())
+                                .buildMap())
+                .buildMap();
+
+        RowType schema = (RowType) ROW(FIELD("val", MAP(STRING(), ARRAY(INT())))).getLogicalType();
+        RowData row = createDeserializer(schema).deserialize(toYsonBytes(yson));
+
+        MapData map = row.getMap(0);
+        Assertions.assertThat(map.size()).isEqualTo(2);
+
+        Map<String, Integer> keyIndex = new HashMap<>();
+        for (int i = 0; i < map.size(); i++) {
+            keyIndex.put(map.keyArray().getString(i).toString(), i);
+        }
+
+        int idx1 = keyIndex.get("k1");
+        Assertions.assertThat(map.valueArray().getArray(idx1).size()).isEqualTo(2);
+        Assertions.assertThat(map.valueArray().getArray(idx1).getInt(0)).isEqualTo(1);
+        Assertions.assertThat(map.valueArray().getArray(idx1).getInt(1)).isEqualTo(2);
+
+        int idx2 = keyIndex.get("k2");
+        Assertions.assertThat(map.valueArray().getArray(idx2).size()).isEqualTo(2);
+        Assertions.assertThat(map.valueArray().getArray(idx2).getInt(0)).isEqualTo(3);
+        Assertions.assertThat(map.valueArray().getArray(idx2).getInt(1)).isEqualTo(4);
+    }
+
+    // ===== DICT OF ARRAYS =====
+
+    @Test
+    public void testDeserializeDictOfArrays() throws Exception {
+        // [["k1",[1,2]], ["k2",[3,4]]]
+        YTreeNode yson = YTree.builder().beginMap()
+                .key("val").value(
+                        YTree.builder().beginList()
+                                .value(YTree.builder().beginList()
+                                        .value("k1")
+                                        .value(YTree.builder().beginList()
+                                                .value(1).value(2).buildList())
+                                        .buildList())
+                                .value(YTree.builder().beginList()
+                                        .value("k2")
+                                        .value(YTree.builder().beginList()
+                                                .value(3).value(4).buildList())
+                                        .buildList())
+                                .buildList())
+                .buildMap();
+
+        RowType schema = (RowType) ROW(FIELD("val", MAP(STRING(), ARRAY(INT())))).getLogicalType();
+        RowData row = createDeserializer(schema).deserialize(toYsonBytes(yson));
+
+        MapData map = row.getMap(0);
+        Assertions.assertThat(map.size()).isEqualTo(2);
+
+        Map<String, Integer> keyIndex = new HashMap<>();
+        for (int i = 0; i < map.size(); i++) {
+            keyIndex.put(map.keyArray().getString(i).toString(), i);
+        }
+
+        int idx1 = keyIndex.get("k1");
+        Assertions.assertThat(map.valueArray().getArray(idx1).size()).isEqualTo(2);
+        Assertions.assertThat(map.valueArray().getArray(idx1).getInt(0)).isEqualTo(1);
+        Assertions.assertThat(map.valueArray().getArray(idx1).getInt(1)).isEqualTo(2);
+
+        int idx2 = keyIndex.get("k2");
+        Assertions.assertThat(map.valueArray().getArray(idx2).size()).isEqualTo(2);
+        Assertions.assertThat(map.valueArray().getArray(idx2).getInt(0)).isEqualTo(3);
+        Assertions.assertThat(map.valueArray().getArray(idx2).getInt(1)).isEqualTo(4);
+    }
 
     // ===== NESTED ROW =====
 
@@ -983,6 +1257,56 @@ public class YsonRowDataSerDeSchemaTest {
         Assertions.assertThat(parsed.asMap().get("props").asMap().get("k2").intValue()).isEqualTo(2);
         Assertions.assertThat(parsed.asMap().get("nested").asMap()
                 .get("inner").asMap().get("key").intValue()).isEqualTo(42);
+    }
+
+    @Test
+    public void testSerializeArrayOfMaps() {
+        RowType schema = (RowType) ROW(
+                FIELD("val", ARRAY(MAP(STRING(), INT())))
+        ).getLogicalType();
+
+        Map<StringData, Integer> map1 = new HashMap<>();
+        map1.put(StringData.fromString("k1"), 1);
+        Map<StringData, Integer> map2 = new HashMap<>();
+        map2.put(StringData.fromString("k2"), 2);
+
+        GenericRowData row = GenericRowData.of(
+                new GenericArrayData(new Object[]{
+                        new GenericMapData(map1),
+                        new GenericMapData(map2)
+                }));
+
+        YTreeNode parsed = serializeAndParse(schema, row);
+
+        Assertions.assertThat(parsed.asMap().get("val").listNode().size()).isEqualTo(2);
+        Assertions.assertThat(parsed.asMap().get("val").listNode().get(0)
+                .asMap().get("k1").intValue()).isEqualTo(1);
+        Assertions.assertThat(parsed.asMap().get("val").listNode().get(1)
+                .asMap().get("k2").intValue()).isEqualTo(2);
+    }
+
+    @Test
+    public void testSerializeMapOfArrays() {
+        RowType schema = (RowType) ROW(
+                FIELD("val", MAP(STRING(), ARRAY(INT())))
+        ).getLogicalType();
+
+        Map<StringData, GenericArrayData> map = new HashMap<>();
+        map.put(StringData.fromString("k1"), new GenericArrayData(new int[]{1, 2}));
+        map.put(StringData.fromString("k2"), new GenericArrayData(new int[]{3, 4}));
+
+        GenericRowData row = GenericRowData.of(new GenericMapData(map));
+
+        YTreeNode parsed = serializeAndParse(schema, row);
+
+        Assertions.assertThat(parsed.asMap().get("val").asMap()
+                .get("k1").listNode().get(0).intValue()).isEqualTo(1);
+        Assertions.assertThat(parsed.asMap().get("val").asMap()
+                .get("k1").listNode().get(1).intValue()).isEqualTo(2);
+        Assertions.assertThat(parsed.asMap().get("val").asMap()
+                .get("k2").listNode().get(0).intValue()).isEqualTo(3);
+        Assertions.assertThat(parsed.asMap().get("val").asMap()
+                .get("k2").listNode().get(1).intValue()).isEqualTo(4);
     }
 
     @Test

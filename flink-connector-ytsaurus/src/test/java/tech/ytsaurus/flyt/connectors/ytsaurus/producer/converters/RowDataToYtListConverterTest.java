@@ -28,63 +28,134 @@ import tech.ytsaurus.ysontree.YTreeNode;
 import tech.ytsaurus.ysontree.YTreeTextSerializer;
 
 public class RowDataToYtListConverterTest {
-    @Test
-    void testFlinkYtTypesConversion() {
-        String schema = fieldDeclarationToSchema(
-                "{name='targetDate'; type='date';}",
-                "{name='targetDatetime'; type='datetime';}",
-                "{name='targetTimestamp'; type='timestamp';}",
-                "{name='targetBytes'; type='yson';}",
-                "{name='targetInterval'; type='interval';}",
-                "{name='nested'; type='yson';}",
-                "{name='dictField'; type_v3={type_name='dict'; key='string'; value='string'};}"
-        );
 
-        LogicalType logicalType = new RowType(List.of(
-                new RowType.RowField("targetDate", new DateType()),
-                new RowType.RowField("targetDatetime", new TimestampType()),
-                new RowType.RowField("targetTimestamp", new TimestampType()),
-                new RowType.RowField("targetBytes", new VarBinaryType()),
+    @Test
+    void testNativeDateConversion() {
+        RowType rowType = new RowType(List.of(
+                new RowType.RowField("targetDate", new DateType())
+        ));
+        GenericRowData rowData = new GenericRowData(1);
+        rowData.setField(0, /* Start of the Epoch */ 0);
+
+        Map<String, Object> result = convert(
+                fieldDeclarationToSchema("{name='targetDate'; type='date';}"),
+                rowType,
+                rowData);
+
+        // Native date returns days since epoch as int
+        Assertions.assertEquals(0, result.get("targetDate"));
+    }
+
+    @Test
+    void testNativeDatetimeConversion() {
+        RowType rowType = new RowType(List.of(
+                new RowType.RowField("targetDatetime", new TimestampType())
+        ));
+        GenericRowData rowData = new GenericRowData(1);
+        rowData.setField(0, TimestampData.fromEpochMillis(1000));
+
+        Map<String, Object> result = convert(
+                fieldDeclarationToSchema("{name='targetDatetime'; type='datetime';}"),
+                rowType,
+                rowData);
+
+        // Native datetime returns epoch seconds
+        Assertions.assertEquals(1L, result.get("targetDatetime"));
+    }
+
+    @Test
+    void testNativeTimestampConversion() {
+        RowType rowType = new RowType(List.of(
+                new RowType.RowField("targetTimestamp", new TimestampType())
+        ));
+        GenericRowData rowData = new GenericRowData(1);
+        rowData.setField(0, TimestampData.fromEpochMillis(1000));
+
+        Map<String, Object> result = convert(
+                fieldDeclarationToSchema("{name='targetTimestamp'; type='timestamp';}"),
+                rowType,
+                rowData);
+
+        // Native timestamp returns epoch microseconds
+        Assertions.assertEquals(1000 * 1000L, result.get("targetTimestamp"));
+    }
+
+    @Test
+    void testYsonBytesConversion() {
+        RowType rowType = new RowType(List.of(
+                new RowType.RowField("targetBytes", new VarBinaryType())
+        ));
+        YTreeNode targetNode = YTree.mapBuilder().key("sample").value("test").buildMap();
+        GenericRowData rowData = new GenericRowData(1);
+        rowData.setField(0, targetNode.toBinary());
+
+        Map<String, Object> result = convert(
+                fieldDeclarationToSchema("{name='targetBytes'; type='yson';}"),
+                rowType,
+                rowData);
+
+        Assertions.assertEquals(targetNode, result.get("targetBytes"));
+    }
+
+    @Test
+    void testIntervalConversion() {
+        RowType rowType = new RowType(List.of(
                 new RowType.RowField("targetInterval",
-                        new DayTimeIntervalType(DayTimeIntervalType.DayTimeResolution.DAY_TO_SECOND)),
+                        new DayTimeIntervalType(DayTimeIntervalType.DayTimeResolution.DAY_TO_SECOND))
+        ));
+        GenericRowData rowData = new GenericRowData(1);
+        rowData.setField(0, /* Start of the Epoch */ 0L);
+
+        Map<String, Object> result = convert(
+                fieldDeclarationToSchema("{name='targetInterval'; type='interval';}"),
+                rowType,
+                rowData);
+
+        Assertions.assertEquals(0L, result.get("targetInterval"));
+    }
+
+    @Test
+    void testNestedRowConversion() {
+        RowType rowType = new RowType(List.of(
                 new RowType.RowField("nested",
                         new RowType(List.of(new RowType.RowField("nestedTarget", new VarBinaryType())))
-                ),
+                )
+        ));
+        GenericRowData nestedData = new GenericRowData(1);
+        nestedData.setField(0, new byte[]{1, 0, 1});
+
+        GenericRowData rowData = new GenericRowData(1);
+        rowData.setField(0, nestedData);
+
+        Map<String, Object> result = convert(
+                fieldDeclarationToSchema("{name='nested'; type='yson';}"),
+                rowType,
+                rowData);
+
+        Assertions.assertEquals(
+                Map.of("nestedTarget", YTree.bytesNode(new byte[]{1, 0, 1})),
+                result.get("nested"));
+    }
+
+    @Test
+    void testDictFieldConversion() {
+        RowType rowType = new RowType(List.of(
                 new RowType.RowField("dictField", new MapType(
                         new VarCharType(),
                         new VarCharType()
                 ))
         ));
-
-        YTreeNode targetNode = YTree.mapBuilder().key("sample").value("test").buildMap();
-
-        GenericRowData nestedData = new GenericRowData(1);
-        nestedData.setField(/* nestedTarget */ 0, new byte[]{1, 0, 1});
-
         Map<BinaryStringData, BinaryStringData> dictMapData = new HashMap<>();
         dictMapData.put(new BinaryStringData("key1"), new BinaryStringData("value1"));
 
-        GenericRowData rowData = new GenericRowData(7);
-        rowData.setField(/* targetDate */ 0, /* Start of the Epoch */ 0);
-        rowData.setField(/* targetDatetime */ 1, TimestampData.fromEpochMillis(1000));
-        rowData.setField(/* targetTimestamp */ 2, TimestampData.fromEpochMillis(1000));
-        rowData.setField(/* targetBytes */ 3, targetNode.toBinary());
-        rowData.setField(/* targetInterval */ 4, /* Start of the Epoch */ 0L);
-        rowData.setField(/* nested */ 5, nestedData);
-        rowData.setField(/* dictField */ 6, new GenericMapData(dictMapData));
+        GenericRowData rowData = new GenericRowData(1);
+        rowData.setField(0, new GenericMapData(dictMapData));
 
-        Map<String, Object> result = convert(schema, logicalType, rowData);
-        // Right now we don't support nested native chrono conversions
-        // because there's no way to provide enough data to determine
-        // what fields to converse
-        Assertions.assertEquals(0, result.get("targetDate"));
-        Assertions.assertEquals(1L, result.get("targetDatetime"));
-        Assertions.assertEquals(1000 * 1000L, result.get("targetTimestamp"));
-        Assertions.assertEquals(targetNode, result.get("targetBytes"));
-        Assertions.assertEquals(0L, result.get("targetInterval"));
-        Assertions.assertEquals(
-                Map.of("nestedTarget", YTree.bytesNode(new byte[]{1, 0, 1})),
-                result.get("nested"));
+        Map<String, Object> result = convert(
+                fieldDeclarationToSchema(
+                        "{name='dictField'; type_v3={type_name='dict'; key='string'; value='string'};}"),
+                rowType,
+                rowData);
 
         // dict in YT is a list of [key, value] pairs
         Assertions.assertEquals(
@@ -94,11 +165,115 @@ public class RowDataToYtListConverterTest {
                 result.get("dictField"));
     }
 
+    @Test
+    void testDictOfArraysConversion() {
+        RowType rowType = new RowType(List.of(
+                new RowType.RowField("dictOfArrays", new MapType(
+                        new VarCharType(),
+                        new ArrayType(new VarCharType())
+                ))
+        ));
+        Map<BinaryStringData, GenericArrayData> dictOfArraysData = new HashMap<>();
+        dictOfArraysData.put(new BinaryStringData("fruits"), new GenericArrayData(new BinaryStringData[]{
+                new BinaryStringData("apple"),
+                new BinaryStringData("banana")
+        }));
 
+        GenericRowData rowData = new GenericRowData(1);
+        rowData.setField(0, new GenericMapData(dictOfArraysData));
 
+        Map<String, Object> result = convert(
+                fieldDeclarationToSchema(
+                        "{name='dictOfArrays'; type_v3={type_name='dict'; key='string'; value={type_name='list'; item='string'}};}"),
+                rowType,
+                rowData);
+
+        // dictOfArrays: dict in YT is a list of [key, value] pairs, values are YTree lists
+        Assertions.assertEquals(
+                YTree.listBuilder()
+                        .value(YTree.listBuilder()
+                                .value("fruits")
+                                .value(YTree.listBuilder().value("apple").value("banana").buildList())
+                                .buildList())
+                        .buildList(),
+                result.get("dictOfArrays"));
+    }
 
     @Test
-    void testFlinkYtTypesConversionArrayWithNullableTypes() {
+    void testArrayOfDictsConversion() {
+        RowType rowType = new RowType(List.of(
+                new RowType.RowField("arrayOfDicts", new ArrayType(
+                        new MapType(new VarCharType(), new VarCharType())
+                ))
+        ));
+        Map<BinaryStringData, BinaryStringData> innerMap1 = new HashMap<>();
+        innerMap1.put(new BinaryStringData("k1"), new BinaryStringData("v1"));
+        Map<BinaryStringData, BinaryStringData> innerMap2 = new HashMap<>();
+        innerMap2.put(new BinaryStringData("k2"), new BinaryStringData("v2"));
+        GenericArrayData arrayOfDictsData = new GenericArrayData(new Object[]{
+                new GenericMapData(innerMap1),
+                new GenericMapData(innerMap2)
+        });
+
+        GenericRowData rowData = new GenericRowData(1);
+        rowData.setField(0, arrayOfDictsData);
+
+        Map<String, Object> result = convert(
+                fieldDeclarationToSchema(
+                        "{name='arrayOfDicts'; type_v3={type_name='list'; item={type_name='dict'; key='string'; value='string'}};}"),
+                rowType,
+                rowData);
+
+        // arrayOfDicts: YTree list; inner dicts are also serialized as list of [key, value] pairs
+        Assertions.assertEquals(
+                YTree.listBuilder()
+                        .value(YTree.listBuilder()
+                                .value(YTree.listBuilder().value("k1").value("v1").buildList())
+                                .buildList())
+                        .value(YTree.listBuilder()
+                                .value(YTree.listBuilder().value("k2").value("v2").buildList())
+                                .buildList())
+                        .buildList(),
+                result.get("arrayOfDicts"));
+    }
+
+    @Test
+    void testDictOfDictsConversion() {
+        RowType rowType = new RowType(List.of(
+                new RowType.RowField("dictOfDicts", new MapType(
+                        new VarCharType(),
+                        new MapType(new VarCharType(), new VarCharType())
+                ))
+        ));
+        Map<BinaryStringData, BinaryStringData> nestedDictValue = new HashMap<>();
+        nestedDictValue.put(new BinaryStringData("innerKey"), new BinaryStringData("innerValue"));
+        Map<BinaryStringData, GenericMapData> dictOfDictsData = new HashMap<>();
+        dictOfDictsData.put(new BinaryStringData("outerKey"), new GenericMapData(nestedDictValue));
+
+        GenericRowData rowData = new GenericRowData(1);
+        rowData.setField(0, new GenericMapData(dictOfDictsData));
+
+        Map<String, Object> result = convert(
+                fieldDeclarationToSchema(
+                        "{name='dictOfDicts'; type_v3={type_name='dict'; key='string'; value={type_name='dict'; key='string'; value='string'}};}"),
+                rowType,
+                rowData);
+
+        // dictOfDicts: outer dict is list of [key, value] pairs; inner dicts are also list of [key, value] pairs
+        Assertions.assertEquals(
+                YTree.listBuilder()
+                        .value(YTree.listBuilder()
+                                .value("outerKey")
+                                .value(YTree.listBuilder()
+                                        .value(YTree.listBuilder().value("innerKey").value("innerValue").buildList())
+                                        .buildList())
+                                .buildList())
+                        .buildList(),
+                result.get("dictOfDicts"));
+    }
+
+    @Test
+    void testArrayWithNullableTypes() {
         RowType rowType = new RowType(List.of(
                 new RowType.RowField("arrayWithNulls", new ArrayType(
                         new VarCharType()
@@ -112,7 +287,7 @@ public class RowDataToYtListConverterTest {
                 null,
                 null
         });
-        rowData.setField(/* arrayWithNulls */ 0, genericArrayData);
+        rowData.setField(0, genericArrayData);
 
         Map<String, Object> result = convert(
                 fieldDeclarationToSchema("{name='arrayWithNulls'; type='yson';}"),
@@ -131,7 +306,7 @@ public class RowDataToYtListConverterTest {
     }
 
     @Test
-    void testFlinkYtTypesConversionMapWithNullableTypes() {
+    void testMapWithNullableTypes() {
         RowType rowType = new RowType(List.of(
                 new RowType.RowField("mapWithNulls", new MapType(
                         new VarCharType(),
@@ -143,7 +318,7 @@ public class RowDataToYtListConverterTest {
         mapData.put(new BinaryStringData("nullKey"), null);
         mapData.put(new BinaryStringData("key"), new BinaryStringData("value"));
         GenericMapData genericArrayData = new GenericMapData(mapData);
-        rowData.setField(/* mapWithNulls */ 0, genericArrayData);
+        rowData.setField(0, genericArrayData);
 
         Map<String, Object> result = convert(
                 fieldDeclarationToSchema("{name='mapWithNulls'; type='yson';}"),
@@ -158,6 +333,98 @@ public class RowDataToYtListConverterTest {
                         .value("value")
                         .buildMap(),
                 result.get("mapWithNulls"));
+    }
+
+    @Test
+    void testYsonMapFieldConversion() {
+        RowType rowType = new RowType(List.of(
+                new RowType.RowField("ysonMapField", new MapType(
+                        new VarCharType(),
+                        new VarCharType()
+                ))
+        ));
+        Map<BinaryStringData, BinaryStringData> ysonMapData = new HashMap<>();
+        ysonMapData.put(new BinaryStringData("ysonKey1"), new BinaryStringData("ysonValue1"));
+        ysonMapData.put(new BinaryStringData("ysonKey2"), new BinaryStringData("ysonValue2"));
+
+        GenericRowData rowData = new GenericRowData(1);
+        rowData.setField(0, new GenericMapData(ysonMapData));
+
+        Map<String, Object> result = convert(
+                fieldDeclarationToSchema("{name='ysonMapField'; type='yson';}"),
+                rowType,
+                rowData);
+
+        // YSON map (not dict), type='yson' triggers else branch in createMapConverter
+        Assertions.assertEquals(
+                YTree.mapBuilder()
+                        .key("ysonKey1").value("ysonValue1")
+                        .key("ysonKey2").value("ysonValue2")
+                        .buildMap(),
+                result.get("ysonMapField"));
+    }
+
+    @Test
+    void testYsonMapOfArraysConversion() {
+        RowType rowType = new RowType(List.of(
+                new RowType.RowField("ysonMapOfArrays", new MapType(
+                        new VarCharType(),
+                        new ArrayType(new VarCharType())
+                ))
+        ));
+        Map<BinaryStringData, GenericArrayData> ysonMapOfArraysData = new HashMap<>();
+        ysonMapOfArraysData.put(new BinaryStringData("colors"), new GenericArrayData(new BinaryStringData[]{
+                new BinaryStringData("red"),
+                new BinaryStringData("green")
+        }));
+
+        GenericRowData rowData = new GenericRowData(1);
+        rowData.setField(0, new GenericMapData(ysonMapOfArraysData));
+
+        Map<String, Object> result = convert(
+                fieldDeclarationToSchema("{name='ysonMapOfArrays'; type='yson';}"),
+                rowType,
+                rowData);
+
+        // YSON map with array values (else branch with nested types)
+        Assertions.assertEquals(
+                YTree.mapBuilder()
+                        .key("colors")
+                        .value(YTree.listBuilder().value("red").value("green").buildList())
+                        .buildMap(),
+                result.get("ysonMapOfArrays"));
+    }
+
+    @Test
+    void testYsonMapOfMapsConversion() {
+        RowType rowType = new RowType(List.of(
+                new RowType.RowField("ysonMapOfMaps", new MapType(
+                        new VarCharType(),
+                        new MapType(new VarCharType(), new VarCharType())
+                ))
+        ));
+        Map<BinaryStringData, BinaryStringData> ysonInnerMapValue = new HashMap<>();
+        ysonInnerMapValue.put(new BinaryStringData("nestedKey"), new BinaryStringData("nestedValue"));
+        Map<BinaryStringData, GenericMapData> ysonMapOfMapsData = new HashMap<>();
+        ysonMapOfMapsData.put(new BinaryStringData("outer"), new GenericMapData(ysonInnerMapValue));
+
+        GenericRowData rowData = new GenericRowData(1);
+        rowData.setField(0, new GenericMapData(ysonMapOfMapsData));
+
+        Map<String, Object> result = convert(
+                fieldDeclarationToSchema("{name='ysonMapOfMaps'; type='yson';}"),
+                rowType,
+                rowData);
+
+        // YSON map with nested YSON map values (else branch with nested maps)
+        Assertions.assertEquals(
+                YTree.mapBuilder()
+                        .key("outer")
+                        .value(YTree.mapBuilder()
+                                .key("nestedKey").value("nestedValue")
+                                .buildMap())
+                        .buildMap(),
+                result.get("ysonMapOfMaps"));
     }
 
     private Map<String, Object> convert(String ysonSchema, LogicalType rowType, GenericRowData rowData) {

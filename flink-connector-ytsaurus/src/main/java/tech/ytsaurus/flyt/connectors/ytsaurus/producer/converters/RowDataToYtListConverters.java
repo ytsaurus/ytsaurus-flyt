@@ -115,7 +115,7 @@ public class RowDataToYtListConverters implements Serializable {
                 }
                 return createDecimalConverter();
             case ARRAY:
-                return createArrayConverter((ArrayType) type);
+                return createArrayConverter((ArrayType) type, fieldNode);
             case MAP:
                 return createMapConverter((MapType) type, fieldNode);
             case MULTISET:
@@ -268,9 +268,10 @@ public class RowDataToYtListConverters implements Serializable {
         };
     }
 
-    private RowDataToYtMapConverter createArrayConverter(ArrayType arrayType) {
+    private RowDataToYtMapConverter createArrayConverter(ArrayType arrayType, YTreeNode fieldNode) {
         ArrayData.ElementGetter elementGetter = ArrayData.createElementGetter(arrayType.getElementType());
-        RowDataToYtMapConverter elementConvertor = createConverter(arrayType.getElementType(), null);
+        YTreeNode itemFieldNode = extractNestedFieldNode(fieldNode, "item");
+        RowDataToYtMapConverter elementConvertor = createConverter(arrayType.getElementType(), itemFieldNode);
         return (reuse, data) -> {
             YTreeBuilder builder = YTree.listBuilder();
             ArrayData arrayData = (ArrayData) data;
@@ -292,7 +293,8 @@ public class RowDataToYtListConverters implements Serializable {
         }
 
         LogicalType valueType = mapType.getValueType();
-        RowDataToYtMapConverter valueConvertor = createConverter(valueType, null);
+        YTreeNode valueFieldNode = extractNestedFieldNode(fieldNode, "value");
+        RowDataToYtMapConverter valueConvertor = createConverter(valueType, valueFieldNode);
         ArrayData.ElementGetter valueGetter = ArrayData.createElementGetter(valueType);
         if (isDictField(fieldNode)) {
             log.info("Creating map converter as YT dict for field: {}", fieldNode);
@@ -317,6 +319,29 @@ public class RowDataToYtListConverters implements Serializable {
                 .isPresent();
     }
 
+    /**
+     * Extracts nested type schema from the parent fieldNode's type_v3 and wraps it
+     * so that isDictField and other type-checking methods work correctly for nested types.
+     *
+     * For example, given a fieldNode like:
+     * {name='dictOfDicts'; type_v3={type_name='dict'; key='string'; value={type_name='dict'; ...}}}
+     * calling extractNestedFieldNode(fieldNode, "value") returns:
+     * {type_v3={type_name='dict'; key='string'; value='string'}}
+     */
+    private YTreeNode extractNestedFieldNode(YTreeNode fieldNode, String childKey) {
+        return Optional.ofNullable(fieldNode)
+                .filter(YTreeNode::isMapNode)
+                .map(YTreeNode::asMap)
+                .map(map -> map.get("type_v3"))
+                .filter(YTreeNode::isMapNode)
+                .map(YTreeNode::asMap)
+                .map(map -> map.get(childKey))
+                .filter(YTreeNode::isMapNode)
+                .map(innerTypeV3 -> (YTreeNode) YTree.mapBuilder()
+                        .key("type_v3").value(innerTypeV3)
+                        .buildMap())
+                .orElse(null);
+    }
 
 
     private RowDataToYtListConverters.RowDataToYtMapConverter createYsonMapConverter(RowDataToYtMapConverter valueConvertor, ArrayData.ElementGetter valueGetter) {
@@ -404,6 +429,13 @@ public class RowDataToYtListConverters implements Serializable {
     }
 
     private String getFieldTypeName(YTreeNode fieldNode) {
-        return fieldNode.asMap().get(SCHEMA_TYPE_NAME).stringValue();
+        if (fieldNode == null || !fieldNode.isMapNode()) {
+            return "";
+        }
+        YTreeNode typeNode = fieldNode.asMap().get(SCHEMA_TYPE_NAME);
+        if (typeNode == null || !typeNode.isStringNode()) {
+            return "";
+        }
+        return typeNode.stringValue();
     }
 }
