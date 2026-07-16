@@ -273,6 +273,135 @@ public class RowDataToYtListConverterTest {
     }
 
     @Test
+    void testDictOfDictsOfDictsConversion() {
+        // dict<string, dict<string, dict<string, string>>>
+        RowType rowType = new RowType(List.of(
+                new RowType.RowField("dictOfDictsOfDicts", new MapType(
+                        new VarCharType(),
+                        new MapType(
+                                new VarCharType(),
+                                new MapType(new VarCharType(), new VarCharType())
+                        )
+                ))
+        ));
+        Map<BinaryStringData, BinaryStringData> innermostDictValue = new HashMap<>();
+        innermostDictValue.put(new BinaryStringData("innerKey"), new BinaryStringData("innerValue"));
+        Map<BinaryStringData, GenericMapData> midDictValue = new HashMap<>();
+        midDictValue.put(new BinaryStringData("midKey"), new GenericMapData(innermostDictValue));
+        Map<BinaryStringData, GenericMapData> outerDictValue = new HashMap<>();
+        outerDictValue.put(new BinaryStringData("outerKey"), new GenericMapData(midDictValue));
+
+        GenericRowData rowData = new GenericRowData(1);
+        rowData.setField(0, new GenericMapData(outerDictValue));
+
+        Map<String, Object> result = convert(
+                fieldDeclarationToSchema(
+                        "{name='dictOfDictsOfDicts'; type_v3={type_name='dict'; key='string'; "
+                                + "value={type_name='dict'; key='string'; "
+                                + "value={type_name='dict'; key='string'; value='string'}}};}"),
+                rowType,
+                rowData);
+
+        // Every level is a YT dict, i.e. a list of [key, value] pairs, nested three deep.
+        Assertions.assertEquals(
+                YTree.listBuilder()
+                        .value(YTree.listBuilder()
+                                .value("outerKey")
+                                .value(YTree.listBuilder()
+                                        .value(YTree.listBuilder()
+                                                .value("midKey")
+                                                .value(YTree.listBuilder()
+                                                        .value(YTree.listBuilder()
+                                                                .value("innerKey").value("innerValue").buildList())
+                                                        .buildList())
+                                                .buildList())
+                                        .buildList())
+                                .buildList())
+                        .buildList(),
+                result.get("dictOfDictsOfDicts"));
+    }
+
+    @Test
+    void testDictOfArraysOfDictsConversion() {
+        // dict<string, array<dict<string, string>>>
+        // The inner dict must still be recognized as a YT dict even though it is reached
+        // through an array layer (extractNestedFieldNode uses "item" for arrays, "value" for dicts).
+        RowType rowType = new RowType(List.of(
+                new RowType.RowField("dictOfArraysOfDicts", new MapType(
+                        new VarCharType(),
+                        new ArrayType(new MapType(new VarCharType(), new VarCharType()))
+                ))
+        ));
+        Map<BinaryStringData, BinaryStringData> innerDict = new HashMap<>();
+        innerDict.put(new BinaryStringData("ik"), new BinaryStringData("iv"));
+        GenericArrayData arrayOfDicts = new GenericArrayData(new Object[]{new GenericMapData(innerDict)});
+        Map<BinaryStringData, GenericArrayData> outerDict = new HashMap<>();
+        outerDict.put(new BinaryStringData("ok"), arrayOfDicts);
+
+        GenericRowData rowData = new GenericRowData(1);
+        rowData.setField(0, new GenericMapData(outerDict));
+
+        Map<String, Object> result = convert(
+                fieldDeclarationToSchema(
+                        "{name='dictOfArraysOfDicts'; type_v3={type_name='dict'; key='string'; "
+                                + "value={type_name='list'; item={type_name='dict'; key='string'; value='string'}}};}"),
+                rowType,
+                rowData);
+
+        // outer dict -> list of pairs; value is a YTree list; each element is an inner dict (list of pairs)
+        Assertions.assertEquals(
+                YTree.listBuilder()
+                        .value(YTree.listBuilder()
+                                .value("ok")
+                                .value(YTree.listBuilder()
+                                        .value(YTree.listBuilder()
+                                                .value(YTree.listBuilder().value("ik").value("iv").buildList())
+                                                .buildList())
+                                        .buildList())
+                                .buildList())
+                        .buildList(),
+                result.get("dictOfArraysOfDicts"));
+    }
+
+    @Test
+    void testArrayOfDictsOfArraysConversion() {
+        // array<dict<string, array<string>>>
+        RowType rowType = new RowType(List.of(
+                new RowType.RowField("arrayOfDictsOfArrays", new ArrayType(
+                        new MapType(new VarCharType(), new ArrayType(new VarCharType()))
+                ))
+        ));
+        Map<BinaryStringData, GenericArrayData> dict = new HashMap<>();
+        dict.put(new BinaryStringData("fruits"), new GenericArrayData(new BinaryStringData[]{
+                new BinaryStringData("apple"),
+                new BinaryStringData("banana")
+        }));
+        GenericArrayData arrayOfDicts = new GenericArrayData(new Object[]{new GenericMapData(dict)});
+
+        GenericRowData rowData = new GenericRowData(1);
+        rowData.setField(0, arrayOfDicts);
+
+        Map<String, Object> result = convert(
+                fieldDeclarationToSchema(
+                        "{name='arrayOfDictsOfArrays'; type_v3={type_name='list'; "
+                                + "item={type_name='dict'; key='string'; value={type_name='list'; item='string'}}};}"),
+                rowType,
+                rowData);
+
+        // outer array -> list; each element is a dict (list of pairs); each value is a YTree list
+        Assertions.assertEquals(
+                YTree.listBuilder()
+                        .value(YTree.listBuilder()
+                                .value(YTree.listBuilder()
+                                        .value("fruits")
+                                        .value(YTree.listBuilder().value("apple").value("banana").buildList())
+                                        .buildList())
+                                .buildList())
+                        .buildList(),
+                result.get("arrayOfDictsOfArrays"));
+    }
+
+    @Test
     void testArrayWithNullableTypes() {
         RowType rowType = new RowType(List.of(
                 new RowType.RowField("arrayWithNulls", new ArrayType(

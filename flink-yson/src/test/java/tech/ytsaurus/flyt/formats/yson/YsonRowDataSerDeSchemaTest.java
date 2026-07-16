@@ -13,6 +13,7 @@ import java.util.Map;
 import javax.annotation.Nonnull;
 
 import org.apache.flink.formats.common.TimestampFormat;
+import org.apache.flink.table.data.ArrayData;
 import org.apache.flink.table.data.DecimalData;
 import org.apache.flink.table.data.GenericArrayData;
 import org.apache.flink.table.data.GenericMapData;
@@ -783,6 +784,123 @@ public class YsonRowDataSerDeSchemaTest {
         Assertions.assertThat(innerMap.size()).isEqualTo(1);
         Assertions.assertThat(innerMap.keyArray().getString(0).toString()).isEqualTo("inner");
         Assertions.assertThat(innerMap.valueArray().getInt(0)).isEqualTo(42);
+    }
+
+    // ===== DICT OF DICTS OF DICTS =====
+
+    @Test
+    public void testDeserializeDictOfDictsOfDicts() throws Exception {
+        // [["outer", [["mid", [["inner", 42]]]]]]
+        YTreeNode yson = YTree.builder().beginMap()
+                .key("val").value(
+                        YTree.builder().beginList()
+                                .value(YTree.builder().beginList()
+                                        .value("outer")
+                                        .value(YTree.builder().beginList()
+                                                .value(YTree.builder().beginList()
+                                                        .value("mid")
+                                                        .value(YTree.builder().beginList()
+                                                                .value(YTree.builder().beginList()
+                                                                        .value("inner").value(42).buildList())
+                                                                .buildList())
+                                                        .buildList())
+                                                .buildList())
+                                        .buildList())
+                                .buildList())
+                .buildMap();
+
+        RowType schema = (RowType) ROW(
+                FIELD("val", MAP(STRING(), MAP(STRING(), MAP(STRING(), INT()))))
+        ).getLogicalType();
+        RowData row = createDeserializer(schema).deserialize(toYsonBytes(yson));
+
+        MapData outerMap = row.getMap(0);
+        Assertions.assertThat(outerMap.size()).isEqualTo(1);
+        Assertions.assertThat(outerMap.keyArray().getString(0).toString()).isEqualTo("outer");
+
+        MapData midMap = outerMap.valueArray().getMap(0);
+        Assertions.assertThat(midMap.size()).isEqualTo(1);
+        Assertions.assertThat(midMap.keyArray().getString(0).toString()).isEqualTo("mid");
+
+        MapData innerMap = midMap.valueArray().getMap(0);
+        Assertions.assertThat(innerMap.size()).isEqualTo(1);
+        Assertions.assertThat(innerMap.keyArray().getString(0).toString()).isEqualTo("inner");
+        Assertions.assertThat(innerMap.valueArray().getInt(0)).isEqualTo(42);
+    }
+
+    // ===== MIXED NESTING (dict / map / list interleaved) =====
+
+    @Test
+    public void testDeserializeDictOfArraysOfMaps() throws Exception {
+        // MAP<string, ARRAY<MAP<string, int>>> where the three levels arrive as DIFFERENT YSON
+        // representations: outer is a YT dict (list of pairs), middle is a list, inner is a YSON
+        // map node. Verifies the map/dict branch is chosen per-node at runtime.
+        // [["ok", [ {"ik":7} ]]]
+        YTreeNode yson = YTree.builder().beginMap()
+                .key("val").value(
+                        YTree.builder().beginList()
+                                .value(YTree.builder().beginList()
+                                        .value("ok")
+                                        .value(YTree.builder().beginList()
+                                                .value(YTree.builder().beginMap()
+                                                        .key("ik").value(7)
+                                                        .buildMap())
+                                                .buildList())
+                                        .buildList())
+                                .buildList())
+                .buildMap();
+
+        RowType schema = (RowType) ROW(
+                FIELD("val", MAP(STRING(), ARRAY(MAP(STRING(), INT()))))
+        ).getLogicalType();
+        RowData row = createDeserializer(schema).deserialize(toYsonBytes(yson));
+
+        MapData outerMap = row.getMap(0);
+        Assertions.assertThat(outerMap.size()).isEqualTo(1);
+        Assertions.assertThat(outerMap.keyArray().getString(0).toString()).isEqualTo("ok");
+
+        ArrayData array = outerMap.valueArray().getArray(0);
+        Assertions.assertThat(array.size()).isEqualTo(1);
+
+        MapData innerMap = array.getMap(0);
+        Assertions.assertThat(innerMap.size()).isEqualTo(1);
+        Assertions.assertThat(innerMap.keyArray().getString(0).toString()).isEqualTo("ik");
+        Assertions.assertThat(innerMap.valueArray().getInt(0)).isEqualTo(7);
+    }
+
+    @Test
+    public void testDeserializeArrayOfDictsOfArrays() throws Exception {
+        // ARRAY<MAP<string, ARRAY<int>>>: outer list, middle dict (list of pairs), inner list.
+        // [ [["fruits",[1,2]]] ]
+        YTreeNode yson = YTree.builder().beginMap()
+                .key("val").value(
+                        YTree.builder().beginList()
+                                .value(YTree.builder().beginList()
+                                        .value(YTree.builder().beginList()
+                                                .value("fruits")
+                                                .value(YTree.builder().beginList()
+                                                        .value(1).value(2).buildList())
+                                                .buildList())
+                                        .buildList())
+                                .buildList())
+                .buildMap();
+
+        RowType schema = (RowType) ROW(
+                FIELD("val", ARRAY(MAP(STRING(), ARRAY(INT()))))
+        ).getLogicalType();
+        RowData row = createDeserializer(schema).deserialize(toYsonBytes(yson));
+
+        ArrayData outerArray = row.getArray(0);
+        Assertions.assertThat(outerArray.size()).isEqualTo(1);
+
+        MapData dict = outerArray.getMap(0);
+        Assertions.assertThat(dict.size()).isEqualTo(1);
+        Assertions.assertThat(dict.keyArray().getString(0).toString()).isEqualTo("fruits");
+
+        ArrayData innerArray = dict.valueArray().getArray(0);
+        Assertions.assertThat(innerArray.size()).isEqualTo(2);
+        Assertions.assertThat(innerArray.getInt(0)).isEqualTo(1);
+        Assertions.assertThat(innerArray.getInt(1)).isEqualTo(2);
     }
 
     // ===== MAP OF DICTS =====
