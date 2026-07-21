@@ -18,6 +18,8 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Ticker;
 import lombok.Builder;
 import lombok.SneakyThrows;
 import lombok.Value;
@@ -62,7 +64,6 @@ import tech.ytsaurus.flyt.connectors.ytsaurus.test.TestYtClient;
 import tech.ytsaurus.flyt.connectors.ytsaurus.test.YtClientPool;
 import tech.ytsaurus.flyt.connectors.ytsaurus.test.component.BasicEmulatingNodeComponent;
 import tech.ytsaurus.flyt.connectors.ytsaurus.test.component.StubFailingCountingTransactionComponent;
-import tech.ytsaurus.flyt.connectors.ytsaurus.utils.TemporalCache;
 
 @Slf4j
 // Enable logging if in need to investigate.
@@ -155,14 +156,11 @@ public class YtDynamicTableWriterPoolClientTest {
         CountDownLatch cacheCleanupFinished = new CountDownLatch(1);
         AtomicReference<String> failMessage = new AtomicReference<>();
 
-        var defaultCache = YtDynamicTableWriterPool.makeDefaultCache();
-        var cache = Mockito.spy(defaultCache.toBuilder()
-                .ttl(Duration.ZERO, defaultCache.getExpirationCondition())
-                .cleanupPeriod(Integer.MAX_VALUE, TimeUnit.DAYS)
-                .removalListener(entry -> failMessage.set(
-                        entry.getKey() + " must not have been evicted from the cache! " +
-                                "This is a data loss"))
-                .build());
+        // Small TTL plus a manually advanced ticker: the writer's TTL is made to elapse while it still
+        // holds an uncommitted transaction, so only the busy-veto can keep it in the cache.
+        var ticker = new MutableTicker();
+        Duration ttl = Duration.ofMillis(100);
+        var cache = YtDynamicTableWriterPool.makeDefaultCache(ttl, ticker);
         var client = new TestYtClient<>(
                 new BasicEmulatingNodeComponent(),
                 new StubFailingCountingTransactionComponent(
@@ -190,9 +188,14 @@ public class YtDynamicTableWriterPoolClientTest {
                 try {
                     foreverTransactionBegan.await();
                     log.debug("Cache cleanup began");
-                    // this must not evict current writer (even though its expired)
-                    // because it holds an uncommitted transaction
-                    cache.cleanup();
+                    // Fast-forward well past the TTL: without the busy-veto the writer would now be
+                    // eligible for eviction. It must survive because it holds an uncommitted transaction.
+                    ticker.advance(ttl.multipliedBy(10));
+                    pool.cleanupCache();
+                    if (cache.getIfPresent(longCommit.getTableName()) == null) {
+                        failMessage.set(longCommit.getTableName() + " must not have been evicted from the "
+                                + "cache! This is a data loss");
+                    }
                     log.debug("Cache cleanup finished");
                     cacheCleanupFinished.countDown();
                 } catch (InterruptedException e) {
@@ -208,10 +211,49 @@ public class YtDynamicTableWriterPoolClientTest {
         }
 
         Assertions.assertNull(failMessage.get());
-        Mockito.verify(cache, Mockito.times(1)).cleanup();
         Assertions.assertEquals(
                 ytWriterOptions.getRowsInTransactionLimit(),
                 client.transactions().getCommittedRows());
+    }
+
+    /**
+     * Complements {@link #testLongCommitCacheEvict()}: a writer that is <em>not</em> busy and whose TTL
+     * has elapsed must be evicted (and closed) by a cache maintenance pass.
+     */
+    @SneakyThrows
+    @Test
+    void testIdleWriterEviction() {
+        var ticker = new MutableTicker();
+        Duration ttl = Duration.ofMillis(100);
+        var cache = YtDynamicTableWriterPool.makeDefaultCache(ttl, ticker);
+        var client = new TestYtClient<>(
+                new BasicEmulatingNodeComponent(),
+                new StubFailingCountingTransactionComponent(
+                        random,
+                        // Always success
+                        Iterators.cycle(true),
+                        (transaction) -> {
+                        }));
+
+        WriterClassifier idle = WriterClassifier.plain("idle");
+        try (var pool = makePool(TestPoolSettings.builder()
+                .clientPool(CountingTestYtClientPool.ofSingle(client))
+                .customCache(cache))) {
+            GenericRowData genericRowData = new GenericRowData(2);
+            genericRowData.setField(0, 0L);
+            genericRowData.setField(1, TimestampData.fromInstant(OffsetDateTime.now().toInstant()));
+            pool.getOrAcquire(idle).write(genericRowData);
+
+            // Flush everything so the writer is no longer busy, then let its TTL elapse.
+            pool.finish();
+            Assertions.assertNotNull(cache.getIfPresent(idle.getTableName()));
+
+            ticker.advance(ttl.multipliedBy(2));
+            pool.cleanupCache();
+
+            Assertions.assertNull(cache.getIfPresent(idle.getTableName()),
+                    "Idle writer past its TTL must be evicted from the cache");
+        }
     }
 
     @SneakyThrows
@@ -402,6 +444,23 @@ public class YtDynamicTableWriterPoolClientTest {
         String schema;
         LogicalType logicalType;
         YtClientPool<?> clientPool;
-        TemporalCache<String, YtDynamicTableWriter> customCache;
+        Cache<String, YtDynamicTableWriter> customCache;
+    }
+
+    /**
+     * Manually advanced {@link Ticker} so cache expiry can be exercised deterministically, without
+     * depending on wall-clock timing.
+     */
+    private static final class MutableTicker implements Ticker {
+        private final AtomicLong nanos = new AtomicLong(0);
+
+        @Override
+        public long read() {
+            return nanos.get();
+        }
+
+        void advance(Duration duration) {
+            nanos.addAndGet(duration.toNanos());
+        }
     }
 }
