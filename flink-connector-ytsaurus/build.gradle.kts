@@ -20,7 +20,7 @@ dependencies {
     api("tech.ytsaurus:ytsaurus-client:1.2.12")
     implementation(project(":flink-yson-fast-adapter"))
     implementation("jakarta.annotation:jakarta.annotation-api:1.3.5")
-    implementation("com.github.ben-manes.caffeine:caffeine:3.1.8")
+    implementation("com.github.ben-manes.caffeine:caffeine:3.2.4")
 
     compileOnly("org.apache.flink:flink-core:1.20.1")
     compileOnly("org.apache.flink:flink-runtime:1.20.1")
