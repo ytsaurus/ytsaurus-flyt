@@ -9,9 +9,7 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.Executor;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
@@ -19,8 +17,9 @@ import javax.annotation.Nullable;
 
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
-import com.github.benmanes.caffeine.cache.Expiry;
 import com.github.benmanes.caffeine.cache.RemovalCause;
+import com.github.benmanes.caffeine.cache.RemovalListener;
+import com.github.benmanes.caffeine.cache.Scheduler;
 import com.github.benmanes.caffeine.cache.Ticker;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
@@ -55,16 +54,9 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
     private static final long serialVersionUID = 1L;
 
     private static final Duration CACHE_TTL = Duration.ofMinutes(2);
-    private static final Duration CACHE_CLEANUP_INTERVAL = Duration.ofMinutes(1);
-    // While a writer is busy (buffered rows / in-flight transaction) it must never be evicted, since
-    // closing it would drop uncommitted data. Instead of the TTL, a busy writer is given this longer
-    // "reprieve", refreshed on every access and on every maintenance pass. It only needs to outlast a
-    // single cleanup interval so a still-busy writer is always re-extended before it can expire.
-    private static final Duration BUSY_WRITER_REPRIEVE = CACHE_CLEANUP_INTERVAL.multipliedBy(2);
 
     private final transient Supplier<YTsaurusClient> clientSupplier;
     private final transient Cache<String, YtDynamicTableWriter> cache;
-    private final transient ScheduledExecutorService cacheMaintenanceExecutor;
 
     private final transient Map<String, MetricsSupplier> metricsSuppliers;
 
@@ -123,15 +115,6 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
         // Create and initialize delegate once for the whole pool
         this.dataMetrics = DataMetricsWriterDelegate.create(dataMetricsConfig, dataType);
         this.dataMetrics.open(context);
-
-        this.cacheMaintenanceExecutor = Executors.newSingleThreadScheduledExecutor(runnable -> {
-            Thread thread = new Thread(runnable, "yt-writer-cache-cleanup");
-            thread.setDaemon(true);
-            return thread;
-        });
-        long cleanupPeriodMs = CACHE_CLEANUP_INTERVAL.toMillis();
-        this.cacheMaintenanceExecutor.scheduleWithFixedDelay(
-                this::cleanupCache, cleanupPeriodMs, cleanupPeriodMs, TimeUnit.MILLISECONDS);
     }
 
 
@@ -163,23 +146,45 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
                 null);
     }
 
-    @VisibleForTesting
     static Cache<String, YtDynamicTableWriter> makeDefaultCache() {
-        return makeDefaultCache(CACHE_TTL, Ticker.systemTicker());
+        return Caffeine.newBuilder()
+                .expireAfterAccess(CACHE_TTL)
+                // Promptly evict (and close) writers for tables that went silent, without waiting for
+                // the next cache access to trigger lazy maintenance.
+                .scheduler(Scheduler.systemScheduler())
+                .removalListener(closeEvictedWriter())
+                .build();
     }
 
+    /**
+     * Test-only cache with a controllable {@link Ticker} and {@link Executor}. Passing a same-thread
+     * executor ({@code Runnable::run}) makes eviction — and therefore {@link YtDynamicTableWriter#close()}
+     * — run synchronously with {@link Cache#cleanUp()}, so tests can assert on committed rows
+     * deterministically. No {@link Scheduler} is configured: eviction is driven explicitly via
+     * {@code cleanUp()}.
+     */
     @VisibleForTesting
-    static Cache<String, YtDynamicTableWriter> makeDefaultCache(Duration ttl, Ticker ticker) {
+    static Cache<String, YtDynamicTableWriter> makeTestCache(Duration ttl, Ticker ticker, Executor executor) {
         return Caffeine.newBuilder()
                 .ticker(ticker)
-                .expireAfter(new WriterExpiry(ttl))
-                .removalListener((String table, YtDynamicTableWriter writer, RemovalCause cause) -> {
-                    if (cause.wasEvicted() && writer != null) {
-                        log.info("Evicting writer for table '{}' from cache", table);
-                        writer.close();
-                    }
-                })
+                .executor(executor)
+                .expireAfterAccess(ttl)
+                .removalListener(closeEvictedWriter())
                 .build();
+    }
+
+    /**
+     * Closes a writer once it is genuinely evicted (TTL elapsed). {@link YtDynamicTableWriter#close()}
+     * flushes buffered rows and commits the in-flight transaction before releasing resources, so a
+     * writer can be evicted at any time without losing data.
+     */
+    private static RemovalListener<String, YtDynamicTableWriter> closeEvictedWriter() {
+        return (String table, YtDynamicTableWriter writer, RemovalCause cause) -> {
+            if (cause.wasEvicted() && writer != null) {
+                log.info("Evicting writer for table '{}' from cache", table);
+                writer.close();
+            }
+        };
     }
 
     @SneakyThrows
@@ -197,33 +202,12 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
         return List.copyOf(cache.asMap().values());
     }
 
-    /**
-     * Periodic cache maintenance. Re-extends the reprieve of writers that are still busy (so an
-     * in-flight transaction can never be evicted regardless of TTL) and then triggers Caffeine's
-     * pending eviction so that idle, non-busy writers are closed and dropped.
-     */
-    @VisibleForTesting
-    void cleanupCache() {
-        try {
-            cache.policy().expireVariably().ifPresent(policy ->
-                    cache.asMap().forEach((table, writer) -> {
-                        if (writer.isBusy()) {
-                            policy.setExpiresAfter(table, BUSY_WRITER_REPRIEVE);
-                        }
-                    }));
-            cache.cleanUp();
-        } catch (Exception e) {
-            log.error("Unable to finish writer cache cleanup", e);
-        }
-    }
-
     public void finish() {
         multipleOperations(YtDynamicTableWriter::finish, "finish");
     }
 
     @Override
     public void close() {
-        cacheMaintenanceExecutor.shutdownNow();
         multipleOperations(YtDynamicTableWriter::close, "close");
         dataMetrics.close();
     }
@@ -329,41 +313,6 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
             default:
                 throw new IllegalArgumentException("Unsupported resharding strategy: "
                         + reshardingConfig.getReshardStrategy());
-        }
-    }
-
-    /**
-     * Access-based expiry (equivalent to {@code expireAfterAccess(ttl)}) that additionally never lets a
-     * busy writer expire: while a writer has buffered rows or an in-flight transaction it is granted the
-     * longer {@link #BUSY_WRITER_REPRIEVE} instead of the TTL, so it cannot be closed and lose data.
-     * The periodic {@link #cleanupCache()} pass keeps re-checking the live busy state for idle writers.
-     */
-    private static final class WriterExpiry implements Expiry<String, YtDynamicTableWriter> {
-        private final long ttlNanos;
-
-        private WriterExpiry(Duration ttl) {
-            this.ttlNanos = ttl.toNanos();
-        }
-
-        private long expiresInNanos(YtDynamicTableWriter writer) {
-            return writer.isBusy() ? BUSY_WRITER_REPRIEVE.toNanos() : ttlNanos;
-        }
-
-        @Override
-        public long expireAfterCreate(String table, YtDynamicTableWriter writer, long currentTime) {
-            return expiresInNanos(writer);
-        }
-
-        @Override
-        public long expireAfterUpdate(String table, YtDynamicTableWriter writer, long currentTime,
-                                      long currentDuration) {
-            return expiresInNanos(writer);
-        }
-
-        @Override
-        public long expireAfterRead(String table, YtDynamicTableWriter writer, long currentTime,
-                                    long currentDuration) {
-            return expiresInNanos(writer);
         }
     }
 }

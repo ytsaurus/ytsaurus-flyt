@@ -873,10 +873,6 @@ public class YtDynamicTableWriter implements Serializable {
         return (YTsaurusError) e.getCause();
     }
 
-    public boolean isBusy() {
-        return rowsInBuffer.get() != 0 || rowsInTransaction.get() != 0;
-    }
-
     @Override
     public String toString() {
         return "YT Writer at " + path.getFullPath();

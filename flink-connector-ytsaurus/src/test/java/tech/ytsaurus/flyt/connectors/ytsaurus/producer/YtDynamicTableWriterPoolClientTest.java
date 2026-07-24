@@ -7,13 +7,11 @@ import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
-import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
@@ -136,31 +134,23 @@ public class YtDynamicTableWriterPoolClientTest {
     }
 
     /**
-     * Checking behaviour in the following situation:
+     * With no busy-veto, a writer that still holds buffered / uncommitted rows can be evicted once its
+     * TTL elapses. Eviction must not drop that data: {@link YtDynamicTableWriter#close()} flushes the
+     * buffer and commits the in-flight transaction before releasing resources.
      * <ol>
-     * <li>Have a writer in cache</li>
-     * <li>Setup a long commit transaction</li>
-     * <li>Simulate cache cleanup (writer must exist longer than cache TTL)</li>
-     * <li>Check if the writer gets evicted</li>
+     * <li>Write a handful of rows so the writer is "busy" but nothing has been committed yet</li>
+     * <li>Advance the ticker past the TTL and run cache maintenance</li>
+     * <li>The writer is evicted, and all its rows end up committed</li>
      * </ol>
-     * Expected result: Writer 'A' must not get evicted from cache until transaction commits.
-     *                  This, in particular, implies that writer 'A' must not be replaced with any other writer.
      */
     @SneakyThrows
     @Test
-    void testLongCommitCacheEvict() {
-        ExecutorService service = Executors.newFixedThreadPool(1);
-        WriterClassifier longCommit = WriterClassifier.plain("longCommit");
-        AtomicLong transactionCount = new AtomicLong(0);
-        CountDownLatch foreverTransactionBegan = new CountDownLatch(1);
-        CountDownLatch cacheCleanupFinished = new CountDownLatch(1);
-        AtomicReference<String> failMessage = new AtomicReference<>();
-
-        // Small TTL plus a manually advanced ticker: the writer's TTL is made to elapse while it still
-        // holds an uncommitted transaction, so only the busy-veto can keep it in the cache.
+    void testEvictedWriterCommitsBufferedRows() {
         var ticker = new MutableTicker();
         Duration ttl = Duration.ofMillis(100);
-        var cache = YtDynamicTableWriterPool.makeDefaultCache(ttl, ticker);
+        // Same-thread executor: eviction (and therefore close()) runs synchronously with cleanUp(),
+        // so the committed-row count can be asserted deterministically.
+        var cache = YtDynamicTableWriterPool.makeTestCache(ttl, ticker, Runnable::run);
         var client = new TestYtClient<>(
                 new BasicEmulatingNodeComponent(),
                 new StubFailingCountingTransactionComponent(
@@ -168,64 +158,46 @@ public class YtDynamicTableWriterPoolClientTest {
                         // Always success
                         Iterators.cycle(true),
                         (transaction) -> {
-                            if (transactionCount.incrementAndGet() == 1) {
-                                try {
-                                    log.error("Blocking transaction began");
-                                    foreverTransactionBegan.countDown();
-                                    cacheCleanupFinished.await();
-                                    log.debug("Unblock blocking transaction");
-                                } catch (InterruptedException e) {
-                                    throw new RuntimeException(e);
-                                }
-                            }
                         }));
 
-
+        WriterClassifier busy = WriterClassifier.plain("busy");
+        int rowsToWrite = 5;
         try (var pool = makePool(TestPoolSettings.builder()
                 .clientPool(CountingTestYtClientPool.ofSingle(client))
                 .customCache(cache))) {
-            service.submit(() -> {
-                try {
-                    foreverTransactionBegan.await();
-                    log.debug("Cache cleanup began");
-                    // Fast-forward well past the TTL: without the busy-veto the writer would now be
-                    // eligible for eviction. It must survive because it holds an uncommitted transaction.
-                    ticker.advance(ttl.multipliedBy(10));
-                    pool.cleanupCache();
-                    if (cache.getIfPresent(longCommit.getTableName()) == null) {
-                        failMessage.set(longCommit.getTableName() + " must not have been evicted from the "
-                                + "cache! This is a data loss");
-                    }
-                    log.debug("Cache cleanup finished");
-                    cacheCleanupFinished.countDown();
-                } catch (InterruptedException e) {
-                    throw new RuntimeException(e);
-                }
-            });
-            for (int i = 0; i < ytWriterOptions.getRowsInTransactionLimit(); i++) {
+            for (int i = 0; i < rowsToWrite; i++) {
                 GenericRowData genericRowData = new GenericRowData(2);
                 genericRowData.setField(0, (long) i);
                 genericRowData.setField(1, TimestampData.fromInstant(OffsetDateTime.now().toInstant()));
-                pool.getOrAcquire(longCommit).write(genericRowData);
+                pool.getOrAcquire(busy).write(genericRowData);
             }
-        }
 
-        Assertions.assertNull(failMessage.get());
-        Assertions.assertEquals(
-                ytWriterOptions.getRowsInTransactionLimit(),
-                client.transactions().getCommittedRows());
+            // Rows are buffered but not yet committed: well below the transaction/modification limits
+            // and faster than the background commit period.
+            Assertions.assertEquals(0, client.transactions().getCommittedRows());
+            Assertions.assertNotNull(cache.getIfPresent(busy.getTableName()));
+
+            // Let the TTL elapse and run maintenance: the writer is evicted and closed.
+            ticker.advance(ttl.multipliedBy(10));
+            cache.cleanUp();
+
+            Assertions.assertNull(cache.getIfPresent(busy.getTableName()),
+                    "Writer past its TTL must be evicted from the cache");
+            Assertions.assertEquals(rowsToWrite, client.transactions().getCommittedRows(),
+                    "Evicting a writer must commit its buffered rows, not drop them");
+        }
     }
 
     /**
-     * Complements {@link #testLongCommitCacheEvict()}: a writer that is <em>not</em> busy and whose TTL
-     * has elapsed must be evicted (and closed) by a cache maintenance pass.
+     * Complements {@link #testEvictedWriterCommitsBufferedRows()}: a writer that has already flushed all
+     * its rows and whose TTL has elapsed must be evicted (and closed) by a cache maintenance pass.
      */
     @SneakyThrows
     @Test
     void testIdleWriterEviction() {
         var ticker = new MutableTicker();
         Duration ttl = Duration.ofMillis(100);
-        var cache = YtDynamicTableWriterPool.makeDefaultCache(ttl, ticker);
+        var cache = YtDynamicTableWriterPool.makeTestCache(ttl, ticker, Runnable::run);
         var client = new TestYtClient<>(
                 new BasicEmulatingNodeComponent(),
                 new StubFailingCountingTransactionComponent(
@@ -244,12 +216,12 @@ public class YtDynamicTableWriterPoolClientTest {
             genericRowData.setField(1, TimestampData.fromInstant(OffsetDateTime.now().toInstant()));
             pool.getOrAcquire(idle).write(genericRowData);
 
-            // Flush everything so the writer is no longer busy, then let its TTL elapse.
+            // Flush everything, then let its TTL elapse.
             pool.finish();
             Assertions.assertNotNull(cache.getIfPresent(idle.getTableName()));
 
             ticker.advance(ttl.multipliedBy(2));
-            pool.cleanupCache();
+            cache.cleanUp();
 
             Assertions.assertNull(cache.getIfPresent(idle.getTableName()),
                     "Idle writer past its TTL must be evicted from the cache");
