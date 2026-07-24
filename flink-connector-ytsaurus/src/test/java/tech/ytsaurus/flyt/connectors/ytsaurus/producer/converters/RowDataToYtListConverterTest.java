@@ -217,6 +217,67 @@ public class RowDataToYtListConverterTest {
                 result.get("arrayOfDictsOfArrays"));
     }
 
+    @Test
+    void arrayOfArraysOfDicts() {
+        // array<array<dict<string, string>>>
+        Map<String, Object> result = convertSingleField(
+                "arrayOfArraysOfDicts",
+                new ArrayType(new ArrayType(
+                        new MapType(new VarCharType(), new VarCharType()))),
+                "{name='arrayOfArraysOfDicts'; type_v3={type_name='list'; "
+                        + "item={type_name='list'; "
+                        + "item={type_name='dict'; key='string'; value='string'}}};}",
+                arr(arr(mapData("k1", str("v1")), mapData("k2", str("v2")))));
+
+        // outer list -> inner list -> each element is a dict (list of pairs)
+        Assertions.assertEquals(
+                ytList(ytList(
+                        ytDict(ytPair("k1", "v1")),
+                        ytDict(ytPair("k2", "v2")))),
+                result.get("arrayOfArraysOfDicts"));
+    }
+
+    @Test
+    void dictOfDictsOfArrays() {
+        // dict<string, dict<string, array<string>>>
+        Map<String, Object> result = convertSingleField(
+                "dictOfDictsOfArrays",
+                new MapType(new VarCharType(),
+                        new MapType(new VarCharType(), new ArrayType(new VarCharType()))),
+                "{name='dictOfDictsOfArrays'; type_v3={type_name='dict'; key='string'; "
+                        + "value={type_name='dict'; key='string'; "
+                        + "value={type_name='list'; item='string'}}};}",
+                mapData("outerKey",
+                        mapData("innerKey", arr(str("apple"), str("banana")))));
+
+        // outer dict -> inner dict -> array value
+        Assertions.assertEquals(
+                ytDict(ytPair("outerKey",
+                        ytDict(ytPair("innerKey", ytList("apple", "banana"))))),
+                result.get("dictOfDictsOfArrays"));
+    }
+
+    @Test
+    void arrayOfDictsOfDicts() {
+        // array<dict<string, dict<string, string>>>
+        Map<String, Object> result = convertSingleField(
+                "arrayOfDictsOfDicts",
+                new ArrayType(new MapType(new VarCharType(),
+                        new MapType(new VarCharType(), new VarCharType()))),
+                "{name='arrayOfDictsOfDicts'; type_v3={type_name='list'; "
+                        + "item={type_name='dict'; key='string'; "
+                        + "value={type_name='dict'; key='string'; value='string'}}};}",
+                arr(mapData("outerKey", mapData("innerKey", str("innerValue")))));
+
+        // outer list -> each element is a dict (list of pairs) -> value is a nested dict
+        Assertions.assertEquals(
+                ytList(ytDict(ytPair("outerKey",
+                        ytDict(ytPair("innerKey", "innerValue"))))),
+                result.get("arrayOfDictsOfDicts"));
+    }
+
+
+
     // ===== nullable collections =====
 
     @Test
@@ -301,6 +362,79 @@ public class RowDataToYtListConverterTest {
                                 .buildMap())
                         .buildMap(),
                 result.get("ysonMapOfMaps"));
+    }
+
+    @Test
+    void ysonMapOfMapsOfMaps() {
+        // yson map<string, map<string, map<string, string>>>
+        Map<String, Object> result = convertSingleField(
+                "ysonMapOfMapsOfMaps",
+                new MapType(new VarCharType(),
+                        new MapType(new VarCharType(),
+                                new MapType(new VarCharType(), new VarCharType()))),
+                "{name='ysonMapOfMapsOfMaps'; type='yson';}",
+                mapData("outer",
+                        mapData("mid",
+                                mapData("innerKey", str("innerValue")))));
+
+        Assertions.assertEquals(
+                YTree.mapBuilder()
+                        .key("outer")
+                        .value(YTree.mapBuilder()
+                                .key("mid")
+                                .value(YTree.mapBuilder()
+                                        .key("innerKey").value("innerValue")
+                                        .buildMap())
+                                .buildMap())
+                        .buildMap(),
+                result.get("ysonMapOfMapsOfMaps"));
+    }
+
+    @Test
+    void ysonMapOfArraysOfMaps() {
+        // yson map<string, array<map<string, string>>>
+        Map<String, Object> result = convertSingleField(
+                "ysonMapOfArraysOfMaps",
+                new MapType(new VarCharType(),
+                        new ArrayType(new MapType(new VarCharType(), new VarCharType()))),
+                "{name='ysonMapOfArraysOfMaps'; type='yson';}",
+                mapData("outer", arr(
+                        mapData("k1", str("v1")),
+                        mapData("k2", str("v2")))));
+
+        Assertions.assertEquals(
+                YTree.mapBuilder()
+                        .key("outer")
+                        .value(YTree.listBuilder()
+                                .value(YTree.mapBuilder().key("k1").value("v1").buildMap())
+                                .value(YTree.mapBuilder().key("k2").value("v2").buildMap())
+                                .buildList())
+                        .buildMap(),
+                result.get("ysonMapOfArraysOfMaps"));
+    }
+
+    @Test
+    void ysonMapOfMapsOfArrays() {
+        // yson map<string, map<string, array<string>>>
+        Map<String, Object> result = convertSingleField(
+                "ysonMapOfMapsOfArrays",
+                new MapType(new VarCharType(),
+                        new MapType(new VarCharType(), new ArrayType(new VarCharType()))),
+                "{name='ysonMapOfMapsOfArrays'; type='yson';}",
+                mapData("outer",
+                        mapData("colors", arr(str("red"), str("green")))));
+
+        Assertions.assertEquals(
+                YTree.mapBuilder()
+                        .key("outer")
+                        .value(YTree.mapBuilder()
+                                .key("colors")
+                                .value(YTree.listBuilder()
+                                        .value("red").value("green")
+                                        .buildList())
+                                .buildMap())
+                        .buildMap(),
+                result.get("ysonMapOfMapsOfArrays"));
     }
 
     // ===== helpers: input data builders =====
