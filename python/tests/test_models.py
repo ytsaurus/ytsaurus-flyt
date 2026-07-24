@@ -52,6 +52,17 @@ class TestClusterParams:
         params = ClusterParams(cpu=2, memory="4G", max_heap_size="2324M", data_size_per_job="500M")
         assert params.max_heap_size_bytes() == 2324 * 1024 * 1024
 
+    def test_off_heap_size_bytes_none_by_default(self):
+        params = ClusterParams(cpu=2, memory="4G", max_heap_size="2324M", data_size_per_job="500M")
+        assert params.off_heap_size is None
+        assert params.off_heap_size_bytes() is None
+
+    def test_off_heap_size_bytes(self):
+        params = ClusterParams(
+            cpu=2, memory="4G", max_heap_size="2324M", data_size_per_job="500M", off_heap_size="8G",
+        )
+        assert params.off_heap_size_bytes() == 8 * 1024 * 1024 * 1024
+
     def test_frozen(self):
         params = ClusterParams(cpu=2, memory="4G", max_heap_size="2324M", data_size_per_job="500M")
         with pytest.raises(AttributeError):
