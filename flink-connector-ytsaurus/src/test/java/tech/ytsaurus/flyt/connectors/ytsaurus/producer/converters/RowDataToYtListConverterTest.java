@@ -1,21 +1,13 @@
 package tech.ytsaurus.flyt.connectors.ytsaurus.producer.converters;
 
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
-import org.apache.flink.formats.common.TimestampFormat;
-import org.apache.flink.table.data.GenericArrayData;
-import org.apache.flink.table.data.GenericMapData;
 import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.TimestampData;
-import org.apache.flink.table.data.binary.BinaryStringData;
 import org.apache.flink.table.types.logical.ArrayType;
 import org.apache.flink.table.types.logical.DateType;
 import org.apache.flink.table.types.logical.DayTimeIntervalType;
-import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.MapType;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.table.types.logical.TimestampType;
@@ -25,7 +17,15 @@ import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
 import tech.ytsaurus.ysontree.YTree;
 import tech.ytsaurus.ysontree.YTreeNode;
-import tech.ytsaurus.ysontree.YTreeTextSerializer;
+
+import static tech.ytsaurus.flyt.connectors.ytsaurus.producer.converters.RowDataToYtTestUtil.arr;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.producer.converters.RowDataToYtTestUtil.convertSingleField;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.producer.converters.RowDataToYtTestUtil.mapData;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.producer.converters.RowDataToYtTestUtil.str;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.producer.converters.RowDataToYtTestUtil.ytDict;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.producer.converters.RowDataToYtTestUtil.ytList;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.producer.converters.RowDataToYtTestUtil.ytMap;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.producer.converters.RowDataToYtTestUtil.ytPair;
 
 public class RowDataToYtListConverterTest {
 
@@ -276,8 +276,6 @@ public class RowDataToYtListConverterTest {
                 result.get("arrayOfDictsOfDicts"));
     }
 
-
-
     // ===== nullable collections =====
 
     @Test
@@ -288,13 +286,7 @@ public class RowDataToYtListConverterTest {
                 arr(str("abacaba"), null, str("caba"), null, null));
 
         Assertions.assertEquals(
-                YTree.listBuilder()
-                        .value("abacaba")
-                        .value(YTree.nullNode())
-                        .value("caba")
-                        .value(YTree.nullNode())
-                        .value(YTree.nullNode())
-                        .buildList(),
+                ytList("abacaba", null, "caba", null, null),
                 result.get("arrayWithNulls"));
     }
 
@@ -306,10 +298,7 @@ public class RowDataToYtListConverterTest {
                 mapData("nullKey", null, "key", str("value")));
 
         Assertions.assertEquals(
-                YTree.mapBuilder()
-                        .key("nullKey").value(YTree.nullNode())
-                        .key("key").value("value")
-                        .buildMap(),
+                ytMap("nullKey", null, "key", "value"),
                 result.get("mapWithNulls"));
     }
 
@@ -324,10 +313,7 @@ public class RowDataToYtListConverterTest {
 
         // yson map (not dict): type='yson' triggers the else branch in createMapConverter
         Assertions.assertEquals(
-                YTree.mapBuilder()
-                        .key("ysonKey1").value("ysonValue1")
-                        .key("ysonKey2").value("ysonValue2")
-                        .buildMap(),
+                ytMap("ysonKey1", "ysonValue1", "ysonKey2", "ysonValue2"),
                 result.get("ysonMapField"));
     }
 
@@ -339,10 +325,7 @@ public class RowDataToYtListConverterTest {
                 mapData("colors", arr(str("red"), str("green"))));
 
         Assertions.assertEquals(
-                YTree.mapBuilder()
-                        .key("colors")
-                        .value(YTree.listBuilder().value("red").value("green").buildList())
-                        .buildMap(),
+                ytMap("colors", ytList("red", "green")),
                 result.get("ysonMapOfArrays"));
     }
 
@@ -355,12 +338,7 @@ public class RowDataToYtListConverterTest {
                 mapData("outer", mapData("nestedKey", str("nestedValue"))));
 
         Assertions.assertEquals(
-                YTree.mapBuilder()
-                        .key("outer")
-                        .value(YTree.mapBuilder()
-                                .key("nestedKey").value("nestedValue")
-                                .buildMap())
-                        .buildMap(),
+                ytMap("outer", ytMap("nestedKey", "nestedValue")),
                 result.get("ysonMapOfMaps"));
     }
 
@@ -378,15 +356,7 @@ public class RowDataToYtListConverterTest {
                                 mapData("innerKey", str("innerValue")))));
 
         Assertions.assertEquals(
-                YTree.mapBuilder()
-                        .key("outer")
-                        .value(YTree.mapBuilder()
-                                .key("mid")
-                                .value(YTree.mapBuilder()
-                                        .key("innerKey").value("innerValue")
-                                        .buildMap())
-                                .buildMap())
-                        .buildMap(),
+                ytMap("outer", ytMap("mid", ytMap("innerKey", "innerValue"))),
                 result.get("ysonMapOfMapsOfMaps"));
     }
 
@@ -403,13 +373,9 @@ public class RowDataToYtListConverterTest {
                         mapData("k2", str("v2")))));
 
         Assertions.assertEquals(
-                YTree.mapBuilder()
-                        .key("outer")
-                        .value(YTree.listBuilder()
-                                .value(YTree.mapBuilder().key("k1").value("v1").buildMap())
-                                .value(YTree.mapBuilder().key("k2").value("v2").buildMap())
-                                .buildList())
-                        .buildMap(),
+                ytMap("outer", ytList(
+                        ytMap("k1", "v1"),
+                        ytMap("k2", "v2"))),
                 result.get("ysonMapOfArraysOfMaps"));
     }
 
@@ -425,95 +391,8 @@ public class RowDataToYtListConverterTest {
                         mapData("colors", arr(str("red"), str("green")))));
 
         Assertions.assertEquals(
-                YTree.mapBuilder()
-                        .key("outer")
-                        .value(YTree.mapBuilder()
-                                .key("colors")
-                                .value(YTree.listBuilder()
-                                        .value("red").value("green")
-                                        .buildList())
-                                .buildMap())
-                        .buildMap(),
+                ytMap("outer", ytMap("colors", ytList("red", "green"))),
                 result.get("ysonMapOfMapsOfArrays"));
     }
 
-    // ===== helpers: input data builders =====
-
-    private static BinaryStringData str(String s) {
-        return new BinaryStringData(s);
-    }
-
-    private static GenericArrayData arr(Object... items) {
-        return new GenericArrayData(items);
-    }
-
-    /** Builds a {@link GenericMapData} from key/value pairs. String keys are wrapped automatically. */
-    private static GenericMapData mapData(Object... kv) {
-        Map<Object, Object> m = new LinkedHashMap<>();
-        for (int i = 0; i < kv.length; i += 2) {
-            Object key = (kv[i] instanceof String) ? str((String) kv[i]) : kv[i];
-            m.put(key, kv[i + 1]);
-        }
-        return new GenericMapData(m);
-    }
-
-    // ===== helpers: expected YT-value builders =====
-
-    /** YT dict is a list of [key, value] pairs. */
-    private static YTreeNode ytDict(YTreeNode... pairs) {
-        var b = YTree.listBuilder();
-        for (YTreeNode p : pairs) {
-            b.value(p);
-        }
-        return b.buildList();
-    }
-
-    /** A single [key, value] pair; the value may be a String or a {@link YTreeNode}. */
-    private static YTreeNode ytPair(String key, Object value) {
-        return YTree.listBuilder()
-                .value(key)
-                .value(toNode(value))
-                .buildList();
-    }
-
-    /** YT list; String elements are wrapped into string nodes. */
-    private static YTreeNode ytList(Object... items) {
-        var b = YTree.listBuilder();
-        for (Object it : items) {
-            b.value(toNode(it));
-        }
-        return b.buildList();
-    }
-
-    private static YTreeNode toNode(Object value) {
-        return (value instanceof YTreeNode) ? (YTreeNode) value : YTree.stringNode((String) value);
-    }
-
-
-    // ===== helpers: conversion entry points =====
-
-    private Map<String, Object> convertSingleField(
-            String fieldName, LogicalType fieldType, String fieldSchema, Object value) {
-        RowType rowType = new RowType(List.of(new RowType.RowField(fieldName, fieldType)));
-        GenericRowData rowData = new GenericRowData(1);
-        rowData.setField(0, value);
-        return convert(fieldDeclarationToSchema(fieldSchema), rowType, rowData);
-    }
-
-    private Map<String, Object> convert(String ysonSchema, LogicalType rowType, GenericRowData rowData) {
-        var converter = new RowDataToYtListConverters(TimestampFormat.ISO_8601);
-        YTreeNode schemaNode = YTreeTextSerializer.deserialize(ysonSchema);
-        //noinspection unchecked
-        return (Map<String, Object>) converter
-                .createConverter(rowType, schemaNode)
-                .convert(null, rowData);
-    }
-
-    private String fieldDeclarationToSchema(String... fields) {
-        return "<\"strict\"=%true;\"unique_keys\"=%true;>[" +
-                Stream.of(fields)
-                        .map(field -> field.replace("'", "\""))
-                        .collect(Collectors.joining(";"))
-                + ";]";
-    }
 }
