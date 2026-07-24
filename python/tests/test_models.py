@@ -59,7 +59,11 @@ class TestClusterParams:
 
     def test_off_heap_size_bytes(self):
         params = ClusterParams(
-            cpu=2, memory="4G", max_heap_size="2324M", data_size_per_job="500M", off_heap_size="8G",
+            cpu=2,
+            memory="4G",
+            max_heap_size="2324M",
+            data_size_per_job="500M",
+            off_heap_size="8G",
         )
         assert params.off_heap_size_bytes() == 8 * 1024 * 1024 * 1024
 

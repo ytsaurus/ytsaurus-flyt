@@ -153,6 +153,4 @@ def test_build_vanilla_operation_spec_java_opts_with_off_heap():
         off_heap_size_str="8G",
     )
     env = builder.build()["tasks"]["flink"]["environment"]
-    assert env["FLINK_ENV_JAVA_OPTS"] == (
-        "-Xmx14G -XX:MaxDirectMemorySize=8G -XX:ActiveProcessorCount=2"
-    )
+    assert env["FLINK_ENV_JAVA_OPTS"] == ("-Xmx14G -XX:MaxDirectMemorySize=8G -XX:ActiveProcessorCount=2")
