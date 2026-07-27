@@ -170,6 +170,7 @@ def launch_vanilla_job(
             jobmanager_params=jobmanager_params,
             secure_vault=secure_vault,
             max_heap_size_str=preset_params.max_heap_size,
+            off_heap_size_str=preset_params.off_heap_size,
             use_squashfs_sandbox_unpack=config.squashfs_layer_delivery == "sandbox_unpack",
         )
 

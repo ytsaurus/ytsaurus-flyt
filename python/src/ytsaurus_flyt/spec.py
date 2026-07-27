@@ -101,15 +101,25 @@ def build_vanilla_operation_spec(
     secure_vault: dict[str, str],
     max_heap_size_str: str = "2324M",
     *,
+    off_heap_size_str: str | None = None,
     use_squashfs_sandbox_unpack: bool = False,
 ) -> VanillaSpecBuilder:
     """Build a Vanilla operation spec to launch a Flink job (SquashFS runtime only)."""
     service_name = config.service_name or _extract_service_name(job_command)
 
+    java_opts = f"-Xmx{max_heap_size_str}"
+    if off_heap_size_str:
+        # Bounds NIO/netty direct buffers (gRPC connectors); otherwise the JVM
+        # defaults MaxDirectMemorySize to ~the max heap size.
+        java_opts += f" -XX:MaxDirectMemorySize={off_heap_size_str}"
+    if jobmanager_params.cpu:
+        # Pin the JVM's processor count to the container CPU limit.
+        java_opts += f" -XX:ActiveProcessorCount={jobmanager_params.cpu}"
+
     environment = {
         **DEFAULT_ENVIRONMENT,
         "JAVA_HOME": config.java_home,
-        "FLINK_ENV_JAVA_OPTS": f"-Xmx{max_heap_size_str}",
+        "FLINK_ENV_JAVA_OPTS": java_opts,
         FLINK_STANDALONE_FLAG: "True",
         **config.extra_environment,
     }

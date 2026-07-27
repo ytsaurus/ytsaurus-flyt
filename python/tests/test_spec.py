@@ -118,3 +118,39 @@ def test_build_vanilla_operation_spec_environment_no_hardcoded_flink_paths():
     assert "FLINK_HOME" not in env
     assert "FLINK_LIB_DIR" not in env
     assert env["YT_ALLOW_HTTP_REQUESTS_TO_YT_FROM_JOB"] == "1"
+
+
+def test_build_vanilla_operation_spec_java_opts_heap_only():
+    config = FlytConfig(service_name="t", java_home="/jdk", python_bin="/py")
+    op = OperationParams(file_paths=[], pool="pool")
+    jm = _jobmanager_from_preset()
+    builder = build_vanilla_operation_spec(
+        title="x",
+        job_command="p.py",
+        config=config,
+        operation_params=op,
+        jobmanager_params=jm,
+        secure_vault={},
+        max_heap_size_str="14G",
+    )
+    env = builder.build()["tasks"]["flink"]["environment"]
+    # MICRO preset -> cpu=2, so ActiveProcessorCount is pinned to 2.
+    assert env["FLINK_ENV_JAVA_OPTS"] == "-Xmx14G -XX:ActiveProcessorCount=2"
+
+
+def test_build_vanilla_operation_spec_java_opts_with_off_heap():
+    config = FlytConfig(service_name="t", java_home="/jdk", python_bin="/py")
+    op = OperationParams(file_paths=[], pool="pool")
+    jm = _jobmanager_from_preset()
+    builder = build_vanilla_operation_spec(
+        title="x",
+        job_command="p.py",
+        config=config,
+        operation_params=op,
+        jobmanager_params=jm,
+        secure_vault={},
+        max_heap_size_str="14G",
+        off_heap_size_str="8G",
+    )
+    env = builder.build()["tasks"]["flink"]["environment"]
+    assert env["FLINK_ENV_JAVA_OPTS"] == ("-Xmx14G -XX:MaxDirectMemorySize=8G -XX:ActiveProcessorCount=2")
