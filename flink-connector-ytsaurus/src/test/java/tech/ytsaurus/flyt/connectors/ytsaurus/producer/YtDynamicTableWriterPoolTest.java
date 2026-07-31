@@ -120,7 +120,8 @@ public class YtDynamicTableWriterPoolTest {
         setYtPathAvailable("home", "smth", "__tests__", "tests", "sample");
         mockMountAny();
         try (var pool = makePool("//home/smth/__tests__/tests", "[]", new IntType())) {
-            var writer = pool.getOrAcquire(WriterClassifier.plain("sample"));
+            pool.ensureWriter(WriterClassifier.plain("sample"));
+            var writer = pool.getWriters().iterator().next();
             assertEquals("//home/smth/__tests__/tests/sample", writer.toString().split(" ")[3]);
         }
     }
@@ -129,7 +130,7 @@ public class YtDynamicTableWriterPoolTest {
     void poolAcquireConnectionForbiddenPathSuccess() {
         setYtPathAvailable("__non_existent__");
         try (var pool = makePool("//home/smth/__tests__/tests", "[]", new IntType())) {
-            pool.getOrAcquire(WriterClassifier.plain("sample"));
+            pool.ensureWriter(WriterClassifier.plain("sample"));
             fail("No exception was thrown acquiring writer for a forbidden path");
         } catch (RuntimeException e) {
             assertTrue(e.getMessage().contains("Insufficient permissions"));
@@ -170,7 +171,6 @@ public class YtDynamicTableWriterPoolTest {
         Mockito.when(transaction.commit()).thenReturn(CompletableFuture.completedFuture(null));
 
         try (var pool = makePool("/", schema, logicalType)) {
-            var writer = pool.getOrAcquire(WriterClassifier.plain("values"));
             for (int i = 0; i < ytWriterOptions.getRowsInModificationLimit() + 1; i++) {
                 GenericRowData genericRowData = new GenericRowData(RowKind.INSERT, 2);
                 // id
@@ -181,7 +181,7 @@ public class YtDynamicTableWriterPoolTest {
                                 .of(2022, 10, 30, 10, 10, 10)
                                 .toInstant(ZoneOffset.UTC)
                 ));
-                writer.write(genericRowData);
+                pool.write(WriterClassifier.plain("values"), genericRowData);
             }
             assertEquals(1, rows.get().size());
         }
@@ -355,7 +355,7 @@ public class YtDynamicTableWriterPoolTest {
                     .thenAnswer(invocation -> CompletableFuture.completedFuture(null));
 
             try (var pool = makePool(path, schema, logicalType)) {
-                pool.getOrAcquire(WriterClassifier.partition(rowInstant, partitionConfigBuilder
+                pool.ensureWriter(WriterClassifier.partition(rowInstant, partitionConfigBuilder
                         .converter(new YtPartitioningInstantRowDataConverter(new TimestampType(3)))
                         .build()));
             }

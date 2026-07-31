@@ -145,7 +145,7 @@ public class YtDynamicTableWriterPoolClientTest {
      */
     @SneakyThrows
     @Test
-    void testEvictedWriterCommitsBufferedRows() {
+    void testEvictedWriterWaitsForActiveLeaseThenCommitsBufferedRows() {
         var ticker = new MutableTicker();
         Duration ttl = Duration.ofMillis(100);
         // Same-thread executor: eviction (and therefore close()) runs synchronously with cleanUp(),
@@ -165,31 +165,31 @@ public class YtDynamicTableWriterPoolClientTest {
         try (var pool = makePool(TestPoolSettings.builder()
                 .clientPool(CountingTestYtClientPool.ofSingle(client))
                 .customCache(cache))) {
-            for (int i = 0; i < rowsToWrite; i++) {
-                GenericRowData genericRowData = new GenericRowData(2);
-                genericRowData.setField(0, (long) i);
-                genericRowData.setField(1, TimestampData.fromInstant(OffsetDateTime.now().toInstant()));
-                pool.getOrAcquire(busy).write(genericRowData);
+            try (var lease = pool.acquire(busy)) {
+                for (int i = 0; i < rowsToWrite; i++) {
+                    GenericRowData genericRowData = new GenericRowData(2);
+                    genericRowData.setField(0, (long) i);
+                    genericRowData.setField(1, TimestampData.fromInstant(OffsetDateTime.now().toInstant()));
+                    lease.writer().write(genericRowData);
+                }
+
+                // Retire the cache entry while its writer is still leased by an operation.
+                ticker.advance(ttl.multipliedBy(10));
+                cache.cleanUp();
+
+                Assertions.assertNull(cache.getIfPresent(busy.getTableName()),
+                        "Writer past its TTL must be evicted from the cache");
+                Assertions.assertEquals(0, client.transactions().getCommittedRows(),
+                        "Eviction must not close a writer while an operation holds its lease");
             }
 
-            // Rows are buffered but not yet committed: well below the transaction/modification limits
-            // and faster than the background commit period.
-            Assertions.assertEquals(0, client.transactions().getCommittedRows());
-            Assertions.assertNotNull(cache.getIfPresent(busy.getTableName()));
-
-            // Let the TTL elapse and run maintenance: the writer is evicted and closed.
-            ticker.advance(ttl.multipliedBy(10));
-            cache.cleanUp();
-
-            Assertions.assertNull(cache.getIfPresent(busy.getTableName()),
-                    "Writer past its TTL must be evicted from the cache");
             Assertions.assertEquals(rowsToWrite, client.transactions().getCommittedRows(),
-                    "Evicting a writer must commit its buffered rows, not drop them");
+                    "Releasing the last lease of a retired writer must close it and commit its rows");
         }
     }
 
     /**
-     * Complements {@link #testEvictedWriterCommitsBufferedRows()}: a writer that has already flushed all
+     * Complements {@link #testEvictedWriterWaitsForActiveLeaseThenCommitsBufferedRows()}: a writer that has already flushed all
      * its rows and whose TTL has elapsed must be evicted (and closed) by a cache maintenance pass.
      */
     @SneakyThrows
@@ -214,7 +214,7 @@ public class YtDynamicTableWriterPoolClientTest {
             GenericRowData genericRowData = new GenericRowData(2);
             genericRowData.setField(0, 0L);
             genericRowData.setField(1, TimestampData.fromInstant(OffsetDateTime.now().toInstant()));
-            pool.getOrAcquire(idle).write(genericRowData);
+            pool.write(idle, genericRowData);
 
             // Flush everything, then let its TTL elapse.
             pool.finish();
@@ -248,7 +248,7 @@ public class YtDynamicTableWriterPoolClientTest {
         AtomicLong total = new AtomicLong(0);
         try (var pool = makePool(clientPool)) {
             data.forEach(pair -> {
-                pool.getOrAcquire(pair.getKey()).write(pair.getValue());
+                pool.write(pair.getKey(), pair.getValue());
                 total.getAndIncrement();
             });
         }
@@ -372,8 +372,11 @@ public class YtDynamicTableWriterPoolClientTest {
         WriterClassifier classifier1 = WriterClassifier.plain("table1");
         WriterClassifier classifier2 = WriterClassifier.plain("table2");
 
-        var writer1 = pool.getOrAcquire(classifier1);
-        var writer2 = pool.getOrAcquire(classifier2);
+        pool.ensureWriter(classifier1);
+        pool.ensureWriter(classifier2);
+        var writers = new ArrayList<>(pool.getWriters());
+        var writer1 = writers.get(0);
+        var writer2 = writers.get(1);
 
         var failingWriter1 = Mockito.spy(writer1);
         var failingWriter2 = Mockito.spy(writer2);
@@ -416,7 +419,7 @@ public class YtDynamicTableWriterPoolClientTest {
         String schema;
         LogicalType logicalType;
         YtClientPool<?> clientPool;
-        Cache<String, YtDynamicTableWriter> customCache;
+        Cache<String, YtDynamicTableWriterPool.WriterHandle> customCache;
     }
 
     /**

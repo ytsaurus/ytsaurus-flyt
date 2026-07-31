@@ -186,7 +186,7 @@ public class YtRowDataSinkFunction extends RichSinkFunction<RowData> implements 
         if (value == null) {
             return;
         }
-        pool.getOrAcquire(dispatchQuery(value)).write(value);
+        pool.write(dispatchQuery(value), value);
     }
 
     @Override
