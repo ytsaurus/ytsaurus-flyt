@@ -25,7 +25,6 @@ import com.github.benmanes.caffeine.cache.RemovalCause;
 import com.github.benmanes.caffeine.cache.RemovalListener;
 import com.github.benmanes.caffeine.cache.Scheduler;
 import com.github.benmanes.caffeine.cache.Ticker;
-import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.api.common.functions.RuntimeContext;
@@ -430,10 +429,17 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
             }
         }
 
-        @SneakyThrows
         private synchronized void awaitClosed() {
+            boolean interrupted = false;
             while (!closed) {
-                wait();
+                try {
+                    wait();
+                } catch (InterruptedException e) {
+                    interrupted = true;
+                }
+            }
+            if (interrupted) {
+                Thread.currentThread().interrupt();
             }
         }
     }
