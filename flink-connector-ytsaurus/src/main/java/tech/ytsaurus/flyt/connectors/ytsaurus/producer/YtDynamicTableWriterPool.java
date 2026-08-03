@@ -389,31 +389,31 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
         }
 
         private void retire() {
-            boolean closeNow;
             synchronized (this) {
                 retired = true;
-                closeNow = leases == 0 && !closing;
-                if (closeNow) {
-                    closing = true;
+
+                if (leases > 0 || closing) {
+                    return;
                 }
+
+                closing = true;
             }
-            if (closeNow) {
-                closeWriter();
-            }
+
+            closeWriter();
         }
 
         private void release() {
-            boolean closeNow;
             synchronized (this) {
                 leases--;
-                closeNow = retired && leases == 0 && !closing;
-                if (closeNow) {
-                    closing = true;
+
+                if (!retired || leases > 0 || closing) {
+                    return;
                 }
+
+                closing = true;
             }
-            if (closeNow) {
-                closeWriter();
-            }
+
+            closeWriter();
         }
 
         private void closeWriter() {
