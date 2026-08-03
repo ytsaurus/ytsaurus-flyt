@@ -13,6 +13,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.Executor;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
@@ -65,7 +66,7 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
     private final transient ConcurrentLinkedQueue<RuntimeException> asynchronousCloseErrors =
             new ConcurrentLinkedQueue<>();
     private final transient Object lifecycleGate = new Object();
-    private transient boolean acceptingOperations = true;
+    private final transient AtomicBoolean acceptingOperations = new AtomicBoolean(true);
 
     private final transient Map<String, MetricsSupplier> metricsSuppliers;
 
@@ -259,10 +260,9 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
     public void close() {
         List<WriterHandle> handlesToClose;
         synchronized (lifecycleGate) {
-            if (!acceptingOperations) {
+            if (!acceptingOperations.compareAndSet(true, false)) {
                 return;
             }
-            acceptingOperations = false;
             handlesToClose = List.copyOf(handles);
         }
 
@@ -341,7 +341,7 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
     }
 
     private void checkPoolOpen() {
-        if (!acceptingOperations) {
+        if (!acceptingOperations.get()) {
             throw new IllegalStateException("YT writer pool is closed");
         }
     }
