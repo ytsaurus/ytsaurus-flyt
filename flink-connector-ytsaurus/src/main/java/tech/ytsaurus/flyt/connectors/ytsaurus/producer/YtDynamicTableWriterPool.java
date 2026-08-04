@@ -235,25 +235,43 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
     }
 
     public void finish() {
+        withWriters(YtDynamicTableWriter::finish, "finish");
+    }
+
+    public void snapshotState(long checkpointId) {
+        withWriters(writer -> writer.snapshotState(checkpointId), "snapshot state");
+    }
+
+    private void withWriters(Consumer<YtDynamicTableWriter> operation, String operationName) {
         List<WriterLease> leases = new ArrayList<>();
+        List<WriterHandle> retiredHandles = new ArrayList<>();
         synchronized (lifecycleGate) {
             checkPoolOpen();
             throwAsynchronousCloseErrorIfAny();
-            cache.asMap().values().forEach(handle -> {
+            handles.forEach(handle -> {
                 WriterLease lease = handle.tryAcquire();
                 if (lease != null) {
                     leases.add(lease);
+                } else {
+                    retiredHandles.add(handle);
                 }
             });
         }
+
         try {
+            // A handle can already be absent from the cache while its asynchronous removal listener is
+            // closing it. Wait for those owned generations so finish/checkpoint cannot return before their
+            // buffered rows have been committed or their close failure has been reported.
+            retiredHandles.forEach(WriterHandle::awaitClosed);
+            throwAsynchronousCloseErrorIfAny();
             multipleOperations(
                     leases.stream().map(WriterLease::writer).collect(Collectors.toUnmodifiableList()),
-                    YtDynamicTableWriter::finish,
-                    "finish");
+                    operation,
+                    operationName);
         } finally {
             leases.forEach(WriterLease::close);
         }
+        throwAsynchronousCloseErrorIfAny();
     }
 
     @Override
@@ -277,10 +295,6 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
         } finally {
             dataMetrics.close();
         }
-    }
-
-    private void multipleOperations(Consumer<YtDynamicTableWriter> operation, String operationName) {
-        multipleOperations(getWriters(), operation, operationName);
     }
 
     private void multipleOperations(Collection<YtDynamicTableWriter> writers,
