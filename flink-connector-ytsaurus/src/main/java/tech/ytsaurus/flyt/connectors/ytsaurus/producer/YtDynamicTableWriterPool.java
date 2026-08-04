@@ -480,7 +480,8 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
     }
 
 
-    private YtDynamicTableWriter prepareWriter(WriterClassifier writerClassifier) {
+    @VisibleForTesting
+    YtDynamicTableWriter prepareWriter(WriterClassifier writerClassifier) {
         ComplexYtPath tablePath = path.copy().setTableName(writerClassifier.getTableName());
         metricsSuppliers.putIfAbsent(tablePath.getFullPath(), new MetricsSupplier(tablePath.getFullPath()));
         MetricsSupplier metricsSupplier = metricsSuppliers.get(tablePath.getFullPath());
