@@ -398,6 +398,13 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
                 return null;
             }
             leases++;
+            if (leases > 1) {
+                log.warn(
+                        "Writer for table '{}' has {} concurrent leases. "
+                                + "Flink sink operations are expected to be serialized",
+                        writer.getPath(),
+                        leases);
+            }
             return new WriterLease(this);
         }
 
