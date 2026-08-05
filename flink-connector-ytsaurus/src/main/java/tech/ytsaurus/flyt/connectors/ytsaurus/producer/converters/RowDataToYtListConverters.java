@@ -311,12 +311,12 @@ public class RowDataToYtListConverters implements Serializable {
     }
 
     private boolean isDictField(YTreeNode fieldNode) {
-        return isType(extractEffectiveTypeV3Node(fieldNode), "dict");
+        return isType(extractTypeV3Node(fieldNode), "dict");
     }
 
     private void validateDictKeyType(YTreeNode fieldNode) {
-        YTreeNode dictTypeNode = extractEffectiveTypeV3Node(fieldNode);
-        YTreeNode keyTypeNode = unwrapOptionalType(dictTypeNode.asMap().get("key"));
+        YTreeNode dictTypeNode = extractTypeV3Node(fieldNode);
+        YTreeNode keyTypeNode = dictTypeNode.asMap().get("key");
         if (keyTypeNode == null || !keyTypeNode.isStringNode() || !"string".equals(keyTypeNode.stringValue())) {
             throw new IllegalStateException(String.format(
                     "Only YT dicts with string keys are supported. Got key type: %s in field: %s",
@@ -324,21 +324,12 @@ public class RowDataToYtListConverters implements Serializable {
         }
     }
 
-    private YTreeNode extractEffectiveTypeV3Node(YTreeNode fieldNode) {
-        YTreeNode typeNode = Optional.ofNullable(fieldNode)
+    private YTreeNode extractTypeV3Node(YTreeNode fieldNode) {
+        return Optional.ofNullable(fieldNode)
                 .filter(YTreeNode::isMapNode)
                 .map(YTreeNode::asMap)
                 .map(map -> map.get("type_v3"))
                 .orElse(null);
-        return unwrapOptionalType(typeNode);
-    }
-
-    private YTreeNode unwrapOptionalType(YTreeNode typeNode) {
-        YTreeNode current = typeNode;
-        while (isType(current, "optional")) {
-            current = current.asMap().get("item");
-        }
-        return current;
     }
 
     private boolean isType(YTreeNode typeNode, String expectedTypeName) {
@@ -352,9 +343,8 @@ public class RowDataToYtListConverters implements Serializable {
     }
 
     /**
-     * Extracts a nested type_v3 schema, unwrapping optional types along the way.
-     * Structured types remain under type_v3, while scalar types are exposed through the legacy
-     * type field expected by the scalar converters.
+     * Extracts a nested type_v3 schema. Structured types remain under type_v3, while scalar types
+     * are exposed through the legacy type field expected by the scalar converters.
      *
      * For example, given a fieldNode like:
      * {name='dictOfDicts'; type_v3={type_name='dict'; key='string'; value={type_name='dict'; ...}}}
@@ -362,12 +352,12 @@ public class RowDataToYtListConverters implements Serializable {
      * For a scalar value='date', it returns {type='date'}.
      */
     private YTreeNode extractNestedFieldNode(YTreeNode fieldNode, String childKey) {
-        YTreeNode typeNode = extractEffectiveTypeV3Node(fieldNode);
+        YTreeNode typeNode = extractTypeV3Node(fieldNode);
         if (typeNode == null || !typeNode.isMapNode()) {
             return null;
         }
 
-        YTreeNode childTypeNode = unwrapOptionalType(typeNode.asMap().get(childKey));
+        YTreeNode childTypeNode = typeNode.asMap().get(childKey);
         if (childTypeNode == null) {
             return null;
         }

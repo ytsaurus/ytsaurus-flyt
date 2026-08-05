@@ -121,28 +121,6 @@ public class RowDataToYtListConverterTest {
     }
 
     @Test
-    void optionalDict() {
-        String schema = "{name='optionalDict'; type_v3={type_name='optional'; "
-                + "item={type_name='dict'; key='string'; value='string'}};}";
-        Map<String, Object> result = convertSingleField(
-                "optionalDict",
-                new MapType(new VarCharType(), new VarCharType()),
-                schema,
-                mapData("key", str("value")));
-
-        Assertions.assertEquals(
-                ytDict(ytPair("key", "value")),
-                result.get("optionalDict"));
-
-        Map<String, Object> nullResult = convertSingleField(
-                "optionalDict",
-                new MapType(new VarCharType(), new VarCharType()),
-                schema,
-                null);
-        Assertions.assertEquals(YTree.nullNode(), nullResult.get("optionalDict"));
-    }
-
-    @Test
     void dictWithNonStringKeyTypeFails() {
         IllegalStateException exception = Assertions.assertThrows(
                 IllegalStateException.class,
