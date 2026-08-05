@@ -285,6 +285,11 @@ public class RowDataToYtListConverters implements Serializable {
     }
 
     private RowDataToYtMapConverter createMapConverter(MapType mapType, YTreeNode fieldNode) {
+        boolean dictField = isDictField(fieldNode);
+        if (dictField) {
+            validateDictKeyType(fieldNode);
+        }
+
         LogicalType keyType = mapType.getKeyType();
         if (!keyType.is(LogicalTypeRoot.CHAR) && !keyType.is(LogicalTypeRoot.VARCHAR)) {
             throw new IllegalStateException(String.format(
@@ -296,7 +301,7 @@ public class RowDataToYtListConverters implements Serializable {
         YTreeNode valueFieldNode = extractNestedFieldNode(fieldNode, "value");
         RowDataToYtMapConverter valueConvertor = createConverter(valueType, valueFieldNode);
         ArrayData.ElementGetter valueGetter = ArrayData.createElementGetter(valueType);
-        if (isDictField(fieldNode)) {
+        if (dictField) {
             log.info("Creating map converter as YT dict for field: {}", fieldNode);
             return createMapAsYtDictConverter(valueConvertor, valueGetter);
         } else {
@@ -306,40 +311,74 @@ public class RowDataToYtListConverters implements Serializable {
     }
 
     private boolean isDictField(YTreeNode fieldNode) {
-        return Optional.ofNullable(fieldNode)
+        return isType(extractEffectiveTypeV3Node(fieldNode), "dict");
+    }
+
+    private void validateDictKeyType(YTreeNode fieldNode) {
+        YTreeNode dictTypeNode = extractEffectiveTypeV3Node(fieldNode);
+        YTreeNode keyTypeNode = unwrapOptionalType(dictTypeNode.asMap().get("key"));
+        if (keyTypeNode == null || !keyTypeNode.isStringNode() || !"string".equals(keyTypeNode.stringValue())) {
+            throw new IllegalStateException(String.format(
+                    "Only YT dicts with string keys are supported. Got key type: %s in field: %s",
+                    keyTypeNode, fieldNode));
+        }
+    }
+
+    private YTreeNode extractEffectiveTypeV3Node(YTreeNode fieldNode) {
+        YTreeNode typeNode = Optional.ofNullable(fieldNode)
                 .filter(YTreeNode::isMapNode)
                 .map(YTreeNode::asMap)
                 .map(map -> map.get("type_v3"))
-                .filter(YTreeNode::isMapNode)
-                .map(YTreeNode::asMap)
-                .map(map -> map.get("type_name"))
-                .filter(YTreeNode::isStringNode)
-                .map(YTreeNode::stringValue)
-                .filter("dict"::equals)
-                .isPresent();
+                .orElse(null);
+        return unwrapOptionalType(typeNode);
+    }
+
+    private YTreeNode unwrapOptionalType(YTreeNode typeNode) {
+        YTreeNode current = typeNode;
+        while (isType(current, "optional")) {
+            current = current.asMap().get("item");
+        }
+        return current;
+    }
+
+    private boolean isType(YTreeNode typeNode, String expectedTypeName) {
+        if (typeNode == null || !typeNode.isMapNode()) {
+            return false;
+        }
+        YTreeNode typeNameNode = typeNode.asMap().get("type_name");
+        return typeNameNode != null
+                && typeNameNode.isStringNode()
+                && expectedTypeName.equals(typeNameNode.stringValue());
     }
 
     /**
-     * Extracts and wraps nested type_v3 schema so type-checking works for nested types.
+     * Extracts a nested type_v3 schema, unwrapping optional types along the way.
+     * Structured types remain under type_v3, while scalar types are exposed through the legacy
+     * type field expected by the scalar converters.
      *
      * For example, given a fieldNode like:
      * {name='dictOfDicts'; type_v3={type_name='dict'; key='string'; value={type_name='dict'; ...}}}
-     * calling extractNestedFieldNode(fieldNode, "value") returns:
-     * {type_v3={type_name='dict'; key='string'; value='string'}}
+     * calling extractNestedFieldNode(fieldNode, "value") returns the nested dict under type_v3.
+     * For a scalar value='date', it returns {type='date'}.
      */
     private YTreeNode extractNestedFieldNode(YTreeNode fieldNode, String childKey) {
-        return Optional.ofNullable(fieldNode)
-                .filter(YTreeNode::isMapNode)
-                .map(YTreeNode::asMap)
-                .map(map -> map.get("type_v3"))
-                .filter(YTreeNode::isMapNode)
-                .map(YTreeNode::asMap)
-                .map(map -> map.get(childKey))
-                .filter(YTreeNode::isMapNode)
-                .map(innerTypeV3 -> (YTreeNode) YTree.mapBuilder()
-                        .key("type_v3").value(innerTypeV3)
-                        .buildMap())
-                .orElse(null);
+        YTreeNode typeNode = extractEffectiveTypeV3Node(fieldNode);
+        if (typeNode == null || !typeNode.isMapNode()) {
+            return null;
+        }
+
+        YTreeNode childTypeNode = unwrapOptionalType(typeNode.asMap().get(childKey));
+        if (childTypeNode == null) {
+            return null;
+        }
+        if (childTypeNode.isStringNode()) {
+            return YTree.mapBuilder()
+                    .key(SCHEMA_TYPE_NAME).value(childTypeNode.stringValue())
+                    .buildMap();
+        }
+        return YTree.mapBuilder()
+                .key("type_v3").value(childTypeNode)
+                .buildMap();
     }
 
 

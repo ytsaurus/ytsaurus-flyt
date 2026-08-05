@@ -121,6 +121,59 @@ public class RowDataToYtListConverterTest {
     }
 
     @Test
+    void optionalDict() {
+        String schema = "{name='optionalDict'; type_v3={type_name='optional'; "
+                + "item={type_name='dict'; key='string'; value='string'}};}";
+        Map<String, Object> result = convertSingleField(
+                "optionalDict",
+                new MapType(new VarCharType(), new VarCharType()),
+                schema,
+                mapData("key", str("value")));
+
+        Assertions.assertEquals(
+                ytDict(ytPair("key", "value")),
+                result.get("optionalDict"));
+
+        Map<String, Object> nullResult = convertSingleField(
+                "optionalDict",
+                new MapType(new VarCharType(), new VarCharType()),
+                schema,
+                null);
+        Assertions.assertEquals(YTree.nullNode(), nullResult.get("optionalDict"));
+    }
+
+    @Test
+    void dictWithNonStringKeyTypeFails() {
+        IllegalStateException exception = Assertions.assertThrows(
+                IllegalStateException.class,
+                () -> convertSingleField(
+                        "dictField",
+                        new MapType(new VarCharType(), new VarCharType()),
+                        "{name='dictField'; type_v3={type_name='dict'; key='int64'; value='string'};}",
+                        mapData("key", str("value"))));
+
+        Assertions.assertTrue(exception.getMessage().contains("Only YT dicts with string keys are supported"));
+    }
+
+    @Test
+    void dictWithNativeDateValues() {
+        int epochDay = 1;
+        Map<String, Object> result = convertSingleField(
+                "dates",
+                new MapType(new VarCharType(), new DateType()),
+                "{name='dates'; type_v3={type_name='dict'; key='string'; value='date'};}",
+                mapData("tomorrow", epochDay));
+
+        YTreeNode expected = YTree.listBuilder()
+                .value(YTree.listBuilder()
+                        .value("tomorrow")
+                        .value(epochDay)
+                        .buildList())
+                .buildList();
+        Assertions.assertEquals(expected, result.get("dates"));
+    }
+
+    @Test
     void dictOfArrays() {
         Map<String, Object> result = convertSingleField(
                 "dictOfArrays",
