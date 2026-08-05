@@ -7,9 +7,12 @@ import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Queue;
 import java.util.Random;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -265,6 +268,43 @@ public class YtDynamicTableWriterPoolClientTest {
 
     @SneakyThrows
     @Test
+    void testAcquireAfterEvictionCreatesNewGenerationWithoutClosingLeasedWriter() {
+        var ticker = new MutableTicker();
+        Duration ttl = Duration.ofMillis(100);
+        var cache = YtDynamicTableWriterPool.makeTestCache(ttl, ticker, Runnable::run);
+        var oldWriter = Mockito.mock(YtDynamicTableWriter.class);
+        var newWriter = Mockito.mock(YtDynamicTableWriter.class);
+        var writers = List.of(oldWriter, newWriter);
+        var generation = new AtomicInteger();
+        var classifier = WriterClassifier.plain("recreated");
+
+        try (var pool = makePoolWithWriterFactory(cache,
+                ignored -> writers.get(generation.getAndIncrement()))) {
+            try (var oldLease = pool.acquire(classifier)) {
+                ticker.advance(ttl.multipliedBy(2));
+                cache.cleanUp();
+
+                Assertions.assertNull(cache.getIfPresent(classifier.getTableName()));
+                Mockito.verify(oldWriter, Mockito.never()).close();
+
+                pool.ensureWriter(classifier);
+
+                Assertions.assertEquals(2, generation.get());
+                Assertions.assertSame(newWriter, pool.getWriters().iterator().next());
+                Mockito.verify(oldWriter, Mockito.never()).close();
+                Mockito.verify(newWriter, Mockito.never()).close();
+            }
+
+            Mockito.verify(oldWriter, Mockito.times(1)).close();
+            Mockito.verify(newWriter, Mockito.never()).close();
+        }
+
+        Mockito.verify(oldWriter, Mockito.times(1)).close();
+        Mockito.verify(newWriter, Mockito.times(1)).close();
+    }
+
+    @SneakyThrows
+    @Test
     void testPoolCloseWaitsForActiveLeaseAndRejectsNewOperations() {
         var writer = Mockito.mock(YtDynamicTableWriter.class);
         var classifier = WriterClassifier.plain("active");
@@ -316,10 +356,11 @@ public class YtDynamicTableWriterPoolClientTest {
 
     @SneakyThrows
     @Test
-    void testEvictionCloseFailureIsReportedToNextOperation() {
+    void testAsynchronousEvictionCloseFailureIsReportedToNextOperation() {
         var ticker = new MutableTicker();
         Duration ttl = Duration.ofMillis(100);
-        var cache = YtDynamicTableWriterPool.makeTestCache(ttl, ticker, Runnable::run);
+        var removalExecutor = new QueuedExecutor();
+        var cache = YtDynamicTableWriterPool.makeTestCache(ttl, ticker, removalExecutor);
         var writer = Mockito.mock(YtDynamicTableWriter.class);
         Mockito.doThrow(new RuntimeException("close failed")).when(writer).close();
 
@@ -327,10 +368,46 @@ public class YtDynamicTableWriterPoolClientTest {
             pool.ensureWriter(WriterClassifier.plain("failing"));
             ticker.advance(ttl.multipliedBy(2));
             cache.cleanUp();
+            Mockito.verify(writer, Mockito.never()).close();
+
+            removalExecutor.runAll();
+            Mockito.verify(writer, Mockito.times(1)).close();
 
             RuntimeException error = Assertions.assertThrows(RuntimeException.class, pool::finish);
             Assertions.assertEquals("close failed", error.getMessage());
         }
+    }
+
+    @Test
+    void testPoolCloseReportsFailuresFromAllWriters() {
+        var classifier1 = WriterClassifier.plain("table1");
+        var classifier2 = WriterClassifier.plain("table2");
+        var writer1 = Mockito.mock(YtDynamicTableWriter.class);
+        var writer2 = Mockito.mock(YtDynamicTableWriter.class);
+        Mockito.doThrow(new RuntimeException("close failed 1")).when(writer1).close();
+        Mockito.doThrow(new RuntimeException("close failed 2")).when(writer2).close();
+        Map<String, YtDynamicTableWriter> writers = Map.of(
+                classifier1.getTableName(), writer1,
+                classifier2.getTableName(), writer2);
+        var pool = makePoolWithWriterFactory(null,
+                classifier -> writers.get(classifier.getTableName()));
+
+        pool.ensureWriter(classifier1);
+        pool.ensureWriter(classifier2);
+
+        RuntimeException error = Assertions.assertThrows(RuntimeException.class, pool::close);
+        List<String> messages = Stream.concat(Stream.of(error), Stream.of(error.getSuppressed()))
+                .map(Throwable::getMessage)
+                .collect(Collectors.toList());
+
+        Assertions.assertEquals(2, messages.size());
+        Assertions.assertTrue(messages.contains("close failed 1"));
+        Assertions.assertTrue(messages.contains("close failed 2"));
+        Mockito.verify(writer1, Mockito.times(1)).close();
+        Mockito.verify(writer2, Mockito.times(1)).close();
+
+        pool.close();
+        Mockito.verifyNoMoreInteractions(writer1, writer2);
     }
 
     @SneakyThrows
@@ -582,6 +659,22 @@ public class YtDynamicTableWriterPoolClientTest {
 
         void advance(Duration duration) {
             nanos.addAndGet(duration.toNanos());
+        }
+    }
+
+    private static final class QueuedExecutor implements Executor {
+        private final Queue<Runnable> tasks = new ConcurrentLinkedQueue<>();
+
+        @Override
+        public void execute(Runnable command) {
+            tasks.add(command);
+        }
+
+        void runAll() {
+            Runnable task;
+            while ((task = tasks.poll()) != null) {
+                task.run();
+            }
         }
     }
 }
