@@ -123,6 +123,25 @@ public class YsonRowDataErrorHandlingTest {
     }
 
     @Test
+    public void deserializeDictWithNullValueShouldFailExplicitly() {
+        YTreeNode yson = YTree.builder().beginMap()
+                .key("val").value(
+                        YTree.builder().beginList()
+                                .value(YTree.builder().beginList().value("k1").entity().buildList())
+                                .buildList())
+                .buildMap();
+
+        RowType schema = (RowType) ROW(FIELD("val", MAP(STRING(), INT()))).getLogicalType();
+
+        Assertions.assertThatThrownBy(
+                        () -> createDeserializer(schema).deserialize(toYsonBytes(yson)))
+                .isInstanceOf(IOException.class)
+                .hasRootCauseInstanceOf(YsonToRowDataConverters.YsonParseException.class)
+                .rootCause()
+                .hasMessageContaining("Null values in YT dict are not supported");
+    }
+
+    @Test
     public void deserializeMapFromScalarShouldFail() {
         YTreeNode yson = YTree.builder().beginMap().key("val").value("not_a_map").buildMap();
         RowType schema = (RowType) ROW(FIELD("val", MAP(STRING(), INT()))).getLogicalType();

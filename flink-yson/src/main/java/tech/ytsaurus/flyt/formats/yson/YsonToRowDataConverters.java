@@ -317,7 +317,14 @@ public class YsonToRowDataConverters implements Serializable {
                     if (node.isListNode() && node.listNode().size() == 2) {
                         YTreeListNode pairNode = node.listNode();
                         Object key = keyConverter.convert(pairNode.get(0));
-                        Object value = valueConverter.convert(pairNode.get(1));
+                        YTreeNode valueNode = pairNode.get(1);
+                        if (valueNode.isEntityNode()) {
+                            throw new YsonParseException(
+                                    "Null values in YT dict are not supported at index " + i
+                                            + ". Optional dict values are not supported."
+                            );
+                        }
+                        Object value = valueConverter.convert(valueNode);
                         result.put(key, value);
                     } else {
                         throw new YsonParseException(
