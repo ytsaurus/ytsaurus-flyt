@@ -69,9 +69,12 @@ public class RowDataToYtListConverters implements Serializable {
 
     public RowDataToYtListConverters.RowDataToYtMapConverter createConverter(LogicalType type, YTreeNode schemaNode) {
         YTreeNode effectiveSchemaNode = normalizeFieldNode(schemaNode);
-        boolean nullable = isNullableYtType(type, schemaNode);
+        boolean nullable = isNullable(type, schemaNode);
         return wrapIntoNullableConverter(
-                createNotNullConverter(type, effectiveSchemaNode), nullable, type, schemaNode);
+                createNotNullConverter(type, effectiveSchemaNode),
+                nullable,
+                type,
+                schemaNode);
     }
 
     private RowDataToYtMapConverter createNotNullConverter(LogicalType type, YTreeNode fieldNode) {
@@ -339,6 +342,14 @@ public class RowDataToYtListConverters implements Serializable {
                 .orElse(null);
     }
 
+    private YTreeNode extractTypeNode(YTreeNode fieldNode) {
+        return Optional.ofNullable(fieldNode)
+                .filter(YTreeNode::isMapNode)
+                .map(YTreeNode::asMap)
+                .map(map -> map.get(SCHEMA_TYPE_NAME))
+                .orElse(null);
+    }
+
     private YTreeNode normalizeFieldNode(YTreeNode fieldNode) {
         YTreeNode typeNode = extractTypeV3Node(fieldNode);
         if (typeNode == null) {
@@ -358,17 +369,26 @@ public class RowDataToYtListConverters implements Serializable {
         return createEffectiveFieldNode(typeNode);
     }
 
-    private boolean isNullableYtType(LogicalType flinkType, YTreeNode fieldNode) {
+    private boolean isNullable(LogicalType flinkType, YTreeNode fieldNode) {
         YTreeNode typeV3Node = extractTypeV3Node(fieldNode);
         if (typeV3Node != null) {
             return isType(typeV3Node, OPTIONAL_TYPE_NAME);
         }
-        if (fieldNode != null && fieldNode.isMapNode()
-                && fieldNode.asMap().get(SCHEMA_TYPE_NAME) != null) {
+        if (extractTypeNode(fieldNode) != null) {
             YTreeNode requiredNode = fieldNode.asMap().get("required");
             return requiredNode == null || !requiredNode.boolValue();
         }
         return flinkType.isNullable();
+    }
+
+    private String getNullabilitySource(YTreeNode fieldNode) {
+        if (extractTypeV3Node(fieldNode) != null) {
+            return "YT type_v3";
+        }
+        if (extractTypeNode(fieldNode) != null) {
+            return "YT schema 'required' attribute";
+        }
+        return "Flink logical type";
     }
 
     private YTreeNode createEffectiveFieldNode(YTreeNode typeNode) {
@@ -469,8 +489,9 @@ public class RowDataToYtListConverters implements Serializable {
             if (object == null) {
                 if (!nullable) {
                     throw new IllegalArgumentException(String.format(
-                            "Null value is not supported for non-optional YT type. Flink type: %s, YT field: %s",
-                            flinkType.asSummaryString(), fieldNode));
+                            "Null value is not supported for non-nullable type. Nullability source: %s. "
+                                    + "Flink type: %s, YT field: %s",
+                            getNullabilitySource(fieldNode), flinkType.asSummaryString(), fieldNode));
                 }
                 return YTree.nullNode();
             }
@@ -512,10 +533,7 @@ public class RowDataToYtListConverters implements Serializable {
     }
 
     private String getFieldTypeName(YTreeNode fieldNode) {
-        if (fieldNode == null || !fieldNode.isMapNode()) {
-            return "";
-        }
-        YTreeNode typeNode = fieldNode.asMap().get(SCHEMA_TYPE_NAME);
+        YTreeNode typeNode = extractTypeNode(fieldNode);
         if (typeNode == null || !typeNode.isStringNode()) {
             return "";
         }

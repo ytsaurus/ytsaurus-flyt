@@ -65,11 +65,12 @@ public class RowDataToYtListConverterTest {
                         null));
 
         Assertions.assertInstanceOf(IllegalArgumentException.class, exception.getCause());
-        Assertions.assertTrue(exception.getCause().getMessage().contains("non-optional YT type"));
+        Assertions.assertTrue(exception.getCause().getMessage().contains("non-nullable type"));
+        Assertions.assertTrue(exception.getCause().getMessage().contains("YT type_v3"));
     }
 
     @Test
-    void requiredLegacyNativeDateRejectsNull() {
+    void requiredNativeDateRejectsNull() {
         RuntimeException exception = Assertions.assertThrows(
                 RuntimeException.class,
                 () -> convertSingleField(
@@ -78,7 +79,8 @@ public class RowDataToYtListConverterTest {
                         null));
 
         Assertions.assertInstanceOf(IllegalArgumentException.class, exception.getCause());
-        Assertions.assertTrue(exception.getCause().getMessage().contains("non-optional YT type"));
+        Assertions.assertTrue(exception.getCause().getMessage().contains("non-nullable type"));
+        Assertions.assertTrue(exception.getCause().getMessage().contains("YT schema 'required' attribute"));
     }
 
     @Test
@@ -266,7 +268,8 @@ public class RowDataToYtListConverterTest {
                         mapData("unknown", null)));
 
         Assertions.assertInstanceOf(IllegalArgumentException.class, exception.getCause());
-        Assertions.assertTrue(exception.getCause().getMessage().contains("non-optional YT type"));
+        Assertions.assertTrue(exception.getCause().getMessage().contains("non-nullable type"));
+        Assertions.assertTrue(exception.getCause().getMessage().contains("YT type_v3"));
     }
 
     @Test
@@ -453,7 +456,8 @@ public class RowDataToYtListConverterTest {
                         arr(1, null)));
 
         Assertions.assertInstanceOf(IllegalArgumentException.class, exception.getCause());
-        Assertions.assertTrue(exception.getCause().getMessage().contains("non-optional YT type"));
+        Assertions.assertTrue(exception.getCause().getMessage().contains("non-nullable type"));
+        Assertions.assertTrue(exception.getCause().getMessage().contains("YT type_v3"));
     }
 
     @Test
@@ -490,6 +494,21 @@ public class RowDataToYtListConverterTest {
     }
 
     @Test
+    void ysonArrayWithNonNullableItemRejectsNull() {
+        RuntimeException exception = Assertions.assertThrows(
+                RuntimeException.class,
+                () -> convertSingleField(
+                        "arrayWithNulls",
+                        new ArrayType(new VarCharType(false, VarCharType.MAX_LENGTH)),
+                        "{name='arrayWithNulls'; type='yson';}",
+                        arr(str("value"), null)));
+
+        Assertions.assertInstanceOf(IllegalArgumentException.class, exception.getCause());
+        Assertions.assertTrue(exception.getCause().getMessage().contains("non-nullable type"));
+        Assertions.assertTrue(exception.getCause().getMessage().contains("Flink logical type"));
+    }
+
+    @Test
     void mapWithNullableTypes() {
         Map<String, Object> result = convertSingleField(
                 "mapWithNulls", new MapType(new VarCharType(), new VarCharType()),
@@ -499,6 +518,23 @@ public class RowDataToYtListConverterTest {
         Assertions.assertEquals(
                 ytMap("nullKey", null, "key", "value"),
                 result.get("mapWithNulls"));
+    }
+
+    @Test
+    void ysonMapWithNonNullableValueRejectsNull() {
+        RuntimeException exception = Assertions.assertThrows(
+                RuntimeException.class,
+                () -> convertSingleField(
+                        "mapWithNulls",
+                        new MapType(
+                                new VarCharType(),
+                                new VarCharType(false, VarCharType.MAX_LENGTH)),
+                        "{name='mapWithNulls'; type='yson';}",
+                        mapData("key", null)));
+
+        Assertions.assertInstanceOf(IllegalArgumentException.class, exception.getCause());
+        Assertions.assertTrue(exception.getCause().getMessage().contains("non-nullable type"));
+        Assertions.assertTrue(exception.getCause().getMessage().contains("Flink logical type"));
     }
 
     // ===== yson map (not dict) =====
