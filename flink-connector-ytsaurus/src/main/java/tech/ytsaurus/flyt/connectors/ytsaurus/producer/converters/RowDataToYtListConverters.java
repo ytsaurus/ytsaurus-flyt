@@ -69,7 +69,9 @@ public class RowDataToYtListConverters implements Serializable {
 
     public RowDataToYtListConverters.RowDataToYtMapConverter createConverter(LogicalType type, YTreeNode schemaNode) {
         YTreeNode effectiveSchemaNode = normalizeFieldNode(schemaNode);
-        return wrapIntoNullableConverter(createNotNullConverter(type, effectiveSchemaNode));
+        boolean nullable = isNullableYtType(type, schemaNode);
+        return wrapIntoNullableConverter(
+                createNotNullConverter(type, effectiveSchemaNode), nullable, type, schemaNode);
     }
 
     private RowDataToYtMapConverter createNotNullConverter(LogicalType type, YTreeNode fieldNode) {
@@ -342,21 +344,34 @@ public class RowDataToYtListConverters implements Serializable {
         if (typeNode == null) {
             return fieldNode;
         }
-        return createFieldNode(unwrapOptionalType(typeNode, fieldNode));
-    }
-
-    private YTreeNode unwrapOptionalType(YTreeNode typeNode, YTreeNode fieldNode) {
-        YTreeNode current = typeNode;
-        while (isType(current, OPTIONAL_TYPE_NAME)) {
-            current = current.asMap().get(ITEM_NAME);
-            if (current == null) {
+        if (isType(typeNode, OPTIONAL_TYPE_NAME)) {
+            YTreeNode itemTypeNode = typeNode.asMap().get(ITEM_NAME);
+            if (itemTypeNode == null) {
                 throw new IllegalStateException("YT optional type has no item in field: " + fieldNode);
             }
+            if (isType(itemTypeNode, OPTIONAL_TYPE_NAME)) {
+                throw new UnsupportedOperationException(
+                        "Nested YT optional<optional<T>> is not supported in field: " + fieldNode);
+            }
+            typeNode = itemTypeNode;
         }
-        return current;
+        return createEffectiveFieldNode(typeNode);
     }
 
-    private YTreeNode createFieldNode(YTreeNode typeNode) {
+    private boolean isNullableYtType(LogicalType flinkType, YTreeNode fieldNode) {
+        YTreeNode typeV3Node = extractTypeV3Node(fieldNode);
+        if (typeV3Node != null) {
+            return isType(typeV3Node, OPTIONAL_TYPE_NAME);
+        }
+        if (fieldNode != null && fieldNode.isMapNode()
+                && fieldNode.asMap().get(SCHEMA_TYPE_NAME) != null) {
+            YTreeNode requiredNode = fieldNode.asMap().get("required");
+            return requiredNode == null || !requiredNode.boolValue();
+        }
+        return flinkType.isNullable();
+    }
+
+    private YTreeNode createEffectiveFieldNode(YTreeNode typeNode) {
         if (typeNode.isStringNode()) {
             return YTree.mapBuilder()
                     .key(SCHEMA_TYPE_NAME).value(typeNode.stringValue())
@@ -381,13 +396,12 @@ public class RowDataToYtListConverters implements Serializable {
     }
 
     /**
-     * Extracts a nested type_v3 schema. Structured types remain under type_v3, while scalar types
-     * are exposed through the legacy type field expected by the scalar converters.
+     * Extracts a nested type_v3 schema. The child type is preserved under type_v3 so that its
+     * optionality can be handled by the child converter.
      *
      * For example, given a fieldNode like:
      * {name='dictOfDicts'; type_v3={type_name='dict'; key='string'; value={type_name='dict'; ...}}}
      * calling extractNestedFieldNode(fieldNode, "value") returns the nested dict under type_v3.
-     * For a scalar value='date', it returns {type='date'}.
      */
     private YTreeNode extractNestedFieldNode(YTreeNode fieldNode, String childKey) {
         YTreeNode typeNode = extractTypeV3Node(fieldNode);
@@ -399,7 +413,9 @@ public class RowDataToYtListConverters implements Serializable {
         if (childTypeNode == null) {
             return null;
         }
-        return createFieldNode(childTypeNode);
+        return YTree.mapBuilder()
+                .key(TYPE_V3_NAME).value(childTypeNode)
+                .buildMap();
     }
 
 
@@ -445,9 +461,17 @@ public class RowDataToYtListConverters implements Serializable {
     }
 
     private RowDataToYtListConverters.RowDataToYtMapConverter wrapIntoNullableConverter(
-            RowDataToYtListConverters.RowDataToYtMapConverter converter) {
+            RowDataToYtListConverters.RowDataToYtMapConverter converter,
+            boolean nullable,
+            LogicalType flinkType,
+            YTreeNode fieldNode) {
         return (reuse, object) -> {
             if (object == null) {
+                if (!nullable) {
+                    throw new IllegalArgumentException(String.format(
+                            "Null value is not supported for non-optional YT type. Flink type: %s, YT field: %s",
+                            flinkType.asSummaryString(), fieldNode));
+                }
                 return YTree.nullNode();
             }
 

@@ -365,15 +365,14 @@ public class YsonToRowDataConverters implements Serializable {
 
     private Object convertField(
             YsonToRowDataConverter fieldConverter, String fieldName, YTreeNode field) {
-        if (field == null || field.isEntityNode()) {
+        if (field == null) {
             if (failOnMissingField) {
                 throw new YsonParseException("Could not find field with name '" + fieldName + "'.");
             } else {
                 return null;
             }
-        } else {
-            return fieldConverter.convert(field);
         }
+        return fieldConverter.convert(field);
     }
 
     private YsonToRowDataConverter wrapIntoNullableConverter(

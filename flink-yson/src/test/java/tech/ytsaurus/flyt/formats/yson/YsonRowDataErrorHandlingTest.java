@@ -36,15 +36,29 @@ public class YsonRowDataErrorHandlingTest {
     }
 
     @Test
-    public void failOnEntityFieldWhenFailOnMissingEnabled() {
+    public void entityFieldIsNotMissing() throws Exception {
         YTreeNode yson = YTree.builder().beginMap().key("val").entity().buildMap();
         RowType schema = (RowType) ROW(FIELD("val", INT())).getLogicalType();
 
         YsonRowDataDeserializationSchema deserializer =
                 createDeserializer(schema, true, false, TimestampFormat.SQL);
 
+        Assertions.assertThat(deserializer.deserialize(toYsonBytes(yson)).isNullAt(0)).isTrue();
+    }
+
+    @Test
+    public void entityFieldFailsForNonNullableType() {
+        YTreeNode yson = YTree.builder().beginMap().key("val").entity().buildMap();
+        RowType schema = (RowType) ROW(FIELD("val", INT().notNull())).getLogicalType();
+
+        YsonRowDataDeserializationSchema deserializer =
+                createDeserializer(schema, false, false, TimestampFormat.SQL);
+
         Assertions.assertThatThrownBy(() -> deserializer.deserialize(toYsonBytes(yson)))
-                .isInstanceOf(IOException.class);
+                .isInstanceOf(IOException.class)
+                .hasRootCauseInstanceOf(YsonToRowDataConverters.YsonParseException.class)
+                .rootCause()
+                .hasMessageContaining("Null value is not supported for non-nullable type");
     }
 
     @Test

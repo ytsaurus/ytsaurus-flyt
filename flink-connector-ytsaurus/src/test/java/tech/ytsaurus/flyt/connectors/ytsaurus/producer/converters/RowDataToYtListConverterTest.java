@@ -56,14 +56,56 @@ public class RowDataToYtListConverterTest {
     }
 
     @Test
-    void optionalInsideOptional() {
-        Map<String, Object> result = convertSingleField(
-                "targetDate", new DateType(),
-                "{name='targetDate'; type_v3={type_name='optional'; "
-                        + "item={type_name='optional'; item='date'}};}",
-                1);
+    void nonOptionalNativeDateRejectsNull() {
+        RuntimeException exception = Assertions.assertThrows(
+                RuntimeException.class,
+                () -> convertSingleField(
+                        "targetDate", new DateType(),
+                        "{name='targetDate'; type_v3='date';}",
+                        null));
 
-        Assertions.assertEquals(1, result.get("targetDate"));
+        Assertions.assertInstanceOf(IllegalArgumentException.class, exception.getCause());
+        Assertions.assertTrue(exception.getCause().getMessage().contains("non-optional YT type"));
+    }
+
+    @Test
+    void requiredLegacyNativeDateRejectsNull() {
+        RuntimeException exception = Assertions.assertThrows(
+                RuntimeException.class,
+                () -> convertSingleField(
+                        "targetDate", new DateType(),
+                        "{name='targetDate'; type='date'; required=%true;}",
+                        null));
+
+        Assertions.assertInstanceOf(IllegalArgumentException.class, exception.getCause());
+        Assertions.assertTrue(exception.getCause().getMessage().contains("non-optional YT type"));
+    }
+
+    @Test
+    void optionalInsideOptionalFailsExplicitly() {
+        UnsupportedOperationException exception = Assertions.assertThrows(
+                UnsupportedOperationException.class,
+                () -> convertSingleField(
+                        "targetDate", new DateType(),
+                        "{name='targetDate'; type_v3={type_name='optional'; "
+                                + "item={type_name='optional'; item='date'}};}",
+                        1));
+
+        Assertions.assertTrue(exception.getMessage().contains("optional<optional<T>>"));
+    }
+
+    @Test
+    void optionalInsideOptionalInListFailsExplicitly() {
+        UnsupportedOperationException exception = Assertions.assertThrows(
+                UnsupportedOperationException.class,
+                () -> convertSingleField(
+                        "dates", new ArrayType(new DateType()),
+                        "{name='dates'; type_v3={type_name='list'; "
+                                + "item={type_name='optional'; "
+                                + "item={type_name='optional'; item='date'}}};}",
+                        arr(1)));
+
+        Assertions.assertTrue(exception.getMessage().contains("optional<optional<T>>"));
     }
 
     @Test
@@ -211,6 +253,20 @@ public class RowDataToYtListConverterTest {
                         ytPair("tomorrow", YTree.integerNode(1)),
                         ytPair("unknown", null)),
                 result.get("dates"));
+    }
+
+    @Test
+    void dictWithNonOptionalNativeDateValueRejectsNull() {
+        RuntimeException exception = Assertions.assertThrows(
+                RuntimeException.class,
+                () -> convertSingleField(
+                        "dates",
+                        new MapType(new VarCharType(), new DateType()),
+                        "{name='dates'; type_v3={type_name='dict'; key='string'; value='date'};}",
+                        mapData("unknown", null)));
+
+        Assertions.assertInstanceOf(IllegalArgumentException.class, exception.getCause());
+        Assertions.assertTrue(exception.getCause().getMessage().contains("non-optional YT type"));
     }
 
     @Test
@@ -385,6 +441,19 @@ public class RowDataToYtListConverterTest {
                 ytList(YTree.integerNode(1), null),
                 result.get("dates"));
         Assertions.assertEquals(YTree.nullNode(), nullResult.get("dates"));
+    }
+
+    @Test
+    void listWithNonOptionalNativeDateItemRejectsNull() {
+        RuntimeException exception = Assertions.assertThrows(
+                RuntimeException.class,
+                () -> convertSingleField(
+                        "dates", new ArrayType(new DateType()),
+                        "{name='dates'; type_v3={type_name='list'; item='date'};}",
+                        arr(1, null)));
+
+        Assertions.assertInstanceOf(IllegalArgumentException.class, exception.getCause());
+        Assertions.assertTrue(exception.getCause().getMessage().contains("non-optional YT type"));
     }
 
     @Test
