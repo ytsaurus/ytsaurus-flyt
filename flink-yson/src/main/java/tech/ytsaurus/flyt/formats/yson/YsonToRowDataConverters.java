@@ -70,7 +70,7 @@ public class YsonToRowDataConverters implements Serializable {
     }
 
     public YsonToRowDataConverter createConverter(LogicalType type) {
-        return wrapIntoNullableConverter(createNotNullConverter(type));
+        return wrapIntoNullableConverter(createNotNullConverter(type), type);
     }
 
     private YsonToRowDataConverter createNotNullConverter(LogicalType type) {
@@ -317,14 +317,7 @@ public class YsonToRowDataConverters implements Serializable {
                     if (node.isListNode() && node.listNode().size() == 2) {
                         YTreeListNode pairNode = node.listNode();
                         Object key = keyConverter.convert(pairNode.get(0));
-                        YTreeNode valueNode = pairNode.get(1);
-                        if (valueNode.isEntityNode()) {
-                            throw new YsonParseException(
-                                    "Null values in YT dict are not supported at index " + i
-                                            + ". Optional dict values are not supported."
-                            );
-                        }
-                        Object value = valueConverter.convert(valueNode);
+                        Object value = valueConverter.convert(pairNode.get(1));
                         result.put(key, value);
                     } else {
                         throw new YsonParseException(
@@ -383,10 +376,15 @@ public class YsonToRowDataConverters implements Serializable {
         }
     }
 
-    private YsonToRowDataConverter wrapIntoNullableConverter(YsonToRowDataConverter converter) {
+    private YsonToRowDataConverter wrapIntoNullableConverter(
+            YsonToRowDataConverter converter, LogicalType type) {
         return yTreeNode -> {
-            if (yTreeNode == null) {
-                return null;
+            if (yTreeNode == null || yTreeNode.isEntityNode()) {
+                if (type.isNullable()) {
+                    return null;
+                }
+                throw new YsonParseException(
+                        "Null value is not supported for non-nullable type: " + type.asSummaryString());
             }
             try {
                 return converter.convert(yTreeNode);

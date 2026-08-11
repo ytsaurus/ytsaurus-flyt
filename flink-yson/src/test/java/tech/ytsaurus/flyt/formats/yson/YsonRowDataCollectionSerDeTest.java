@@ -66,6 +66,25 @@ public class YsonRowDataCollectionSerDeTest {
     }
 
     @Test
+    public void deserializeArrayWithNullItems() {
+        RowData row = deserializeVal(ARRAY(INT()),
+                YTree.builder().beginList().value(1).entity().value(3).buildList());
+
+        Assertions.assertThat(row.getArray(0).getInt(0)).isEqualTo(1);
+        Assertions.assertThat(row.getArray(0).isNullAt(1)).isTrue();
+        Assertions.assertThat(row.getArray(0).getInt(2)).isEqualTo(3);
+    }
+
+    @Test
+    public void deserializeArrayWithNullItemFailsForNonNullableElementType() {
+        Assertions.assertThatThrownBy(() -> deserializeVal(ARRAY(INT().notNull()),
+                        YTree.builder().beginList().value(1).entity().buildList()))
+                .hasRootCauseInstanceOf(YsonToRowDataConverters.YsonParseException.class)
+                .rootCause()
+                .hasMessageContaining("Null value is not supported for non-nullable type");
+    }
+
+    @Test
     public void deserializeArrayOfMaps() {
         // [{"k1":1}, {"k2":2}]
         RowData row = deserializeVal(ARRAY(MAP(STRING(), INT())),
@@ -134,6 +153,23 @@ public class YsonRowDataCollectionSerDeTest {
 
         Map<String, Integer> result = toJavaStringIntegerMap(row.getMap(0));
         Assertions.assertThat(result).containsEntry("k1", 10).containsEntry("k2", 20);
+    }
+
+    @Test
+    public void deserializeDictWithNullValue() {
+        RowData row = deserializeVal(MAP(STRING(), INT()),
+                YTree.builder().beginList()
+                        .value(YTree.builder().beginList().value("present").value(1).buildList())
+                        .value(YTree.builder().beginList().value("missing").entity().buildList())
+                        .buildList());
+
+        MapData map = row.getMap(0);
+        Map<String, Integer> keyIndexes = new HashMap<>();
+        for (int i = 0; i < map.size(); i++) {
+            keyIndexes.put(map.keyArray().getString(i).toString(), i);
+        }
+        Assertions.assertThat(map.valueArray().getInt(keyIndexes.get("present"))).isEqualTo(1);
+        Assertions.assertThat(map.valueArray().isNullAt(keyIndexes.get("missing"))).isTrue();
     }
 
     // ===== NESTED MAP / DICT =====

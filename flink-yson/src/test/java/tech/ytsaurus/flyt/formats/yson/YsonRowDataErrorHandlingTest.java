@@ -123,7 +123,7 @@ public class YsonRowDataErrorHandlingTest {
     }
 
     @Test
-    public void deserializeDictWithNullValueShouldFailExplicitly() {
+    public void deserializeDictWithNullValueShouldFailForNonNullableValueType() {
         YTreeNode yson = YTree.builder().beginMap()
                 .key("val").value(
                         YTree.builder().beginList()
@@ -131,14 +131,14 @@ public class YsonRowDataErrorHandlingTest {
                                 .buildList())
                 .buildMap();
 
-        RowType schema = (RowType) ROW(FIELD("val", MAP(STRING(), INT()))).getLogicalType();
+        RowType schema = (RowType) ROW(FIELD("val", MAP(STRING(), INT().notNull()))).getLogicalType();
 
         Assertions.assertThatThrownBy(
                         () -> createDeserializer(schema).deserialize(toYsonBytes(yson)))
                 .isInstanceOf(IOException.class)
                 .hasRootCauseInstanceOf(YsonToRowDataConverters.YsonParseException.class)
                 .rootCause()
-                .hasMessageContaining("Null values in YT dict are not supported");
+                .hasMessageContaining("Null value is not supported for non-nullable type");
     }
 
     @Test

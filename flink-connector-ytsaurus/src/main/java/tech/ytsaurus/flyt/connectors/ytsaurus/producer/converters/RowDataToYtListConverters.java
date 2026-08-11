@@ -52,6 +52,10 @@ public class RowDataToYtListConverters implements Serializable {
     private static final long serialVersionUID = 1L;
 
     private static final Set<String> EXPLICIT_YSON_TYPES = Set.of(TypeName.Yson.getWireName().toLowerCase(), "any");
+    private static final String TYPE_V3_NAME = "type_v3";
+    private static final String TYPE_NAME = "type_name";
+    private static final String OPTIONAL_TYPE_NAME = "optional";
+    private static final String ITEM_NAME = "item";
 
     private final TimestampFormat timestampFormat;
 
@@ -64,7 +68,8 @@ public class RowDataToYtListConverters implements Serializable {
     }
 
     public RowDataToYtListConverters.RowDataToYtMapConverter createConverter(LogicalType type, YTreeNode schemaNode) {
-        return wrapIntoNullableConverter(createNotNullConverter(type, schemaNode));
+        YTreeNode effectiveSchemaNode = normalizeFieldNode(schemaNode);
+        return wrapIntoNullableConverter(createNotNullConverter(type, effectiveSchemaNode));
     }
 
     private RowDataToYtMapConverter createNotNullConverter(LogicalType type, YTreeNode fieldNode) {
@@ -270,7 +275,7 @@ public class RowDataToYtListConverters implements Serializable {
 
     private RowDataToYtMapConverter createArrayConverter(ArrayType arrayType, YTreeNode fieldNode) {
         ArrayData.ElementGetter elementGetter = ArrayData.createElementGetter(arrayType.getElementType());
-        YTreeNode itemFieldNode = extractNestedFieldNode(fieldNode, "item");
+        YTreeNode itemFieldNode = extractNestedFieldNode(fieldNode, ITEM_NAME);
         RowDataToYtMapConverter elementConvertor = createConverter(arrayType.getElementType(), itemFieldNode);
         return (reuse, data) -> {
             YTreeBuilder builder = YTree.listBuilder();
@@ -328,15 +333,48 @@ public class RowDataToYtListConverters implements Serializable {
         return Optional.ofNullable(fieldNode)
                 .filter(YTreeNode::isMapNode)
                 .map(YTreeNode::asMap)
-                .map(map -> map.get("type_v3"))
+                .map(map -> map.get(TYPE_V3_NAME))
                 .orElse(null);
+    }
+
+    private YTreeNode normalizeFieldNode(YTreeNode fieldNode) {
+        YTreeNode typeNode = extractTypeV3Node(fieldNode);
+        if (typeNode == null) {
+            return fieldNode;
+        }
+        return createFieldNode(unwrapOptionalType(typeNode, fieldNode));
+    }
+
+    private YTreeNode unwrapOptionalType(YTreeNode typeNode, YTreeNode fieldNode) {
+        YTreeNode current = typeNode;
+        while (isType(current, OPTIONAL_TYPE_NAME)) {
+            current = current.asMap().get(ITEM_NAME);
+            if (current == null) {
+                throw new IllegalStateException("YT optional type has no item in field: " + fieldNode);
+            }
+        }
+        return current;
+    }
+
+    private YTreeNode createFieldNode(YTreeNode typeNode) {
+        if (typeNode.isStringNode()) {
+            return YTree.mapBuilder()
+                    .key(SCHEMA_TYPE_NAME).value(typeNode.stringValue())
+                    .buildMap();
+        }
+        if (typeNode.isMapNode()) {
+            return YTree.mapBuilder()
+                    .key(TYPE_V3_NAME).value(typeNode)
+                    .buildMap();
+        }
+        throw new IllegalStateException("Unsupported YT type_v3 node: " + typeNode);
     }
 
     private boolean isType(YTreeNode typeNode, String expectedTypeName) {
         if (typeNode == null || !typeNode.isMapNode()) {
             return false;
         }
-        YTreeNode typeNameNode = typeNode.asMap().get("type_name");
+        YTreeNode typeNameNode = typeNode.asMap().get(TYPE_NAME);
         return typeNameNode != null
                 && typeNameNode.isStringNode()
                 && expectedTypeName.equals(typeNameNode.stringValue());
@@ -361,14 +399,7 @@ public class RowDataToYtListConverters implements Serializable {
         if (childTypeNode == null) {
             return null;
         }
-        if (childTypeNode.isStringNode()) {
-            return YTree.mapBuilder()
-                    .key(SCHEMA_TYPE_NAME).value(childTypeNode.stringValue())
-                    .buildMap();
-        }
-        return YTree.mapBuilder()
-                .key("type_v3").value(childTypeNode)
-                .buildMap();
+        return createFieldNode(childTypeNode);
     }
 
 

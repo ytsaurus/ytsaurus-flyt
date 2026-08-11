@@ -43,6 +43,30 @@ public class RowDataToYtListConverterTest {
     }
 
     @Test
+    void optionalNativeDate() {
+        String schema = "{name='targetDate'; type_v3={type_name='optional'; item='date'};}";
+
+        Map<String, Object> result = convertSingleField(
+                "targetDate", new DateType(), schema, 1);
+        Map<String, Object> nullResult = convertSingleField(
+                "targetDate", new DateType(), schema, null);
+
+        Assertions.assertEquals(1, result.get("targetDate"));
+        Assertions.assertEquals(YTree.nullNode(), nullResult.get("targetDate"));
+    }
+
+    @Test
+    void optionalInsideOptional() {
+        Map<String, Object> result = convertSingleField(
+                "targetDate", new DateType(),
+                "{name='targetDate'; type_v3={type_name='optional'; "
+                        + "item={type_name='optional'; item='date'}};}",
+                1);
+
+        Assertions.assertEquals(1, result.get("targetDate"));
+    }
+
+    @Test
     void nativeDatetime() {
         Map<String, Object> result = convertSingleField(
                 "targetDatetime", new TimestampType(),
@@ -121,6 +145,28 @@ public class RowDataToYtListConverterTest {
     }
 
     @Test
+    void optionalDict() {
+        String schema = "{name='optionalDict'; type_v3={type_name='optional'; "
+                + "item={type_name='dict'; key='string'; value='string'}};}";
+
+        Map<String, Object> result = convertSingleField(
+                "optionalDict",
+                new MapType(new VarCharType(), new VarCharType()),
+                schema,
+                mapData("key", str("value")));
+        Map<String, Object> nullResult = convertSingleField(
+                "optionalDict",
+                new MapType(new VarCharType(), new VarCharType()),
+                schema,
+                null);
+
+        Assertions.assertEquals(
+                ytDict(ytPair("key", "value")),
+                result.get("optionalDict"));
+        Assertions.assertEquals(YTree.nullNode(), nullResult.get("optionalDict"));
+    }
+
+    @Test
     void dictWithNonStringKeyTypeFails() {
         IllegalStateException exception = Assertions.assertThrows(
                 IllegalStateException.class,
@@ -149,6 +195,22 @@ public class RowDataToYtListConverterTest {
                         .buildList())
                 .buildList();
         Assertions.assertEquals(expected, result.get("dates"));
+    }
+
+    @Test
+    void dictWithOptionalNativeDateValues() {
+        Map<String, Object> result = convertSingleField(
+                "dates",
+                new MapType(new VarCharType(), new DateType()),
+                "{name='dates'; type_v3={type_name='dict'; key='string'; "
+                        + "value={type_name='optional'; item='date'}};}",
+                mapData("tomorrow", 1, "unknown", null));
+
+        Assertions.assertEquals(
+                ytDict(
+                        ytPair("tomorrow", YTree.integerNode(1)),
+                        ytPair("unknown", null)),
+                result.get("dates"));
     }
 
     @Test
@@ -308,6 +370,43 @@ public class RowDataToYtListConverterTest {
     }
 
     // ===== nullable collections =====
+
+    @Test
+    void optionalListWithOptionalNativeDateItems() {
+        String schema = "{name='dates'; type_v3={type_name='optional'; "
+                + "item={type_name='list'; item={type_name='optional'; item='date'}}};}";
+
+        Map<String, Object> result = convertSingleField(
+                "dates", new ArrayType(new DateType()), schema, arr(1, null));
+        Map<String, Object> nullResult = convertSingleField(
+                "dates", new ArrayType(new DateType()), schema, null);
+
+        Assertions.assertEquals(
+                ytList(YTree.integerNode(1), null),
+                result.get("dates"));
+        Assertions.assertEquals(YTree.nullNode(), nullResult.get("dates"));
+    }
+
+    @Test
+    void optionalsNestedAcrossDictAndList() {
+        Map<String, Object> result = convertSingleField(
+                "items",
+                new MapType(new VarCharType(),
+                        new ArrayType(new MapType(new VarCharType(), new DateType()))),
+                "{name='items'; type_v3={type_name='dict'; key='string'; "
+                        + "value={type_name='optional'; item={type_name='list'; "
+                        + "item={type_name='optional'; item={type_name='dict'; key='string'; "
+                        + "value={type_name='optional'; item='date'}}}}}};}",
+                mapData("dates", arr(mapData("known", 1, "unknown", null), null)));
+
+        Assertions.assertEquals(
+                ytDict(ytPair("dates", ytList(
+                        ytDict(
+                                ytPair("known", YTree.integerNode(1)),
+                                ytPair("unknown", null)),
+                        null))),
+                result.get("items"));
+    }
 
     @Test
     void arrayWithNullableTypes() {
