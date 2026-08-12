@@ -66,7 +66,6 @@ public class RowDataToYtListConverterTest {
 
         Assertions.assertInstanceOf(IllegalArgumentException.class, exception.getCause());
         Assertions.assertTrue(exception.getCause().getMessage().contains("non-nullable type"));
-        Assertions.assertTrue(exception.getCause().getMessage().contains("YT type_v3"));
     }
 
     @Test
@@ -80,7 +79,6 @@ public class RowDataToYtListConverterTest {
 
         Assertions.assertInstanceOf(IllegalArgumentException.class, exception.getCause());
         Assertions.assertTrue(exception.getCause().getMessage().contains("non-nullable type"));
-        Assertions.assertTrue(exception.getCause().getMessage().contains("YT schema 'required' attribute"));
     }
 
     @Test
@@ -269,7 +267,6 @@ public class RowDataToYtListConverterTest {
 
         Assertions.assertInstanceOf(IllegalArgumentException.class, exception.getCause());
         Assertions.assertTrue(exception.getCause().getMessage().contains("non-nullable type"));
-        Assertions.assertTrue(exception.getCause().getMessage().contains("YT type_v3"));
     }
 
     @Test
@@ -457,7 +454,6 @@ public class RowDataToYtListConverterTest {
 
         Assertions.assertInstanceOf(IllegalArgumentException.class, exception.getCause());
         Assertions.assertTrue(exception.getCause().getMessage().contains("non-nullable type"));
-        Assertions.assertTrue(exception.getCause().getMessage().contains("YT type_v3"));
     }
 
     @Test
@@ -505,7 +501,6 @@ public class RowDataToYtListConverterTest {
 
         Assertions.assertInstanceOf(IllegalArgumentException.class, exception.getCause());
         Assertions.assertTrue(exception.getCause().getMessage().contains("non-nullable type"));
-        Assertions.assertTrue(exception.getCause().getMessage().contains("Flink logical type"));
     }
 
     @Test
@@ -534,7 +529,6 @@ public class RowDataToYtListConverterTest {
 
         Assertions.assertInstanceOf(IllegalArgumentException.class, exception.getCause());
         Assertions.assertTrue(exception.getCause().getMessage().contains("non-nullable type"));
-        Assertions.assertTrue(exception.getCause().getMessage().contains("Flink logical type"));
     }
 
     // ===== yson map (not dict) =====

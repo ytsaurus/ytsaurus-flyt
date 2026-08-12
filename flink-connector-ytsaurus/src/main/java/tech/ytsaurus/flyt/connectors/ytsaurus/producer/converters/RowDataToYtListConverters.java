@@ -381,16 +381,6 @@ public class RowDataToYtListConverters implements Serializable {
         return flinkType.isNullable();
     }
 
-    private String getNullabilitySource(YTreeNode fieldNode) {
-        if (extractTypeV3Node(fieldNode) != null) {
-            return "YT type_v3";
-        }
-        if (extractTypeNode(fieldNode) != null) {
-            return "YT schema 'required' attribute";
-        }
-        return "Flink logical type";
-    }
-
     private YTreeNode createEffectiveFieldNode(YTreeNode typeNode) {
         if (typeNode.isStringNode()) {
             return YTree.mapBuilder()
@@ -489,9 +479,8 @@ public class RowDataToYtListConverters implements Serializable {
             if (object == null) {
                 if (!nullable) {
                     throw new IllegalArgumentException(String.format(
-                            "Null value is not supported for non-nullable type. Nullability source: %s. "
-                                    + "Flink type: %s, YT field: %s",
-                            getNullabilitySource(fieldNode), flinkType.asSummaryString(), fieldNode));
+                            "Null value is not supported for non-nullable type. Flink type: %s, YT field: %s",
+                            flinkType.asSummaryString(), fieldNode));
                 }
                 return YTree.nullNode();
             }
