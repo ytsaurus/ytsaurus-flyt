@@ -16,6 +16,7 @@ This project contains the Apache Flink Connector for working with [YTsaurus Sort
 - [Table Resharding](#table-resharding)
 - [Lookup Operations](#lookup-operations)
 - [Examples](#examples)
+- [Queue Source (Direct Mode)](#queue-source-direct-mode)
 
 ## Overview
 
@@ -23,8 +24,8 @@ The Apache Flink YTsaurus Connector enables seamless integration between Apache 
 
 ## Supported Flink APIs
 
-- **Stream API** - Data writing is supported
-- **Table API/SQL** - Bounded stream reading, writing, and lookup operations are supported
+- **Stream API** - Data writing and direct queue reading are supported
+- **Table API/SQL** - Bounded table reading, writing, lookup operations, and unbounded queue reading are supported
 
 ## Features
 
@@ -331,7 +332,7 @@ Credentials are read from environment variables:
 ```
 
 Set the following environment variables:
-- `YT_USER` - YTsaurus username
+- `YT_USERNAME` - YTsaurus username
 - `YT_TOKEN` - YTsaurus token
 
 ### Custom Authentication
@@ -672,6 +673,78 @@ CREATE TABLE multi_cluster_table (
     ]'
 );
 ```
+
+## Queue Source (Direct Mode)
+
+The `ytsaurus-queue` connector continuously reads an ordered dynamic table without a registered YTsaurus consumer. Offsets are owned by Flink source state and restored from checkpoints. It is a source-only connector: sink, lookup, metadata columns, and multi-cluster modes are not supported.
+
+The table schema comes from the Flink DDL. Queue rows are YSON maps, so this source supports only the insert-only `format = 'yson'` decoder. There is no YSON table schema option. Install the [Flink YSON format](../flink-yson/README.md) alongside the connector.
+
+The `env` credentials provider reads `YT_USERNAME` and `YT_TOKEN`. With `credentials-source = 'options'`, both `username` and `token` must be set in the table options.
+
+For the DataStream API, construct the FLIP-27 source directly:
+
+```java
+YtQueueSource<String> source = YtQueueSource.<String>builder()
+        .proxy("localhost:9013")
+        .queuePath("//home/path/to/queue")
+        .credentialsProvider(new EnvCredentialsProvider())
+        .recordDeserializer((row, schema) -> row.toYTreeMap(schema, true).toString())
+        .producedType(Types.STRING)
+        .startupMode(YtQueueStartupMode.LATEST)
+        .workerCount(4)
+        .bufferCapacity(8)
+        .build();
+
+env.fromSource(source, WatermarkStrategy.noWatermarks(), "ytsaurus-queue");
+```
+
+`EARLIEST` starts each partition at the earliest row that has not already been trimmed. `LATEST` starts each partition at its current tail, so only rows appended after that partition is initialized are read. A partition discovered after the job has started is initialized according to the same startup mode; with `LATEST`, it starts at its tail at discovery time. The checkpoint stores the next unread offset after the last emitted row, so restored offsets remain authoritative and prefetched but unprocessed rows are replayed after recovery. Queue batches contain consecutive rows: a record offset is the batch start offset plus its position, and the next pull starts at the batch finish offset. New partitions are discovered automatically. All YTsaurus requests use the configured queue path. Resharding or recreating a queue while the source is running, or restoring from state created before either operation, is not supported. Stop the job before changing the queue and make sure that the selected restore or startup offsets are valid for the new queue.
+
+`SPECIFIC` accepts one offset per partition. The list position is the partition index: `10;20;30` starts partitions 0, 1, and 2 at offsets 10, 20, and 30. Extra values are reserved for partitions discovered later. Checkpointed offsets remain authoritative after restore; configured offsets are used only for partitions that have not been initialized yet. Discovery fails if a partition has no corresponding configured offset.
+
+Each source reader uses one shared YTsaurus client and pulls assigned partitions in background workers. The configured worker count is a maximum: a reader never starts more workers than it has assigned partitions. `fetch()` returns prefetched batches from a bounded `LinkedBlockingQueue`; its capacity is measured in batches, not rows. The capacity limits this internal queue, while each worker can additionally hold one in-flight or completed batch and Flink maintains its own handover buffer. Pausing a partition stops new pulls, but batches prefetched before the pause can still be emitted.
+
+This first vertical slice implements direct mode only. The reader and checkpoint state are independent of the pull mechanism, so consumer mode can reuse them with a `PullConsumer` implementation and checkpoint-complete offset committer.
+
+```sql
+CREATE TABLE queue_events (
+    event_id STRING,
+    payload STRING,
+    created_at TIMESTAMP(3)
+) WITH (
+    'connector' = 'ytsaurus-queue',
+    'proxy' = 'localhost:9013',
+    'path' = '//tmp/events_queue',
+    'credentials-source' = 'env',
+    'format' = 'yson',
+    'scan.startup.mode' = 'EARLIEST'
+);
+```
+
+### Queue Source Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `proxy` | String | - | Required YTsaurus RPC proxy address |
+| `path` | String | - | Required queue path |
+| `credentials-source` | String | - | Required credentials provider identifier |
+| `format` | String | - | Required value: `yson` (insert-only) |
+| `username` | String | - | Username for the `options` credentials provider |
+| `token` | String | - | Token for the `options` credentials provider |
+| `scan.startup.mode` | Enum | `EARLIEST` | Startup mode: `EARLIEST`, `LATEST`, or `SPECIFIC` |
+| `scan.startup.specific-offsets` | List&lt;Long&gt; | - | Semicolon-separated nonnegative offsets indexed by partition; required only for `SPECIFIC` |
+| `scan.trimmed-offset-policy` | Enum | `FAIL` | Behavior when an offset has been trimmed; the MVP supports `FAIL` |
+| `scan.max-row-count` | Integer | `1000` | Maximum rows requested by one partition poll |
+| `scan.max-data-weight` | Memory size | `16 mb` | Maximum data weight requested by one partition poll |
+| `scan.poll-backoff` | Duration | `250 ms` | Delay after an empty poll |
+| `scan.async.worker-count` | Integer | `1` | Maximum background pull workers per source reader; capped by assigned partitions |
+| `scan.async.buffer-capacity` | Integer | `2` | Capacity of the internal prefetch queue, measured in batches |
+| `scan.partition-discovery.interval` | Duration | `60 s` | Interval for discovering new queue partitions |
+| `scan.parallelism` | Integer | - | Optional Flink source parallelism |
+| `yson.fail-on-missing-field` | Boolean | `false` | Fail when a declared field is absent in a queue row |
+| `yson.ignore-parse-errors` | Boolean | `false` | Set invalid fields to null and skip rows that cannot be parsed |
+| `yson.timestamp-format.standard` | String | `SQL` | Timestamp representation: `SQL` or `ISO-8601` |
 
 ## Contributing
 
