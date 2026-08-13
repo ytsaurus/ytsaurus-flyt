@@ -20,6 +20,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Supplier;
 
 import javax.annotation.Nullable;
@@ -136,6 +137,15 @@ public class YtDynamicTableWriter implements Serializable {
 
     private transient Lock flushModificationLock;
 
+    private transient ReentrantReadWriteLock lifecycleLock;
+
+    private transient boolean acceptingWrites;
+
+    private transient boolean closeSucceeded;
+
+    @Nullable
+    private transient RuntimeException closeFailure;
+
     private transient ScheduledExecutorService transactionCommitter;
 
     private transient ScheduledExecutorService modificationFlusher;
@@ -206,6 +216,10 @@ public class YtDynamicTableWriter implements Serializable {
 
 
     public void open() {
+        lifecycleLock = new ReentrantReadWriteLock();
+        acceptingWrites = true;
+        closeSucceeded = false;
+        closeFailure = null;
         try {
             log.info("Open writer for table: {}", path.getFullPath());
 
@@ -398,72 +412,98 @@ public class YtDynamicTableWriter implements Serializable {
     }
 
     public void write(RowData record) {
-        dataMetrics.onRecord(record);
+        lifecycleLock.readLock().lock();
+        try {
+            checkAcceptingWrites();
+            dataMetrics.onRecord(record);
 
-        if (modificationSize() == ytWriterOptions.getRowsInModificationLimit()) {
+            if (modificationSize() == ytWriterOptions.getRowsInModificationLimit()) {
+                flushModificationLock.lock();
+                try {
+                    flushModification();
+                } finally {
+                    flushModificationLock.unlock();
+                }
+            }
+            if (rowsInTransaction.get() >= ytWriterOptions.getRowsInTransactionLimit()) {
+                commitTransactionLock.lock();
+                try {
+                    if (rowsInTransaction.get() >= ytWriterOptions.getRowsInTransactionLimit()) {
+                        commitTransaction();
+                    }
+                } finally {
+                    commitTransactionLock.unlock();
+                }
+            }
             flushModificationLock.lock();
             try {
-                flushModification();
+                final Map<String, ? extends Serializable> row = createRow(record);
+                modificationBuffer.addInsert(row);
+                unflushedRows.add(row);
+                rowsInBuffer.incrementAndGet();
             } finally {
                 flushModificationLock.unlock();
             }
-        }
-        if (rowsInTransaction.get() >= ytWriterOptions.getRowsInTransactionLimit()) {
-            commitTransactionLock.lock();
-            try {
-                if (rowsInTransaction.get() >= ytWriterOptions.getRowsInTransactionLimit()) {
-                    commitTransaction();
-                }
-            } finally {
-                commitTransactionLock.unlock();
-            }
-        }
-        flushModificationLock.lock();
-        try {
-            final Map<String, ? extends Serializable> row = createRow(record);
-            modificationBuffer.addInsert(row);
-            unflushedRows.add(row);
-            rowsInBuffer.incrementAndGet();
         } finally {
-            flushModificationLock.unlock();
+            lifecycleLock.readLock().unlock();
         }
     }
 
     public void finish() {
-        log.info("Waiting for finish writer for table {}", path.getFullPath());
-        flushData();
-        log.info("Successful finish writer for table {}", path.getFullPath());
+        lifecycleLock.writeLock().lock();
+        try {
+            checkAcceptingWrites();
+            log.info("Waiting for finish writer for table {}", path.getFullPath());
+            flushData();
+            log.info("Successful finish writer for table {}", path.getFullPath());
+        } finally {
+            lifecycleLock.writeLock().unlock();
+        }
     }
 
     public void close() {
-        log.info("Begin closing writer {}", path.getFullPath());
-        List<Exception> errors = new ArrayList<>();
-
-        List<Exception> errorsAsync = closeAsyncTasks();
-
+        lifecycleLock.writeLock().lock();
         try {
-            flushData();
-            log.info("Data flushed successfully for writer {}", path.getFullPath());
-        } catch (Exception e) {
-            log.error("Error flushing data. {}", path.getFullPath(), e);
-            errors.add(e);
+            if (closeSucceeded) {
+                return;
+            }
+            if (closeFailure != null) {
+                throw closeFailure;
+            }
+            acceptingWrites = false;
+            log.info("Begin closing writer {}", path.getFullPath());
+            List<Exception> errors = new ArrayList<>();
+
+            List<Exception> errorsAsync = closeAsyncTasks();
+
+            try {
+                flushData();
+                log.info("Data flushed successfully for writer {}", path.getFullPath());
+            } catch (Exception e) {
+                log.error("Error flushing data. {}", path.getFullPath(), e);
+                errors.add(e);
+            }
+
+            List<Exception> errorsResources = closeResources();
+
+            errors.addAll(errorsAsync);
+            errors.addAll(errorsResources);
+            if (!errors.isEmpty()) {
+                Exception root = errors.get(0);
+                errors.stream()
+                        .skip(1)
+                        .forEach(root::addSuppressed);
+
+                log.error("Error closing yt writer: {}", path.getFullPath());
+                closeFailure = new RuntimeException(root);
+                throw closeFailure;
+            }
+
+            closeSucceeded = true;
+            log.info("Writer {} closed successfully", path.getFullPath());
+        } finally {
+            lifecycleLock.writeLock().unlock();
         }
-
-        List<Exception> errorsResources = closeResources();
-
-        errors.addAll(errorsAsync);
-        errors.addAll(errorsResources);
-        if (!errors.isEmpty()) {
-            Exception root = errors.get(0);
-            errors.stream()
-                    .skip(1)
-                    .forEach(root::addSuppressed);
-
-            log.error("Error closing yt writer: {}", path.getFullPath());
-            throw new RuntimeException(root);
-        }
-
-        log.info("Writer {} closed successfully", path.getFullPath());
     }
 
     private void clearMetrics() {
@@ -474,9 +514,21 @@ public class YtDynamicTableWriter implements Serializable {
     }
 
     public void snapshotState(long checkpointId) {
-        log.info("Waiting for commit state {} for table {}", checkpointId, path.getFullPath());
-        flushData();
-        log.info("Successful commit state {} for table {}", checkpointId, path.getFullPath());
+        lifecycleLock.writeLock().lock();
+        try {
+            checkAcceptingWrites();
+            log.info("Waiting for commit state {} for table {}", checkpointId, path.getFullPath());
+            flushData();
+            log.info("Successful commit state {} for table {}", checkpointId, path.getFullPath());
+        } finally {
+            lifecycleLock.writeLock().unlock();
+        }
+    }
+
+    private void checkAcceptingWrites() {
+        if (!acceptingWrites) {
+            throw new IllegalStateException("YT writer is closing or closed: " + path.getFullPath());
+        }
     }
 
     private void flushData() {

@@ -6,19 +6,20 @@ import java.time.Duration;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 import javax.annotation.Nullable;
 
-import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.api.common.functions.RuntimeContext;
+import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.types.DataType;
 import org.apache.flink.util.concurrent.ExponentialBackoffRetryStrategy;
 import org.apache.flink.util.concurrent.RetryStrategy;
@@ -53,6 +54,8 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
 
     private final transient Supplier<YTsaurusClient> clientSupplier;
     private final transient TemporalCache<String, YtDynamicTableWriter> cache;
+    private final transient ReentrantReadWriteLock lifecycleLock = new ReentrantReadWriteLock();
+    private transient boolean closed;
 
     private final transient Map<String, MetricsSupplier> metricsSuppliers;
 
@@ -101,7 +104,7 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
         this.trackableField = trackableField;
         this.ytConverter = ytConverter;
         this.context = context;
-        this.metricsSuppliers = new HashMap<>();
+        this.metricsSuppliers = new ConcurrentHashMap<>();
         this.tableAttributes = tableAttributes;
         this.retryStrategy = retryStrategy;
         this.reshardingConfig = reshardingConfig;
@@ -153,41 +156,143 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
                 .build();
     }
 
-    @SneakyThrows
     public YtDynamicTableWriter getOrAcquire(WriterClassifier writerClassifier) {
-        String tableName = writerClassifier.getTableName();
-        YtDynamicTableWriter value = cache.get(tableName);
-        if (value == null) {
-            value = prepareWriter(writerClassifier);
-            cache.put(tableName, value);
+        lifecycleLock.readLock().lock();
+        try {
+            checkOpen();
+            return cache.get(
+                    writerClassifier.getTableName(),
+                    ignored -> prepareWriter(writerClassifier));
+        } finally {
+            lifecycleLock.readLock().unlock();
         }
-        return value;
+    }
+
+    public void write(WriterClassifier writerClassifier, RowData row) {
+        lifecycleLock.readLock().lock();
+        try {
+            checkOpen();
+            cache.getAndAccept(
+                    writerClassifier.getTableName(),
+                    ignored -> prepareWriter(writerClassifier),
+                    writer -> writer.write(row));
+        } finally {
+            lifecycleLock.readLock().unlock();
+        }
+    }
+
+    void ensureWriter(WriterClassifier writerClassifier) {
+        getOrAcquire(writerClassifier);
     }
 
     public Collection<YtDynamicTableWriter> getWriters() {
-        return cache.values();
+        lifecycleLock.readLock().lock();
+        try {
+            return cache.values();
+        } finally {
+            lifecycleLock.readLock().unlock();
+        }
+    }
+
+    @VisibleForTesting
+    void cleanUpCache() {
+        lifecycleLock.readLock().lock();
+        try {
+            checkOpen();
+            cache.cleanup();
+        } finally {
+            lifecycleLock.readLock().unlock();
+        }
+    }
+
+    @VisibleForTesting
+    long getCacheSize() {
+        lifecycleLock.readLock().lock();
+        try {
+            return cache.getSize();
+        } finally {
+            lifecycleLock.readLock().unlock();
+        }
     }
 
     public void finish() {
-        multipleOperations(YtDynamicTableWriter::finish, "finish");
+        lifecycleLock.writeLock().lock();
+        try {
+            checkOpen();
+            multipleCacheOperations(YtDynamicTableWriter::finish, "finish", false);
+        } finally {
+            lifecycleLock.writeLock().unlock();
+        }
+    }
+
+    public void snapshotState(long checkpointId) {
+        lifecycleLock.writeLock().lock();
+        try {
+            checkOpen();
+            multipleCacheOperations(
+                    writer -> writer.snapshotState(checkpointId),
+                    "snapshot state",
+                    false);
+        } finally {
+            lifecycleLock.writeLock().unlock();
+        }
     }
 
     @Override
     public void close() {
-        cache.cancel();
-        multipleOperations(YtDynamicTableWriter::close, "close");
-        dataMetrics.close();
+        RuntimeException closeFailure = null;
+        lifecycleLock.writeLock().lock();
+        try {
+            if (closed) {
+                return;
+            }
+            closed = true;
+
+            try {
+                cache.cancel();
+            } catch (RuntimeException e) {
+                closeFailure = e;
+            }
+
+            if (closeFailure == null) {
+                try {
+                    multipleCacheOperations(YtDynamicTableWriter::close, "close", true);
+                } catch (RuntimeException e) {
+                    closeFailure = e;
+                } finally {
+                    cache.clear();
+                }
+            }
+
+            try {
+                dataMetrics.close();
+            } catch (RuntimeException e) {
+                closeFailure = combineFailures(closeFailure, e);
+            }
+        } finally {
+            lifecycleLock.writeLock().unlock();
+        }
+
+        if (closeFailure != null) {
+            throw closeFailure;
+        }
     }
 
-    private void multipleOperations(Consumer<YtDynamicTableWriter> operation, String operationName) {
+    private void multipleCacheOperations(Consumer<YtDynamicTableWriter> operation,
+                                         String operationName,
+                                         boolean removeAfterOperation) {
         List<Exception> writerExceptions = new ArrayList<>();
         List<String> writerPaths = new ArrayList<>();
-        for (YtDynamicTableWriter writer : getWriters()) {
+        for (Map.Entry<String, YtDynamicTableWriter> entry : cache.entries().entrySet()) {
             try {
-                operation.accept(writer);
+                if (removeAfterOperation) {
+                    cache.remove(entry.getKey(), operation);
+                } else {
+                    cache.acceptIfPresent(entry.getKey(), operation);
+                }
             } catch (Exception e) {
                 writerExceptions.add(e);
-                writerPaths.add(writer.getPath());
+                writerPaths.add(entry.getValue().getPath());
             }
         }
         if (!writerExceptions.isEmpty()) {
@@ -231,14 +336,30 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
     public void createFullPathTable() {
         // Acquiring a table in case of partitioning's absence
         // automatically triggers table init
-        getOrAcquire(WriterClassifier.plain(path.getBaseTableName()));
+        ensureWriter(WriterClassifier.plain(path.getBaseTableName()));
     }
 
+    private void checkOpen() {
+        if (closed) {
+            throw new IllegalStateException("YT writer pool is closed");
+        }
+    }
 
-    private YtDynamicTableWriter prepareWriter(WriterClassifier writerClassifier) {
+    private static RuntimeException combineFailures(@Nullable RuntimeException first,
+                                                     RuntimeException second) {
+        if (first == null) {
+            return second;
+        }
+        first.addSuppressed(second);
+        return first;
+    }
+
+    @VisibleForTesting
+    YtDynamicTableWriter prepareWriter(WriterClassifier writerClassifier) {
         ComplexYtPath tablePath = path.copy().setTableName(writerClassifier.getTableName());
-        metricsSuppliers.putIfAbsent(tablePath.getFullPath(), new MetricsSupplier(tablePath.getFullPath()));
-        MetricsSupplier metricsSupplier = metricsSuppliers.get(tablePath.getFullPath());
+        MetricsSupplier metricsSupplier = metricsSuppliers.computeIfAbsent(
+                tablePath.getFullPath(),
+                MetricsSupplier::new);
 
         WriterYtInfo ytInfo = new WriterYtInfo(
                 tablePath,

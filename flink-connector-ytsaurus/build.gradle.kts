@@ -20,6 +20,7 @@ dependencies {
     api("tech.ytsaurus:ytsaurus-client:1.2.12")
     implementation(project(":flink-yson-fast-adapter"))
     implementation("jakarta.annotation:jakarta.annotation-api:1.3.5")
+    implementation("com.github.ben-manes.caffeine:caffeine:3.2.4")
 
     compileOnly("org.apache.flink:flink-core:1.20.1")
     compileOnly("org.apache.flink:flink-runtime:1.20.1")
@@ -73,6 +74,15 @@ tasks.compileJava {
 
 tasks.shadowJar {
     mergeServiceFiles()
+    relocate(
+        "com.github.benmanes.caffeine",
+        "tech.ytsaurus.flyt.connectors.ytsaurus.shaded.com.github.benmanes.caffeine"
+    )
+    relocate(
+        "com.google.errorprone.annotations",
+        "tech.ytsaurus.flyt.connectors.ytsaurus.shaded.com.google.errorprone.annotations"
+    )
+    relocate("org.jspecify", "tech.ytsaurus.flyt.connectors.ytsaurus.shaded.org.jspecify")
     relocate("com.google.protobuf", "tech.ytsaurus.flyt.connectors.ytsaurus.shaded.com.google.protobuf")
 }
 
