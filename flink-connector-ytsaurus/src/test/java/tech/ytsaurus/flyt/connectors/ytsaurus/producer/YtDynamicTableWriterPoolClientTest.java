@@ -35,6 +35,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.tuple.Pair;
 import org.apache.flink.api.common.functions.RuntimeContext;
 import org.apache.flink.formats.common.TimestampFormat;
+import org.apache.flink.metrics.Gauge;
+import org.apache.flink.metrics.groups.OperatorMetricGroup;
 import org.apache.flink.metrics.groups.UnregisteredMetricsGroup;
 import org.apache.flink.shaded.guava31.com.google.common.collect.Iterators;
 import org.apache.flink.table.data.GenericRowData;
@@ -44,6 +46,7 @@ import org.apache.flink.table.types.logical.BigIntType;
 import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.table.types.logical.TimestampType;
+import org.apache.flink.table.types.utils.TypeConversions;
 import org.apache.flink.util.Preconditions;
 import org.apache.flink.util.concurrent.ExponentialBackoffRetryStrategy;
 import org.apache.flink.util.concurrent.RetryStrategy;
@@ -58,6 +61,8 @@ import org.mockito.Mockito;
 import tech.ytsaurus.flyt.locks.noop.NoopLocksProvider;
 import tech.ytsaurus.ysontree.YTreeTextSerializer;
 
+import tech.ytsaurus.flyt.connectors.datametrics.DataMetricsConfig;
+import tech.ytsaurus.flyt.connectors.datametrics.DataMetricsMetricConfig;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.ComplexYtPath;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.ReshardStrategy;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.ReshardingConfig;
@@ -379,6 +384,66 @@ public class YtDynamicTableWriterPoolClientTest {
     }
 
     @Test
+    void testEvictedWriterCommitsOnlyItsOwnDataMetrics() {
+        Map<String, Gauge<?>> gauges = configureMetricGroup();
+        DataMetricsConfig dataMetricsConfig = dataMetricsConfig("max_id", "id");
+        var ticker = new MutableTicker();
+        Duration ttl = Duration.ofMillis(100);
+        var removalExecutor = new QueuedExecutor();
+        var cache = YtDynamicTableWriterPool.makeTestCache(ttl, ticker, removalExecutor);
+        var classifier = WriterClassifier.plain("overlapping-generations");
+
+        try (var clientPool = new CountingTestYtClientPool(this::makeTestClient, 2);
+             var pool = makePool(TestPoolSettings.builder()
+                     .clientPool(clientPool)
+                     .customCache(cache)
+                     .dataMetricsConfig(dataMetricsConfig))) {
+            pool.write(classifier, rowWithId(10L));
+
+            ticker.advance(ttl.multipliedBy(2));
+            cache.cleanUp();
+            Assertions.assertNull(cache.getIfPresent(classifier.getTableName()));
+
+            // A new generation may start before Caffeine dispatches the old generation's
+            // asynchronous removal callback.
+            pool.write(classifier, rowWithId(20L));
+            removalExecutor.runAll();
+
+            Assertions.assertEquals(10L, metricValue(gauges, "max_id"),
+                    "Closing the old generation must not publish pending metrics from the new one");
+
+            pool.close();
+            Assertions.assertEquals(20L, metricValue(gauges, "max_id"));
+        }
+    }
+
+    @Test
+    void testDataMetricsFollowTransactionBoundaries() {
+        Map<String, Gauge<?>> gauges = configureMetricGroup();
+        var classifier = WriterClassifier.plain("transaction-boundary");
+        YtWriterOptions writerOptions = YtWriterOptions.builder()
+                .rowsInModificationLimit(1)
+                .rowsInTransactionLimit(1)
+                .flushModificationPeriod(Duration.ofDays(1))
+                .commitTransactionPeriod(Duration.ofDays(1))
+                .build();
+
+        try (var pool = makePool(TestPoolSettings.builder()
+                .clientPool(CountingTestYtClientPool.ofSingle(makeTestClient()))
+                .writerOptions(writerOptions)
+                .dataMetricsConfig(dataMetricsConfig("max_id", "id")))) {
+            pool.write(classifier, rowWithId(10L));
+            pool.write(classifier, rowWithId(20L));
+
+            Assertions.assertEquals(10L, metricValue(gauges, "max_id"),
+                    "The second record must not be reported by the first transaction's commit");
+
+            pool.finish();
+            Assertions.assertEquals(20L, metricValue(gauges, "max_id"));
+        }
+    }
+
+    @Test
     void testPoolCloseReportsFailuresFromAllWriters() {
         var classifier1 = WriterClassifier.plain("table1");
         var classifier2 = WriterClassifier.plain("table2");
@@ -540,10 +605,44 @@ public class YtDynamicTableWriterPoolClientTest {
                 ReshardingConfig.builder()
                         .reshardStrategy(ReshardStrategy.NONE)
                         .build(),
-                YtWriterOptions.builder().build(),
+                settings.getWriterOptions() == null
+                        ? YtWriterOptions.builder().build()
+                        : settings.getWriterOptions(),
                 new NoopLocksProvider(),
-                null,
-                null);
+                TypeConversions.fromLogicalToDataType(settings.getLogicalType()),
+                settings.getDataMetricsConfig());
+    }
+
+    private Map<String, Gauge<?>> configureMetricGroup() {
+        Map<String, Gauge<?>> gauges = new ConcurrentHashMap<>();
+        OperatorMetricGroup metricGroup = Mockito.mock(OperatorMetricGroup.class);
+        Mockito.when(metricGroup.addGroup(Mockito.nullable(String.class))).thenReturn(metricGroup);
+        Mockito.doAnswer(invocation -> {
+            gauges.put(invocation.getArgument(0), invocation.getArgument(1));
+            return invocation.getArgument(1);
+        }).when(metricGroup).gauge(Mockito.anyString(), Mockito.any());
+        Mockito.when(context.getMetricGroup()).thenReturn(metricGroup);
+        return gauges;
+    }
+
+    private DataMetricsConfig dataMetricsConfig(String metricName, String columnName) {
+        return new DataMetricsConfig("test-table", List.of(DataMetricsMetricConfig.builder()
+                .metricName(metricName)
+                .columnName(columnName)
+                .build()));
+    }
+
+    private GenericRowData rowWithId(long id) {
+        GenericRowData row = new GenericRowData(2);
+        row.setField(0, id);
+        row.setField(1, TimestampData.fromInstant(T_OFFSET_DTTM.toInstant()));
+        return row;
+    }
+
+    private long metricValue(Map<String, Gauge<?>> gauges, String name) {
+        Gauge<?> gauge = gauges.get(name);
+        Assertions.assertNotNull(gauge, "Metric was not registered: " + name);
+        return ((Number) gauge.getValue()).longValue();
     }
 
     private YtDynamicTableWriterPool makePoolWithWriterFactory(
@@ -642,6 +741,8 @@ public class YtDynamicTableWriterPoolClientTest {
         String schema;
         LogicalType logicalType;
         YtClientPool<?> clientPool;
+        YtWriterOptions writerOptions;
+        DataMetricsConfig dataMetricsConfig;
         Cache<String, YtDynamicTableWriterPool.WriterHandle> customCache;
     }
 

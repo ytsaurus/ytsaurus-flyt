@@ -8,6 +8,7 @@ import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -128,6 +129,10 @@ public class YtDynamicTableWriter implements Serializable {
 
     private transient List<Map<String, ? extends Serializable>> unflushedRows;
 
+    private transient Map<String, Long> uncommittedDataMetricValues;
+
+    private transient Map<String, Long> unflushedDataMetricValues;
+
     private transient ApiServiceTransaction currentTransaction;
 
     private transient ModifyRowsRequest.Builder modificationBuffer;
@@ -223,6 +228,8 @@ public class YtDynamicTableWriter implements Serializable {
                     new ArrayList<>(ytWriterOptions.getRowsInTransactionLimit() +
                             ytWriterOptions.getRowsInModificationLimit());
             unflushedRows = new ArrayList<>(ytWriterOptions.getRowsInModificationLimit());
+            uncommittedDataMetricValues = new HashMap<>();
+            unflushedDataMetricValues = new HashMap<>();
             error = new AtomicReference<>();
             lastTransactionCommit = new AtomicLong(System.currentTimeMillis());
             lastModificationFlush = new AtomicLong(System.currentTimeMillis());
@@ -398,8 +405,6 @@ public class YtDynamicTableWriter implements Serializable {
     }
 
     public void write(RowData record) {
-        dataMetrics.onRecord(record);
-
         if (modificationSize() == ytWriterOptions.getRowsInModificationLimit()) {
             flushModificationLock.lock();
             try {
@@ -420,9 +425,11 @@ public class YtDynamicTableWriter implements Serializable {
         }
         flushModificationLock.lock();
         try {
+            Map<String, Long> dataMetricValues = dataMetrics.extractValues(record);
             final Map<String, ? extends Serializable> row = createRow(record);
             modificationBuffer.addInsert(row);
             unflushedRows.add(row);
+            mergeDataMetricValues(unflushedDataMetricValues, dataMetricValues);
             rowsInBuffer.incrementAndGet();
         } finally {
             flushModificationLock.unlock();
@@ -770,6 +777,7 @@ public class YtDynamicTableWriter implements Serializable {
             maxCommittedTrackableField.set(Math.max(
                     maxCommittedTrackableField.get(),
                     lastNonCommittedTrackableField.get()));
+            onCommitSuccess();
             log.info("Commit successful transaction {} with {} rows for table {}",
                     currentTransactionId, committedRows, getPath());
         } else {
@@ -788,7 +796,6 @@ public class YtDynamicTableWriter implements Serializable {
         while (backoffRetryStrategy.getNumRemainingRetries() >= 0) {
             try {
                 currentTransaction.commit().join();
-                onCommitSuccess();
                 break;
             } catch (Exception e) {
                 log.error("Unable to commit transaction {} for table {}", currentTransaction.getId(), getPath(), e);
@@ -816,7 +823,11 @@ public class YtDynamicTableWriter implements Serializable {
      * Can be overridden by subclasses to add custom logic.
      */
     protected void onCommitSuccess() {
-        dataMetrics.onCommit();
+        try {
+            dataMetrics.onCommit(uncommittedDataMetricValues);
+        } finally {
+            uncommittedDataMetricValues.clear();
+        }
     }
 
     private void flushModification() {
@@ -833,6 +844,8 @@ public class YtDynamicTableWriter implements Serializable {
                 rowsInTransaction.updateAndGet(v -> v + modificationSize());
                 uncommittedRows.addAll(unflushedRows);
                 unflushedRows.clear();
+                mergeDataMetricValues(uncommittedDataMetricValues, unflushedDataMetricValues);
+                unflushedDataMetricValues.clear();
                 resetModificationBuffer();
             }
         } finally {
@@ -851,6 +864,10 @@ public class YtDynamicTableWriter implements Serializable {
     private void resetModificationBuffer() {
         rowsInBuffer.set(0);
         modificationBuffer = createModifyRowRequestBuilder();
+    }
+
+    private static void mergeDataMetricValues(Map<String, Long> target, Map<String, Long> values) {
+        values.forEach((name, value) -> target.merge(name, value, Math::max));
     }
 
     private ModifyRowsRequest.Builder createModifyRowRequestBuilder() {

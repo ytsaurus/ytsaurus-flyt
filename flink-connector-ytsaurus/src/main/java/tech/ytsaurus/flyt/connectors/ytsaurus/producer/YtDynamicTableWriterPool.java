@@ -13,6 +13,8 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
@@ -62,6 +64,8 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
 
     private final transient Supplier<YTsaurusClient> clientSupplier;
     private final transient Cache<String, WriterHandle> cache;
+    @Nullable
+    private final transient ExecutorService cacheRemovalExecutor;
     private final transient Set<WriterHandle> handles = ConcurrentHashMap.newKeySet();
     private final transient ConcurrentLinkedQueue<RuntimeException> asynchronousCloseErrors =
             new ConcurrentLinkedQueue<>();
@@ -105,10 +109,13 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
                                     LocksProvider locksProvider,
                                     DataType dataType,
                                     @Nullable DataMetricsConfig dataMetricsConfig) {
+        ExecutorService cacheRemovalExecutor = null;
         if (cache == null) {
-            cache = makeDefaultCache();
+            cacheRemovalExecutor = makeCacheRemovalExecutor();
+            cache = makeDefaultCache(cacheRemovalExecutor);
         }
         this.cache = cache;
+        this.cacheRemovalExecutor = cacheRemovalExecutor;
         this.clientSupplier = clientSupplier;
         this.ysonSchemaString = ysonSchemaString;
         this.path = path;
@@ -156,8 +163,19 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
                 null);
     }
 
-    static Cache<String, WriterHandle> makeDefaultCache() {
+    private static ExecutorService makeCacheRemovalExecutor() {
+        return Executors.newSingleThreadExecutor(runnable -> {
+            Thread thread = new Thread(runnable, "yt-writer-cache-removal");
+            thread.setDaemon(true);
+            return thread;
+        });
+    }
+
+    static Cache<String, WriterHandle> makeDefaultCache(Executor executor) {
         return Caffeine.newBuilder()
+                // Writer close performs blocking network and executor shutdown operations. Keep those
+                // callbacks off ForkJoinPool.commonPool(), which Caffeine uses by default.
+                .executor(executor)
                 .expireAfterAccess(CACHE_TTL)
                 // Promptly evict (and close) writers for tables that went silent, without waiting for
                 // the next cache access to trigger lazy maintenance.
@@ -293,7 +311,13 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
             handlesToClose.forEach(WriterHandle::awaitClosed);
             throwAsynchronousCloseErrorIfAny();
         } finally {
-            dataMetrics.close();
+            try {
+                dataMetrics.close();
+            } finally {
+                if (cacheRemovalExecutor != null) {
+                    cacheRemovalExecutor.shutdown();
+                }
+            }
         }
     }
 
