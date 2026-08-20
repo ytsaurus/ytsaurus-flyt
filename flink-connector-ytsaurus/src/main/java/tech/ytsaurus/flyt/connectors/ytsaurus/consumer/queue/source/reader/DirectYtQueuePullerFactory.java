@@ -1,9 +1,8 @@
 package tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.reader;
 
-import java.util.Objects;
-
-import tech.ytsaurus.client.ApiServiceClient;
 import tech.ytsaurus.client.YTsaurusClient;
+
+import java.util.Objects;
 
 public final class DirectYtQueuePullerFactory implements YtQueuePullerFactory {
     private final YTsaurusClient client;
@@ -25,7 +24,7 @@ public final class DirectYtQueuePullerFactory implements YtQueuePullerFactory {
             if (closed) {
                 throw new IllegalStateException("Queue puller factory is closed");
             }
-            return new DirectYtQueuePuller(asNonOwningClient(client), queuePath);
+            return new DirectYtQueuePuller(client, queuePath);
         }
     }
 
@@ -38,9 +37,5 @@ public final class DirectYtQueuePullerFactory implements YtQueuePullerFactory {
             closed = true;
             client.close();
         }
-    }
-
-    private static ApiServiceClient asNonOwningClient(YTsaurusClient client) {
-        return client;
     }
 }
