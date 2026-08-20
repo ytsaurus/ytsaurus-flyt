@@ -678,7 +678,7 @@ CREATE TABLE multi_cluster_table (
 
 The `ytsaurus-queue` connector continuously reads an ordered dynamic table without a registered YTsaurus consumer. Offsets are owned by Flink source state and restored from checkpoints. It is a source-only connector: sink, lookup, metadata columns, and multi-cluster modes are not supported.
 
-The table schema comes from the Flink DDL. Queue rows are YSON maps, so this source supports only the insert-only `format = 'yson'` decoder. There is no YSON table schema option. Install the [Flink YSON format](../flink-yson/README.md) alongside the connector.
+The table schema comes from the Flink DDL. In the default `ROW` read mode queue rows are YSON maps, so this source supports only the insert-only `format = 'yson'` decoder; see [Read modes](#read-modes) for reading a payload out of a single column instead. There is no YSON table schema option. Install the [Flink YSON format](../flink-yson/README.md) alongside the connector.
 
 The `env` credentials provider reads `YT_USERNAME` and `YT_TOKEN`. With `credentials-source = 'options'`, both `username` and `token` must be set in the table options.
 
@@ -722,6 +722,51 @@ CREATE TABLE queue_events (
 );
 ```
 
+### Read modes
+
+`scan.read-mode` selects what a queue row means for the source.
+
+`ROW`, the default, treats the whole row as a record: it is converted to a YSON map and passed to the `yson` decoder, so the Flink DDL describes the queue columns.
+
+`COLUMN` treats the record as a payload stored in one column, which is common for queues that keep an already serialized message in `value` and, optionally, the name of the YTsaurus compression codec in `codec`. The Flink DDL then describes the payload rather than the queue row, and the payload bytes are passed to the configured format as is, so any insert-only format is accepted.
+
+The payload column is `scan.value-column` and defaults to `value`. The codec column is `scan.codec-column` and has no default: without it the payload is read as is, which is what an uncompressed queue needs. Set it to decompress the payload with the codec named in that column. Supported codecs are `none`, `zstd_1`..`zstd_21`, `lz4`, `lz4_high_compression` and `zlib_1`..`zlib_9`; any other codec fails the job with an explicit error.
+
+Both configured columns must exist in the queue schema and must be string-like, otherwise the job fails: a missing column is a configuration error rather than an uncompressed payload. A null codec value means that this particular row is not compressed, and a row whose payload column is null is skipped.
+
+```sql
+CREATE TABLE queue_events (
+    event_id STRING,
+    payload STRING
+) WITH (
+    'connector' = 'ytsaurus-queue',
+    'proxy' = 'localhost:9013',
+    'path' = '//tmp/events_queue',
+    'credentials-source' = 'env',
+    'format' = 'yson',
+    'scan.read-mode' = 'COLUMN',
+    'scan.value-column' = 'value',
+    'scan.codec-column' = 'codec'
+);
+```
+
+For the DataStream API, wrap any Flink `DeserializationSchema` into `YtQueueColumnValueDeserializer`:
+
+```java
+YtQueueSource<String> source = YtQueueSource.<String>builder()
+        .proxy("localhost:9013")
+        .queuePath("//home/path/to/queue")
+        .credentialsProvider(new EnvCredentialsProvider())
+        // no codec column: the payload of the 'value' column is read as is
+        .recordDeserializer(new YtQueueColumnValueDeserializer<>(new SimpleStringSchema()))
+        // decompress the payload with the codec named in the 'codec' column
+        .recordDeserializer(new YtQueueColumnValueDeserializer<>(new SimpleStringSchema(), "value", "codec"))
+        .producedType(Types.STRING)
+        .build();
+```
+
+Metadata columns are not supported in either mode, so `$timestamp`, `$cumulative_data_weight`, partition index and offset are not available to the job.
+
 ### Queue Source Options
 
 | Option | Type | Default | Description |
@@ -729,7 +774,7 @@ CREATE TABLE queue_events (
 | `proxy` | String | - | Required YTsaurus RPC proxy address |
 | `path` | String | - | Required queue path |
 | `credentials-source` | String | - | Required credentials provider identifier |
-| `format` | String | - | Required value: `yson` (insert-only) |
+| `format` | String | - | Required insert-only format; must be `yson` in `ROW` read mode |
 | `username` | String | - | Username for the `options` credentials provider |
 | `token` | String | - | Token for the `options` credentials provider |
 | `scan.startup.mode` | Enum | `EARLIEST` | Startup mode: `EARLIEST`, `LATEST`, or `SPECIFIC` |
@@ -741,6 +786,9 @@ CREATE TABLE queue_events (
 | `scan.async.worker-count` | Integer | `1` | Maximum background pull workers per source reader; capped by assigned partitions |
 | `scan.async.buffer-capacity` | Integer | `2` | Capacity of the internal prefetch queue, measured in batches |
 | `scan.partition-discovery.interval` | Duration | `60 s` | Interval for discovering new queue partitions |
+| `scan.read-mode` | Enum | `ROW` | `ROW` reads the whole queue row as a record, `COLUMN` reads a payload from one column |
+| `scan.value-column` | String | `value` | Queue column with the payload; requires `scan.read-mode` = `COLUMN` |
+| `scan.codec-column` | String | - | Queue column with the YTsaurus codec name; without it the payload is read as is; requires `scan.read-mode` = `COLUMN` |
 | `scan.parallelism` | Integer | - | Optional Flink source parallelism |
 | `yson.fail-on-missing-field` | Boolean | `false` | Fail when a declared field is absent in a queue row |
 | `yson.ignore-parse-errors` | Boolean | `false` | Set invalid fields to null and skip rows that cannot be parsed |

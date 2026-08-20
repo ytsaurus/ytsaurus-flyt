@@ -4,13 +4,12 @@ import java.util.Objects;
 
 import org.apache.flink.api.common.serialization.DeserializationSchema;
 import org.apache.flink.api.connector.source.SourceReaderContext;
-import org.apache.flink.metrics.MetricGroup;
 import org.apache.flink.table.data.RowData;
-import org.apache.flink.util.UserCodeClassLoader;
 import tech.ytsaurus.client.rows.UnversionedRow;
 import tech.ytsaurus.core.tables.TableSchema;
 import tech.ytsaurus.ysontree.YTreeMapNode;
 
+import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.YtQueueDeserializationSchemas;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.YtQueueRecordDeserializer;
 import tech.ytsaurus.flyt.formats.yson.adapter.YTreeNodeDeserializationSchema;
 
@@ -25,18 +24,7 @@ public class YtQueueRowDataDeserializer implements YtQueueRecordDeserializer<Row
 
     @Override
     public void open(SourceReaderContext context) throws Exception {
-        Objects.requireNonNull(context, "context");
-        deserializationSchema.open(new DeserializationSchema.InitializationContext() {
-            @Override
-            public MetricGroup getMetricGroup() {
-                return context.metricGroup();
-            }
-
-            @Override
-            public UserCodeClassLoader getUserCodeClassLoader() {
-                return context.getUserCodeClassLoader();
-            }
-        });
+        YtQueueDeserializationSchemas.open(deserializationSchema, context);
     }
 
     @Override

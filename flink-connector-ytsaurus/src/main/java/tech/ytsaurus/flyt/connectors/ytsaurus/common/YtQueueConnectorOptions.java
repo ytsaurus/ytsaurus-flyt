@@ -8,6 +8,7 @@ import org.apache.flink.configuration.ConfigOption;
 import org.apache.flink.configuration.ConfigOptions;
 import org.apache.flink.configuration.MemorySize;
 
+import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.config.YtQueueReadMode;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.config.YtQueueStartupMode;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.config.YtQueueTrimmedOffsetPolicy;
 
@@ -59,4 +60,19 @@ public class YtQueueConnectorOptions {
             ConfigOptions.key("scan.partition-discovery.interval")
                     .durationType()
                     .defaultValue(Duration.ofSeconds(60));
+
+    public static final ConfigOption<YtQueueReadMode> READ_MODE =
+            ConfigOptions.key("scan.read-mode")
+                    .enumType(YtQueueReadMode.class)
+                    .defaultValue(YtQueueReadMode.ROW);
+
+    public static final ConfigOption<String> VALUE_COLUMN =
+            ConfigOptions.key("scan.value-column")
+                    .stringType()
+                    .noDefaultValue();
+
+    public static final ConfigOption<String> CODEC_COLUMN =
+            ConfigOptions.key("scan.codec-column")
+                    .stringType()
+                    .noDefaultValue();
 }
