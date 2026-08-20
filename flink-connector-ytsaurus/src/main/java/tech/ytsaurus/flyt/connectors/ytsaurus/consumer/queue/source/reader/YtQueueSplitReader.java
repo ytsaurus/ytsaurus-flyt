@@ -26,6 +26,7 @@ import java.util.function.Supplier;
 
 import javax.annotation.Nullable;
 
+import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.connector.base.source.reader.RecordsBySplits;
 import org.apache.flink.connector.base.source.reader.RecordsWithSplitIds;
 import org.apache.flink.connector.base.source.reader.splitreader.SplitReader;
@@ -255,12 +256,14 @@ public final class YtQueueSplitReader implements SplitReader<YtQueueRawRecord, Y
         }
     }
 
+    @VisibleForTesting
     int getWorkerCount() {
         synchronized (stateMonitor) {
             return workers.size();
         }
     }
 
+    @VisibleForTesting
     int getBufferedBatchCount() {
         return (int) readBuffer.stream().filter(result -> result != WAKE_UP_SIGNAL).count();
     }
