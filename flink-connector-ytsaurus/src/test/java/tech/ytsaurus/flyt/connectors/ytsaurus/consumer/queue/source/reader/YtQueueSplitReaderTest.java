@@ -29,6 +29,7 @@ import org.junit.jupiter.api.Test;
 import tech.ytsaurus.client.rows.UnversionedRow;
 import tech.ytsaurus.core.tables.TableSchema;
 
+import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.config.YtQueueTrimmedOffsetPolicy;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.YtQueueReaderOptions;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.model.YtQueueBatch;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.model.YtQueuePullRequest;
@@ -134,7 +135,7 @@ class YtQueueSplitReaderTest {
     }
 
     @Test
-    void acceptsBatchStartingAfterRequestedOffset() throws Exception {
+    void skipsBatchGapWhenRequestedOffsetIsTrimmed() throws Exception {
         TableSchema schema = queueSchema();
         CountDownLatch secondPull = new CountDownLatch(1);
         AtomicInteger calls = new AtomicInteger();
@@ -146,7 +147,12 @@ class YtQueueSplitReaderTest {
             return new CompletableFuture<>();
         });
         YtQueueSplit queueSplit = split("queue-id", 0, 4);
-        YtQueueSplitReader reader = reader(() -> puller, SHORT_BACKOFF, 1, 2);
+        YtQueueSplitReader reader = reader(
+                () -> puller,
+                SHORT_BACKOFF,
+                1,
+                2,
+                YtQueueTrimmedOffsetPolicy.SKIP);
         reader.handleSplitsChanges(new SplitsAddition<>(List.of(queueSplit)));
 
         assertThat(secondPull.await(ASYNC_TIMEOUT_SECONDS, TimeUnit.SECONDS)).isTrue();
@@ -160,11 +166,34 @@ class YtQueueSplitReaderTest {
     }
 
     @Test
-    void rejectsBatchStartingBeforeRequestedOffset() {
+    void failsWhenRequestedOffsetIsTrimmed() {
+        TableSchema schema = queueSchema();
+        TestingPuller puller = new TestingPuller(request -> CompletableFuture.completedFuture(
+                batch(schema, 5, row())));
+        YtQueueSplitReader reader = reader(
+                () -> puller,
+                SHORT_BACKOFF,
+                1,
+                2,
+                YtQueueTrimmedOffsetPolicy.FAIL);
+        reader.handleSplitsChanges(new SplitsAddition<>(List.of(split("queue-id", 0, 4))));
+
+        assertThatThrownBy(reader::fetch)
+                .isInstanceOf(IOException.class)
+                .hasMessage("Queue partition 0 returned start offset 5 for requested offset 4");
+    }
+
+    @Test
+    void rejectsBatchStartingBeforeRequestedOffsetEvenWithSkipPolicy() {
         TableSchema schema = queueSchema();
         TestingPuller puller = new TestingPuller(request -> CompletableFuture.completedFuture(
                 batch(schema, 4, row())));
-        YtQueueSplitReader reader = reader(() -> puller, SHORT_BACKOFF, 1, 2);
+        YtQueueSplitReader reader = reader(
+                () -> puller,
+                SHORT_BACKOFF,
+                1,
+                2,
+                YtQueueTrimmedOffsetPolicy.SKIP);
         reader.handleSplitsChanges(new SplitsAddition<>(List.of(split("queue-id", 0, 5))));
 
         assertThatThrownBy(reader::fetch)
@@ -552,9 +581,24 @@ class YtQueueSplitReaderTest {
             Duration backoff,
             int workerCount,
             int bufferCapacity) {
+        return reader(
+                pullerSupplier,
+                backoff,
+                workerCount,
+                bufferCapacity,
+                YtQueueTrimmedOffsetPolicy.FAIL);
+    }
+
+    private YtQueueSplitReader reader(
+            Supplier<? extends YtQueuePuller> pullerSupplier,
+            Duration backoff,
+            int workerCount,
+            int bufferCapacity,
+            YtQueueTrimmedOffsetPolicy trimmedOffsetPolicy) {
         YtQueueSplitReader reader = new YtQueueSplitReader(
                 pullerSupplier,
-                new YtQueueReaderOptions(100, 1024, backoff, workerCount, bufferCapacity)
+                new YtQueueReaderOptions(100, 1024, backoff, workerCount, bufferCapacity),
+                trimmedOffsetPolicy
         );
         readers.add(reader);
         return reader;

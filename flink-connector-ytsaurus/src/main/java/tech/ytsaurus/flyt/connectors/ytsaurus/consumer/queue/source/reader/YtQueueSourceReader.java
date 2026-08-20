@@ -11,6 +11,7 @@ import org.apache.flink.connector.base.source.reader.SingleThreadMultiplexSource
 import org.apache.flink.connector.base.source.reader.splitreader.SplitReader;
 
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.YtQueueRecordDeserializer;
+import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.config.YtQueueTrimmedOffsetPolicy;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.YtQueueReaderOptions;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.model.YtQueueRawRecord;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.split.YtQueueSplit;
@@ -36,6 +37,7 @@ public final class YtQueueSourceReader<T>
                 YtQueuePullerFactory.fromSupplier(pullerSupplier),
                 deserializer,
                 options,
+                YtQueueTrimmedOffsetPolicy.FAIL,
                 configuration,
                 context,
                 YtQueueOffsetCommitter.noOp()
@@ -52,6 +54,25 @@ public final class YtQueueSourceReader<T>
                 pullerFactory,
                 deserializer,
                 options,
+                YtQueueTrimmedOffsetPolicy.FAIL,
+                configuration,
+                context,
+                YtQueueOffsetCommitter.noOp()
+        );
+    }
+
+    public YtQueueSourceReader(
+            YtQueuePullerFactory pullerFactory,
+            YtQueueRecordDeserializer<T> deserializer,
+            YtQueueReaderOptions options,
+            YtQueueTrimmedOffsetPolicy trimmedOffsetPolicy,
+            Configuration configuration,
+            SourceReaderContext context) throws Exception {
+        this(
+                pullerFactory,
+                deserializer,
+                options,
+                trimmedOffsetPolicy,
                 configuration,
                 context,
                 YtQueueOffsetCommitter.noOp()
@@ -69,6 +90,7 @@ public final class YtQueueSourceReader<T>
                 YtQueuePullerFactory.fromSupplier(pullerSupplier),
                 deserializer,
                 options,
+                YtQueueTrimmedOffsetPolicy.FAIL,
                 configuration,
                 context,
                 offsetCommitter
@@ -79,11 +101,12 @@ public final class YtQueueSourceReader<T>
             YtQueuePullerFactory pullerFactory,
             YtQueueRecordDeserializer<T> deserializer,
             YtQueueReaderOptions options,
+            YtQueueTrimmedOffsetPolicy trimmedOffsetPolicy,
             Configuration configuration,
             SourceReaderContext context,
             YtQueueOffsetCommitter offsetCommitter) throws Exception {
         super(
-                splitReaderSupplier(pullerFactory, options),
+                splitReaderSupplier(pullerFactory, options, trimmedOffsetPolicy),
                 new YtQueueRecordEmitter<>(deserializer),
                 Objects.requireNonNull(configuration, "configuration"),
                 Objects.requireNonNull(context, "context")
@@ -172,10 +195,11 @@ public final class YtQueueSourceReader<T>
 
     private static Supplier<SplitReader<YtQueueRawRecord, YtQueueSplit>> splitReaderSupplier(
             Supplier<? extends YtQueuePuller> pullerSupplier,
-            YtQueueReaderOptions options) {
+            YtQueueReaderOptions options,
+            YtQueueTrimmedOffsetPolicy trimmedOffsetPolicy) {
         Objects.requireNonNull(pullerSupplier, "pullerSupplier");
         Objects.requireNonNull(options, "options");
-        return () -> new YtQueueSplitReader(pullerSupplier, options);
+        return () -> new YtQueueSplitReader(pullerSupplier, options, trimmedOffsetPolicy);
     }
 
     private static void closeAfterFailure(AutoCloseable closeable, Throwable failure) {

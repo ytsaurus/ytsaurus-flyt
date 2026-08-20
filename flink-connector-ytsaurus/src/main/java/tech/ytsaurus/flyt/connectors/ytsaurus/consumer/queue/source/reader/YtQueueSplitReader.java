@@ -33,6 +33,7 @@ import org.apache.flink.connector.base.source.reader.splitreader.SplitsAddition;
 import org.apache.flink.connector.base.source.reader.splitreader.SplitsChange;
 import org.apache.flink.connector.base.source.reader.splitreader.SplitsRemoval;
 
+import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.config.YtQueueTrimmedOffsetPolicy;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.YtQueueReaderOptions;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.model.YtQueueBatch;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.model.YtQueuePullRequest;
@@ -53,6 +54,8 @@ public final class YtQueueSplitReader implements SplitReader<YtQueueRawRecord, Y
     private final long maxDataWeightBytes;
 
     private final long emptyPollBackoffNanos;
+
+    private final YtQueueTrimmedOffsetPolicy trimmedOffsetPolicy;
 
     private final int configuredWorkerCount;
 
@@ -85,11 +88,19 @@ public final class YtQueueSplitReader implements SplitReader<YtQueueRawRecord, Y
     public YtQueueSplitReader(
             Supplier<? extends YtQueuePuller> pullerSupplier,
             YtQueueReaderOptions options) {
+        this(pullerSupplier, options, YtQueueTrimmedOffsetPolicy.FAIL);
+    }
+
+    public YtQueueSplitReader(
+            Supplier<? extends YtQueuePuller> pullerSupplier,
+            YtQueueReaderOptions options,
+            YtQueueTrimmedOffsetPolicy trimmedOffsetPolicy) {
         this.pullerSupplier = Objects.requireNonNull(pullerSupplier, "pullerSupplier");
         Objects.requireNonNull(options, "options");
         this.maxRows = options.getMaxRows();
         this.maxDataWeightBytes = options.getMaxDataWeightBytes();
         this.emptyPollBackoffNanos = options.getEmptyPollBackoff().toNanos();
+        this.trimmedOffsetPolicy = trimmedOffsetPolicy;
         this.configuredWorkerCount = options.getWorkerCount();
         this.readBuffer = new LinkedBlockingQueue<>(options.getBufferCapacity());
         this.workerExecutor = Executors.newFixedThreadPool(
@@ -353,12 +364,15 @@ public final class YtQueueSplitReader implements SplitReader<YtQueueRawRecord, Y
             YtQueuePullRequest request,
             YtQueueBatch batch) throws IOException, InterruptedException {
         Objects.requireNonNull(batch, "queue puller returned null batch");
-        if (batch.getStartOffset() < request.getOffset()) {
-            throw new IOException(String.format(
-                    "Queue partition %d returned start offset %d for requested offset %d",
-                    request.getPartitionIndex(),
-                    batch.getStartOffset(),
-                    request.getOffset()));
+        if (batch.getStartOffset() != request.getOffset()) {
+            if (batch.getStartOffset() < request.getOffset()
+                    || trimmedOffsetPolicy == YtQueueTrimmedOffsetPolicy.FAIL) {
+                throw new IOException(String.format(
+                        "Queue partition %d returned start offset %d for requested offset %d",
+                        request.getPartitionIndex(),
+                        batch.getStartOffset(),
+                        request.getOffset()));
+            }
         }
 
         if (batch.getRows().isEmpty()) {

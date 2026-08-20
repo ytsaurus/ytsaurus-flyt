@@ -734,7 +734,7 @@ CREATE TABLE queue_events (
 | `token` | String | - | Token for the `options` credentials provider |
 | `scan.startup.mode` | Enum | `EARLIEST` | Startup mode: `EARLIEST`, `LATEST`, or `SPECIFIC` |
 | `scan.startup.specific-offsets` | List&lt;Long&gt; | - | Semicolon-separated nonnegative offsets indexed by partition; required only for `SPECIFIC` |
-| `scan.trimmed-offset-policy` | Enum | `FAIL` | Behavior when an offset has been trimmed; the MVP supports `FAIL` |
+| `scan.trimmed-offset-policy` | Enum | `FAIL` | Behavior when a requested offset has been trimmed: `FAIL` stops the source, `SKIP` continues from the first available offset |
 | `scan.max-row-count` | Integer | `1000` | Maximum rows requested by one partition poll |
 | `scan.max-data-weight` | Memory size | `16 mb` | Maximum data weight requested by one partition poll |
 | `scan.poll-backoff` | Duration | `250 ms` | Delay after an empty poll |

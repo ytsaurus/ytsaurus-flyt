@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test;
 
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.credentials.extractor.ManualCredentialsProvider;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.config.YtQueueStartupMode;
+import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.config.YtQueueTrimmedOffsetPolicy;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.enumerator.YtQueueEnumeratorStateSerializer;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.split.YtQueueSplitSerializer;
 
@@ -36,6 +37,8 @@ class YtQueueSourceTest {
         assertThat(restored.getSplitSerializer()).isInstanceOf(YtQueueSplitSerializer.class);
         assertThat(restored.getEnumeratorCheckpointSerializer())
                 .isInstanceOf(YtQueueEnumeratorStateSerializer.class);
+        assertThat(restored).extracting("trimmedOffsetPolicy")
+                .isEqualTo(YtQueueTrimmedOffsetPolicy.FAIL);
         assertReaderOptions(
                 restored,
                 MAX_ROW_COUNT.defaultValue(),
@@ -109,6 +112,27 @@ class YtQueueSourceTest {
 
         assertThat(restored).extracting("startupMode")
                 .isEqualTo(YtQueueStartupMode.LATEST);
+    }
+
+    @Test
+    void trimmedOffsetPolicySurvivesFlinkSerialization() throws Exception {
+        YtQueueSource<String> source = sourceBuilder()
+                .trimmedOffsetPolicy(YtQueueTrimmedOffsetPolicy.SKIP)
+                .build();
+
+        YtQueueSource<String> restored = InstantiationUtil.clone(
+                source,
+                getClass().getClassLoader());
+
+        assertThat(restored).extracting("trimmedOffsetPolicy")
+                .isEqualTo(YtQueueTrimmedOffsetPolicy.SKIP);
+    }
+
+    @Test
+    void rejectsNullTrimmedOffsetPolicyInBuilder() {
+        assertThatThrownBy(() -> sourceBuilder().trimmedOffsetPolicy(null))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessage("trimmedOffsetPolicy");
     }
 
     @Test

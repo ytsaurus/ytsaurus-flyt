@@ -22,6 +22,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.config.YtQueueStartupMode;
+import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.config.YtQueueTrimmedOffsetPolicy;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.table.YtQueueDynamicTableSource;
 import tech.ytsaurus.flyt.formats.yson.YsonFormatFactory;
 
@@ -51,11 +52,14 @@ class YTsaurusQueueDynamicTableFactoryTest {
         options.put("scan.async.worker-count", "2");
         options.put("scan.async.buffer-capacity", "4");
         options.put("scan.parallelism", "2");
+        options.put("scan.trimmed-offset-policy", "SKIP");
         DynamicTableSource source = createSource(options);
 
         assertThat(source).isInstanceOf(YtQueueDynamicTableSource.class);
         assertThat(source).extracting("specificOffsets")
                 .isEqualTo(List.of(10L, 20L, 30L));
+        assertThat(source).extracting("trimmedOffsetPolicy")
+                .isEqualTo(YtQueueTrimmedOffsetPolicy.SKIP);
     }
 
     @Test

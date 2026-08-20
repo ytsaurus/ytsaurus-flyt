@@ -90,13 +90,10 @@ public final class YtQueueSource<T>
         this.producedType = Objects.requireNonNull(producedType, "producedType");
         this.startupMode = Objects.requireNonNull(startupMode, "startupMode");
         this.specificOffsets = specificOffsets;
-        this.trimmedOffsetPolicy = Objects.requireNonNull(trimmedOffsetPolicy, "trimmedOffsetPolicy");
+        this.trimmedOffsetPolicy = trimmedOffsetPolicy;
         this.readerOptions = Objects.requireNonNull(readerOptions, "readerOptions");
         this.discoveryIntervalMillis = requirePositiveMilliseconds(discoveryInterval, "discoveryInterval");
         validateSpecificOffsets(startupMode, specificOffsets);
-        if (trimmedOffsetPolicy != YtQueueTrimmedOffsetPolicy.FAIL) {
-            throw new IllegalArgumentException("Unsupported trimmed offset policy: " + trimmedOffsetPolicy);
-        }
     }
 
     private static void validateSpecificOffsets(
@@ -138,6 +135,7 @@ public final class YtQueueSource<T>
                     pullerFactory,
                     recordDeserializer,
                     readerOptions,
+                    trimmedOffsetPolicy,
                     readerContext.getConfiguration(),
                     readerContext);
         } catch (Exception | Error failure) {
@@ -313,7 +311,7 @@ public final class YtQueueSource<T>
         }
 
         public Builder<T> trimmedOffsetPolicy(YtQueueTrimmedOffsetPolicy trimmedOffsetPolicy) {
-            this.trimmedOffsetPolicy = trimmedOffsetPolicy;
+            this.trimmedOffsetPolicy = Objects.requireNonNull(trimmedOffsetPolicy, "trimmedOffsetPolicy");
             return this;
         }
 
