@@ -10,14 +10,16 @@ import java.util.Random;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
+import com.github.benmanes.caffeine.cache.Scheduler;
+import com.github.benmanes.caffeine.cache.Ticker;
 import lombok.Builder;
 import lombok.SneakyThrows;
 import lombok.Value;
@@ -62,7 +64,6 @@ import tech.ytsaurus.flyt.connectors.ytsaurus.test.TestYtClient;
 import tech.ytsaurus.flyt.connectors.ytsaurus.test.YtClientPool;
 import tech.ytsaurus.flyt.connectors.ytsaurus.test.component.BasicEmulatingNodeComponent;
 import tech.ytsaurus.flyt.connectors.ytsaurus.test.component.StubFailingCountingTransactionComponent;
-import tech.ytsaurus.flyt.connectors.ytsaurus.utils.TemporalCache;
 
 @Slf4j
 // Enable logging if in need to investigate.
@@ -139,11 +140,10 @@ public class YtDynamicTableWriterPoolClientTest {
      * <ol>
      * <li>Have a writer in cache</li>
      * <li>Setup a long commit transaction</li>
-     * <li>Simulate cache cleanup (writer must exist longer than cache TTL)</li>
-     * <li>Check if the writer gets evicted</li>
+     * <li>Expire the cache entry while the write operation is still active</li>
+     * <li>Check that closing waits for the active operation</li>
      * </ol>
-     * Expected result: Writer 'A' must not get evicted from cache until transaction commits.
-     *                  This, in particular, implies that writer 'A' must not be replaced with any other writer.
+     * Expected result: the writer is retired, but it is closed only after the transaction commits.
      */
     @SneakyThrows
     @Test
@@ -153,16 +153,13 @@ public class YtDynamicTableWriterPoolClientTest {
         AtomicLong transactionCount = new AtomicLong(0);
         CountDownLatch foreverTransactionBegan = new CountDownLatch(1);
         CountDownLatch cacheCleanupFinished = new CountDownLatch(1);
-        AtomicReference<String> failMessage = new AtomicReference<>();
-
-        var defaultCache = YtDynamicTableWriterPool.makeDefaultCache();
-        var cache = Mockito.spy(defaultCache.toBuilder()
-                .ttl(Duration.ZERO, defaultCache.getExpirationCondition())
-                .cleanupPeriod(Integer.MAX_VALUE, TimeUnit.DAYS)
-                .removalListener(entry -> failMessage.set(
-                        entry.getKey() + " must not have been evicted from the cache! " +
-                                "This is a data loss"))
-                .build());
+        TestTicker ticker = new TestTicker();
+        var cacheSettings = new YtDynamicTableWriterPool.CacheSettings(
+                Duration.ofNanos(1),
+                ticker,
+                Scheduler.disabledScheduler(),
+                Runnable::run,
+                ForkJoinPool.commonPool());
         var client = new TestYtClient<>(
                 new BasicEmulatingNodeComponent(),
                 new StubFailingCountingTransactionComponent(
@@ -185,33 +182,57 @@ public class YtDynamicTableWriterPoolClientTest {
 
         try (var pool = makePool(TestPoolSettings.builder()
                 .clientPool(CountingTestYtClientPool.ofSingle(client))
-                .customCache(cache))) {
-            service.submit(() -> {
+                .cacheSettings(cacheSettings))) {
+            Future<?> cleanupFuture = service.submit(() -> {
                 try {
                     foreverTransactionBegan.await();
                     log.debug("Cache cleanup began");
-                    // this must not evict current writer (even though its expired)
-                    // because it holds an uncommitted transaction
-                    cache.cleanup();
+                    ticker.advance(1, TimeUnit.MINUTES);
+                    pool.cleanUpCache();
                     log.debug("Cache cleanup finished");
-                    cacheCleanupFinished.countDown();
                 } catch (InterruptedException e) {
                     throw new RuntimeException(e);
+                } finally {
+                    cacheCleanupFinished.countDown();
                 }
             });
-            for (int i = 0; i < ytWriterOptions.getRowsInTransactionLimit(); i++) {
+            for (int i = 0; i <= ytWriterOptions.getRowsInTransactionLimit(); i++) {
                 GenericRowData genericRowData = new GenericRowData(2);
                 genericRowData.setField(0, (long) i);
                 genericRowData.setField(1, TimestampData.fromInstant(OffsetDateTime.now().toInstant()));
-                pool.getOrAcquire(longCommit).write(genericRowData);
+                pool.write(longCommit, genericRowData);
             }
+            cleanupFuture.get();
+            Assertions.assertEquals(0, pool.cachedWriterCount());
+        } finally {
+            service.shutdownNow();
         }
 
-        Assertions.assertNull(failMessage.get());
-        Mockito.verify(cache, Mockito.times(1)).cleanup();
         Assertions.assertEquals(
-                ytWriterOptions.getRowsInTransactionLimit(),
+                ytWriterOptions.getRowsInTransactionLimit() + 1,
                 client.transactions().getCommittedRows());
+    }
+
+    @Test
+    void testIdleWriterEvictionCommitsBufferedRows() {
+        TestTicker ticker = new TestTicker();
+        var cacheSettings = new YtDynamicTableWriterPool.CacheSettings(
+                Duration.ofNanos(1), ticker, Scheduler.disabledScheduler(), Runnable::run, Runnable::run);
+        var client = makeTestClient();
+        GenericRowData row = new GenericRowData(2);
+        row.setField(0, 1L);
+        row.setField(1, TimestampData.fromInstant(T_OFFSET_DTTM.toInstant()));
+
+        try (var pool = makePool(TestPoolSettings.builder()
+                .clientPool(CountingTestYtClientPool.ofSingle(client))
+                .cacheSettings(cacheSettings))) {
+            pool.write(WriterClassifier.plain("idle"), row);
+            ticker.advance(1, TimeUnit.NANOSECONDS);
+            pool.cleanUpCache();
+
+            Assertions.assertEquals(0, pool.cachedWriterCount());
+            Assertions.assertEquals(1, client.transactions().getCommittedRows());
+        }
     }
 
     @SneakyThrows
@@ -234,7 +255,7 @@ public class YtDynamicTableWriterPoolClientTest {
         AtomicLong total = new AtomicLong(0);
         try (var pool = makePool(clientPool)) {
             data.forEach(pair -> {
-                pool.getOrAcquire(pair.getKey()).write(pair.getValue());
+                pool.write(pair.getKey(), pair.getValue());
                 total.getAndIncrement();
             });
         }
@@ -331,7 +352,9 @@ public class YtDynamicTableWriterPoolClientTest {
         TestPoolSettings settings = builder.build();
         RowDataToYtListConverters ytConverter = new RowDataToYtListConverters(TimestampFormat.ISO_8601);
         return new YtDynamicTableWriterPool(
-                settings.getCustomCache(),
+                settings.getCacheSettings() == null
+                        ? YtDynamicTableWriterPool.CacheSettings.defaults()
+                        : settings.getCacheSettings(),
                 settings.getClientPool()::produce,
                 ytConverter.createConverter(settings.getLogicalType(),
                         YTreeTextSerializer.deserialize(settings.getSchema())),
@@ -402,6 +425,19 @@ public class YtDynamicTableWriterPoolClientTest {
         String schema;
         LogicalType logicalType;
         YtClientPool<?> clientPool;
-        TemporalCache<String, YtDynamicTableWriter> customCache;
+        YtDynamicTableWriterPool.CacheSettings cacheSettings;
+    }
+
+    private static class TestTicker implements Ticker {
+        private final AtomicLong nanos = new AtomicLong();
+
+        @Override
+        public long read() {
+            return nanos.get();
+        }
+
+        private void advance(long duration, TimeUnit unit) {
+            nanos.addAndGet(unit.toNanos(duration));
+        }
     }
 }

@@ -133,9 +133,7 @@ public class YtRowDataSinkFunction extends RichSinkFunction<RowData> implements 
 
     @Override
     public void snapshotState(FunctionSnapshotContext context) {
-        for (YtDynamicTableWriter writer : pool.getWriters()) {
-            writer.snapshotState(context.getCheckpointId());
-        }
+        pool.snapshotState(context.getCheckpointId());
     }
 
     @Override
@@ -152,7 +150,6 @@ public class YtRowDataSinkFunction extends RichSinkFunction<RowData> implements 
                 ytWriterOptions.getLocksConfig().getConfig());
 
         this.pool = new YtDynamicTableWriterPool(
-                null,  // cache - will be created by constructor
                 this::makeYtClient,
                 ytConverters,
                 path,
@@ -186,7 +183,7 @@ public class YtRowDataSinkFunction extends RichSinkFunction<RowData> implements 
         if (value == null) {
             return;
         }
-        pool.getOrAcquire(dispatchQuery(value)).write(value);
+        pool.write(dispatchQuery(value), value);
     }
 
     @Override
