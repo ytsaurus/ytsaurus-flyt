@@ -19,6 +19,7 @@ dependencies {
     api(project(":flink-connector-data-metrics"))
     api("tech.ytsaurus:ytsaurus-client:1.2.12")
     implementation(project(":flink-yson-fast-adapter"))
+    implementation("com.github.ben-manes.caffeine:caffeine:3.2.4")
     implementation("jakarta.annotation:jakarta.annotation-api:1.3.5")
 
     compileOnly("org.apache.flink:flink-core:1.20.1")
@@ -73,7 +74,10 @@ tasks.compileJava {
 
 tasks.shadowJar {
     mergeServiceFiles()
+    relocate("com.github.benmanes.caffeine", "tech.ytsaurus.flyt.connectors.ytsaurus.shaded.caffeine")
     relocate("com.google.protobuf", "tech.ytsaurus.flyt.connectors.ytsaurus.shaded.com.google.protobuf")
+    relocate("org.checkerframework", "tech.ytsaurus.flyt.connectors.ytsaurus.shaded.org.checkerframework")
+    relocate("org.jspecify", "tech.ytsaurus.flyt.connectors.ytsaurus.shaded.org.jspecify")
 }
 
 tasks.withType<Checkstyle> {

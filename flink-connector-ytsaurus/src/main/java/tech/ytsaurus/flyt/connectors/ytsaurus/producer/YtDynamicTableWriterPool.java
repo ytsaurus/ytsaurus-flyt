@@ -155,13 +155,7 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
 
     @SneakyThrows
     public YtDynamicTableWriter getOrAcquire(WriterClassifier writerClassifier) {
-        String tableName = writerClassifier.getTableName();
-        YtDynamicTableWriter value = cache.get(tableName);
-        if (value == null) {
-            value = prepareWriter(writerClassifier);
-            cache.put(tableName, value);
-        }
-        return value;
+        return cache.get(writerClassifier.getTableName(), ignored -> prepareWriter(writerClassifier));
     }
 
     public Collection<YtDynamicTableWriter> getWriters() {

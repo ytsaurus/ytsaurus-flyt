@@ -1,12 +1,9 @@
 package tech.ytsaurus.flyt.connectors.ytsaurus.utils;
 
 import java.time.Duration;
-import java.time.LocalDateTime;
 import java.util.Collection;
-import java.util.Iterator;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -17,6 +14,9 @@ import java.util.stream.Collectors;
 
 import javax.annotation.Nullable;
 
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
+import com.github.benmanes.caffeine.cache.Ticker;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.Getter;
@@ -26,25 +26,40 @@ import org.apache.flink.util.Preconditions;
 
 @Slf4j
 public class TemporalCache<K, V> {
-    private final Map<K, CacheEntry> cacheEntryMap;
+    private final Cache<K, CacheEntry> cache;
     private final Duration ttl;
+    private final long ttlNanos;
     private final long cleanupPeriod;
-    private Consumer<Map.Entry<K, V>> removalListener;
-    private ScheduledFuture<?> cleanupFuture;
+    private final Consumer<Map.Entry<K, V>> removalListener;
+    private final Ticker ticker;
     @Nullable
-    private Function<V, Boolean> expirationCondition;
+    private final Function<V, Boolean> expirationCondition;
+
+    private ScheduledExecutorService cleanupExecutor;
+    private ScheduledFuture<?> cleanupFuture;
 
     public TemporalCache(Duration ttl,
                          long cleanupPeriodMs,
                          Consumer<Map.Entry<K, V>> removalListener,
                          @Nullable Function<V, Boolean> expirationCondition) {
+        this(ttl, cleanupPeriodMs, removalListener, expirationCondition, Ticker.systemTicker());
+    }
+
+    private TemporalCache(Duration ttl,
+                          long cleanupPeriodMs,
+                          Consumer<Map.Entry<K, V>> removalListener,
+                          @Nullable Function<V, Boolean> expirationCondition,
+                          Ticker ticker) {
         Preconditions.checkNotNull(ttl);
+        Preconditions.checkArgument(!ttl.isNegative(), "TTL must not be negative");
         Preconditions.checkArgument(cleanupPeriodMs > 0);
         this.ttl = ttl;
+        this.ttlNanos = ttl.toNanos();
         this.cleanupPeriod = cleanupPeriodMs;
         this.removalListener = removalListener;
         this.expirationCondition = expirationCondition;
-        this.cacheEntryMap = new ConcurrentHashMap<>();
+        this.ticker = ticker;
+        this.cache = Caffeine.newBuilder().build();
     }
 
     public static <K, V> TemporalCacheBuilder<K, V> builder() {
@@ -55,39 +70,51 @@ public class TemporalCache<K, V> {
         return new TemporalCacheBuilder<K, V>()
                 .removalListener(removalListener)
                 .ttl(ttl, expirationCondition)
-                .cleanupPeriod(cleanupPeriod);
+                .cleanupPeriod(cleanupPeriod)
+                .ticker(ticker);
     }
 
     public void put(K key, V value) {
-        cacheEntryMap.put(key, new CacheEntry(value, LocalDateTime.now(), expirationCondition, 0));
+        cache.put(key, new CacheEntry(value, ticker.read(), expirationCondition, 0));
     }
 
     public boolean containsKey(K key) {
-        return cacheEntryMap.containsKey(key);
+        return cache.asMap().containsKey(key);
     }
 
     public int getSize() {
-        return cacheEntryMap.size();
+        return Math.toIntExact(cache.estimatedSize());
     }
 
     public V get(K key) {
-        CacheEntry entry = cacheEntryMap.get(key);
+        CacheEntry entry = cache.getIfPresent(key);
         if (entry == null) {
             return null;
         }
 
-        entry.prolong();
+        entry.prolong(ticker.read());
+        return entry.getValue();
+    }
+
+    public V get(K key, Function<? super K, ? extends V> mappingFunction) {
+        CacheEntry entry = cache.get(key, missingKey -> new CacheEntry(
+                mappingFunction.apply(missingKey), ticker.read(), expirationCondition, 0));
+        entry.prolong(ticker.read());
         return entry.getValue();
     }
 
     public Collection<V> values() {
-        return cacheEntryMap.values().stream().map(CacheEntry::getValue).collect(Collectors.toUnmodifiableList());
+        return cache.asMap().values().stream().map(CacheEntry::getValue).collect(Collectors.toUnmodifiableList());
     }
 
     public void schedule() {
         Preconditions.checkArgument(cleanupFuture == null, "Cache cleanup is already scheduled");
-        ScheduledExecutorService service = Executors.newSingleThreadScheduledExecutor();
-        cleanupFuture = service.scheduleWithFixedDelay(
+        cleanupExecutor = Executors.newSingleThreadScheduledExecutor(runnable -> {
+            Thread thread = new Thread(runnable, "temporal-cache-cleanup");
+            thread.setDaemon(true);
+            return thread;
+        });
+        cleanupFuture = cleanupExecutor.scheduleWithFixedDelay(
                 this::cleanup,
                 cleanupPeriod,
                 cleanupPeriod,
@@ -97,37 +124,44 @@ public class TemporalCache<K, V> {
     @VisibleForTesting
     public void cleanup() {
         try {
-            LocalDateTime frozenCurrent = LocalDateTime.now();
-            Iterator<Map.Entry<K, CacheEntry>> entryIterator = cacheEntryMap.entrySet().iterator();
-            while (entryIterator.hasNext()) {
-                Map.Entry<K, CacheEntry> current = entryIterator.next();
-                CacheEntry entry = current.getValue();
-                try {
-                    if (entry.isExpired(frozenCurrent)) {
-                        try {
-                            if (removalListener != null) {
-                                removalListener.accept(Map.entry(current.getKey(), entry.getValue()));
-                            }
-                            entryIterator.remove();
-                        } catch (Exception e) {
-                            entry.increaseFailureCount();
-                            log.error("Unable to accept removal listener for key: {} " +
-                                            "(total cleanup failures for the entry: {})",
-                                    current.getKey(), entry.getCleanupFailureCount(), e);
-                        }
-                    }
-                } catch (Exception e) {
-                    log.error("Unable to check expiration for key: {}", current.getKey(), e);
+            long now = ticker.read();
+            cache.asMap().forEach((key, observedEntry) -> cache.asMap().computeIfPresent(key, (ignored, entry) -> {
+                if (entry != observedEntry) {
+                    return entry;
                 }
-            }
+                return removeIfExpired(key, entry, now);
+            }));
         } catch (Exception e) {
             log.error("Unable to finish cleanup operation", e);
         }
     }
 
+    private CacheEntry removeIfExpired(K key, CacheEntry entry, long now) {
+        try {
+            if (!entry.isExpired(now)) {
+                return entry;
+            }
+            try {
+                if (removalListener != null) {
+                    removalListener.accept(Map.entry(key, entry.getValue()));
+                }
+                return null;
+            } catch (Exception e) {
+                entry.increaseFailureCount();
+                log.error("Unable to accept removal listener for key: {} " +
+                                "(total cleanup failures for the entry: {})",
+                        key, entry.getCleanupFailureCount(), e);
+            }
+        } catch (Exception e) {
+            log.error("Unable to check expiration for key: {}", key, e);
+        }
+        return entry;
+    }
+
     public void cancel() {
         Preconditions.checkNotNull(cleanupFuture, "TemporalCache has not been scheduled");
         cleanupFuture.cancel(true);
+        cleanupExecutor.shutdownNow();
     }
 
     @Nullable
@@ -147,21 +181,21 @@ public class TemporalCache<K, V> {
     @AllArgsConstructor
     private class CacheEntry {
         V value;
-        LocalDateTime accessedAt;
+        private volatile long accessedAt;
         Function<V, Boolean> expirationCondition;
 
         @Getter
         private int cleanupFailureCount;
 
-        private boolean isExpired(LocalDateTime relativeTo) {
-            return Duration.between(accessedAt, relativeTo).compareTo(ttl) >= 0
+        private boolean isExpired(long relativeToNanos) {
+            return relativeToNanos - accessedAt >= ttlNanos
                     && Optional.ofNullable(expirationCondition)
                     .map(condition -> condition.apply(value))
                     .orElse(true);
         }
 
-        private void prolong() {
-            accessedAt = LocalDateTime.now();
+        private void prolong(long accessedAtNanos) {
+            accessedAt = accessedAtNanos;
         }
 
         private void increaseFailureCount() {
@@ -174,6 +208,7 @@ public class TemporalCache<K, V> {
         private Long cleanupPeriodMs;
         private Consumer<Map.Entry<K, V>> removalListener;
         private Function<V, Boolean> expirationCondition;
+        private Ticker ticker = Ticker.systemTicker();
 
         public TemporalCacheBuilder() {
         }
@@ -210,10 +245,16 @@ public class TemporalCache<K, V> {
             return this;
         }
 
+        @VisibleForTesting
+        TemporalCacheBuilder<K, V> ticker(Ticker ticker) {
+            this.ticker = ticker;
+            return this;
+        }
+
         public TemporalCache<K, V> build() {
             Preconditions.checkNotNull(ttl);
             Preconditions.checkNotNull(cleanupPeriodMs);
-            return new TemporalCache<>(ttl, cleanupPeriodMs, removalListener, expirationCondition);
+            return new TemporalCache<>(ttl, cleanupPeriodMs, removalListener, expirationCondition, ticker);
         }
     }
 }
