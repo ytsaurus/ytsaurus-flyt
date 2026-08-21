@@ -54,7 +54,6 @@ public class RowDataToYtListConverters implements Serializable {
     private static final Set<String> EXPLICIT_YSON_TYPES = Set.of(TypeName.Yson.getWireName().toLowerCase(), "any");
     private static final String TYPE_V3_NAME = "type_v3";
     private static final String TYPE_NAME = "type_name";
-    private static final String OPTIONAL_TYPE_NAME = "optional";
     private static final String ITEM_NAME = "item";
 
     private final TimestampFormat timestampFormat;
@@ -321,13 +320,15 @@ public class RowDataToYtListConverters implements Serializable {
     }
 
     private boolean isDictField(YTreeNode fieldNode) {
-        return isType(extractTypeV3Node(fieldNode), "dict");
+        return isType(extractTypeV3Node(fieldNode), TypeName.Dict.getWireName());
     }
 
     private void validateDictKeyType(YTreeNode fieldNode) {
         YTreeNode dictTypeNode = extractTypeV3Node(fieldNode);
         YTreeNode keyTypeNode = dictTypeNode.asMap().get("key");
-        if (keyTypeNode == null || !keyTypeNode.isStringNode() || !"string".equals(keyTypeNode.stringValue())) {
+        if (keyTypeNode == null
+                || !keyTypeNode.isStringNode()
+                || !TypeName.String.getWireName().equals(keyTypeNode.stringValue())) {
             throw new IllegalStateException(String.format(
                     "Only YT dicts with string keys are supported. Got key type: %s in field: %s",
                     keyTypeNode, fieldNode));
@@ -355,12 +356,12 @@ public class RowDataToYtListConverters implements Serializable {
         if (typeNode == null) {
             return fieldNode;
         }
-        if (isType(typeNode, OPTIONAL_TYPE_NAME)) {
+        if (isType(typeNode, TypeName.Optional.getWireName())) {
             YTreeNode itemTypeNode = typeNode.asMap().get(ITEM_NAME);
             if (itemTypeNode == null) {
                 throw new IllegalStateException("YT optional type has no item in field: " + fieldNode);
             }
-            if (isType(itemTypeNode, OPTIONAL_TYPE_NAME)) {
+            if (isType(itemTypeNode, TypeName.Optional.getWireName())) {
                 throw new UnsupportedOperationException(
                         "Nested YT optional<optional<T>> is not supported in field: " + fieldNode);
             }
@@ -372,7 +373,7 @@ public class RowDataToYtListConverters implements Serializable {
     private boolean isNullable(LogicalType flinkType, YTreeNode fieldNode) {
         YTreeNode typeV3Node = extractTypeV3Node(fieldNode);
         if (typeV3Node != null) {
-            return isType(typeV3Node, OPTIONAL_TYPE_NAME);
+            return isType(typeV3Node, TypeName.Optional.getWireName());
         }
         if (extractTypeNode(fieldNode) != null) {
             YTreeNode requiredNode = fieldNode.asMap().get("required");
