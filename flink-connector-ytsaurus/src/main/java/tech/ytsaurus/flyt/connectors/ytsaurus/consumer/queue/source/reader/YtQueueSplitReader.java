@@ -26,6 +26,7 @@ import java.util.function.Supplier;
 
 import javax.annotation.Nullable;
 
+import lombok.extern.slf4j.Slf4j;
 import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.connector.base.source.reader.RecordsBySplits;
 import org.apache.flink.connector.base.source.reader.RecordsWithSplitIds;
@@ -41,6 +42,7 @@ import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.model.YtQueu
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.model.YtQueueRawRecord;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.split.YtQueueSplit;
 
+@Slf4j
 public final class YtQueueSplitReader implements SplitReader<YtQueueRawRecord, YtQueueSplit> {
     private static final int WORKER_CLOSE_TIMEOUT_SECONDS = 10;
 
@@ -107,6 +109,15 @@ public final class YtQueueSplitReader implements SplitReader<YtQueueRawRecord, Y
         this.workerExecutor = Executors.newFixedThreadPool(
                 configuredWorkerCount,
                 YtQueueSplitReader::createWorkerThread);
+        log.info(
+                "Opened YT queue split reader with max row count {}, max data weight {} bytes, "
+                        + "empty poll backoff {}, {} workers, buffer capacity {}, and trimmed offset policy {}",
+                options.getMaxRows(),
+                options.getMaxDataWeightBytes(),
+                options.getEmptyPollBackoff(),
+                configuredWorkerCount,
+                options.getBufferCapacity(),
+                trimmedOffsetPolicy);
     }
 
     @Override
@@ -152,6 +163,10 @@ public final class YtQueueSplitReader implements SplitReader<YtQueueRawRecord, Y
     @Override
     public void handleSplitsChanges(SplitsChange<YtQueueSplit> splitsChange) {
         Objects.requireNonNull(splitsChange, "splitsChange");
+        log.info(
+                "Received YT queue split change {}: {}",
+                splitsChange.getClass().getSimpleName(),
+                splitsChange.splits());
         if (splitsChange instanceof SplitsAddition) {
             synchronized (stateMonitor) {
                 for (YtQueueSplit split : splitsChange.splits()) {
@@ -212,6 +227,12 @@ public final class YtQueueSplitReader implements SplitReader<YtQueueRawRecord, Y
             }
             stateMonitor.notifyAll();
         }
+        if (!splitsToPause.isEmpty()) {
+            log.info("Paused YT queue splits: {}", splitsToPause);
+        }
+        if (!splitsToResume.isEmpty()) {
+            log.info("Resumed YT queue splits: {}", splitsToResume);
+        }
     }
 
     @Override
@@ -225,6 +246,7 @@ public final class YtQueueSplitReader implements SplitReader<YtQueueRawRecord, Y
         if (!closed.compareAndSet(false, true)) {
             return;
         }
+        log.info("Closing YT queue split reader");
 
         List<Worker> workersToStop;
         synchronized (stateMonitor) {
@@ -254,6 +276,7 @@ public final class YtQueueSplitReader implements SplitReader<YtQueueRawRecord, Y
             closeFailures.forEach(failure::addSuppressed);
             throw failure;
         }
+        log.info("Closed YT queue split reader");
     }
 
     @VisibleForTesting
@@ -376,6 +399,11 @@ public final class YtQueueSplitReader implements SplitReader<YtQueueRawRecord, Y
                         batch.getStartOffset(),
                         request.getOffset()));
             }
+            log.warn(
+                    "Requested offset {} for queue partition {} was trimmed; skipping to offset {}",
+                    request.getOffset(),
+                    request.getPartitionIndex(),
+                    batch.getStartOffset());
         }
 
         if (batch.getRows().isEmpty()) {
@@ -493,6 +521,7 @@ public final class YtQueueSplitReader implements SplitReader<YtQueueRawRecord, Y
     private void registerWorkerFailure(Throwable failure) {
         Throwable unwrapped = unwrapCompletionException(failure);
         if (workerFailure.compareAndSet(null, unwrapped)) {
+            log.error("YT queue reader worker failed", unwrapped);
             enqueueWakeUpSignal();
             synchronized (stateMonitor) {
                 stateMonitor.notifyAll();

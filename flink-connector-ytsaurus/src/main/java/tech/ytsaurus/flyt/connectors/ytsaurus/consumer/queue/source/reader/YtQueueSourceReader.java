@@ -5,6 +5,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.function.Supplier;
 
+import lombok.extern.slf4j.Slf4j;
 import org.apache.flink.api.connector.source.SourceReaderContext;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.connector.base.source.reader.SingleThreadMultiplexSourceReaderBase;
@@ -17,6 +18,7 @@ import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.model.YtQueu
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.split.YtQueueSplit;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.split.YtQueueSplitState;
 
+@Slf4j
 public final class YtQueueSourceReader<T>
         extends SingleThreadMultiplexSourceReaderBase<
                 YtQueueRawRecord,
@@ -115,6 +117,7 @@ public final class YtQueueSourceReader<T>
         this.offsetCommitter = Objects.requireNonNull(offsetCommitter, "offsetCommitter");
         try {
             deserializer.open(context);
+            log.info("Opened YT queue source reader");
         } catch (Exception | Error failure) {
             try {
                 super.close();
@@ -129,23 +132,30 @@ public final class YtQueueSourceReader<T>
 
     @Override
     public List<YtQueueSplit> snapshotState(long checkpointId) {
+        log.info("Snapshotting YT queue source reader state for checkpoint {}", checkpointId);
         List<YtQueueSplit> splits = super.snapshotState(checkpointId);
         offsetCommitter.snapshotState(checkpointId, List.copyOf(splits));
+        log.info("Snapshotted YT queue source reader state for checkpoint {}: {}", checkpointId, splits);
         return splits;
     }
 
     @Override
     public void notifyCheckpointComplete(long checkpointId) throws Exception {
+        log.info("Completing checkpoint {} for YT queue source reader", checkpointId);
         offsetCommitter.notifyCheckpointComplete(checkpointId);
+        log.info("Completed checkpoint {} for YT queue source reader", checkpointId);
     }
 
     @Override
     public void notifyCheckpointAborted(long checkpointId) throws Exception {
+        log.info("Aborting checkpoint {} for YT queue source reader", checkpointId);
         offsetCommitter.notifyCheckpointAborted(checkpointId);
+        log.info("Aborted checkpoint {} for YT queue source reader", checkpointId);
     }
 
     @Override
     public void close() throws Exception {
+        log.info("Closing YT queue source reader");
         Exception failure = null;
         try {
             super.close();
@@ -171,12 +181,15 @@ public final class YtQueueSourceReader<T>
             }
         }
         if (failure != null) {
+            log.error("Failed to close YT queue source reader", failure);
             throw failure;
         }
+        log.info("Closed YT queue source reader");
     }
 
     @Override
     protected void onSplitFinished(Map<String, YtQueueSplitState> finishedSplitIds) {
+        log.info("Finished YT queue splits {}", finishedSplitIds.keySet());
     }
 
     @Override

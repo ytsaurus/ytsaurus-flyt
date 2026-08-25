@@ -12,6 +12,7 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import javax.annotation.Nullable;
 
+import lombok.extern.slf4j.Slf4j;
 import org.apache.flink.api.connector.source.ReaderInfo;
 import org.apache.flink.api.connector.source.SplitEnumerator;
 import org.apache.flink.api.connector.source.SplitEnumeratorContext;
@@ -22,6 +23,7 @@ import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.enumerator.m
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.enumerator.metadata.YtQueueMetadataProvider;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.split.YtQueueSplit;
 
+@Slf4j
 public final class YtQueueSplitEnumerator
         implements SplitEnumerator<YtQueueSplit, YtQueueEnumeratorState> {
     private final SplitEnumeratorContext<YtQueueSplit> context;
@@ -95,6 +97,10 @@ public final class YtQueueSplitEnumerator
             return;
         }
         started = true;
+        log.info(
+                "Starting YT queue split enumerator with {} initialized partitions and {} unassigned splits",
+                initializedPartitionCount,
+                unassignedSplits.size());
         context.callAsync(
                 this::discoverMetadata,
                 this::handleDiscovery,
@@ -121,6 +127,7 @@ public final class YtQueueSplitEnumerator
                             ? returned
                             : current);
         }
+        log.info("Returned YT queue splits from subtask {}: {}", subtaskId, splits);
         assignAvailableSplits();
     }
 
@@ -131,10 +138,17 @@ public final class YtQueueSplitEnumerator
 
     @Override
     public YtQueueEnumeratorState snapshotState(long checkpointId) {
-        return new YtQueueEnumeratorState(
+        YtQueueEnumeratorState state = new YtQueueEnumeratorState(
                 queueObjectId,
                 initializedPartitionCount,
                 new ArrayList<>(unassignedSplits.values()));
+        log.info(
+                "Snapshotted YT queue split enumerator state for checkpoint {}: "
+                        + "{} initialized partitions, {} unassigned splits",
+                checkpointId,
+                initializedPartitionCount,
+                unassignedSplits.size());
+        return state;
     }
 
     @Override
@@ -143,6 +157,7 @@ public final class YtQueueSplitEnumerator
             return;
         }
         closed = true;
+        log.info("Closing YT queue split enumerator");
         Exception failure = null;
         try {
             metadataProvider.close();
@@ -159,6 +174,7 @@ public final class YtQueueSplitEnumerator
             }
         }
         if (failure != null) {
+            log.error("Failed to close YT queue split enumerator", failure);
             if (failure instanceof IOException) {
                 throw (IOException) failure;
             }
@@ -167,6 +183,7 @@ public final class YtQueueSplitEnumerator
             }
             throw new IOException("Failed to close YT queue enumerator", failure);
         }
+        log.info("Closed YT queue split enumerator");
     }
 
     private DiscoveryAttempt discoverMetadata() {
@@ -199,6 +216,7 @@ public final class YtQueueSplitEnumerator
     }
 
     private void handleMetadata(YtQueueMetadata metadata) {
+        YtQueueMetadata previousMetadata = latestMetadata;
         if (queueObjectId == null) {
             queueObjectId = metadata.getQueueObjectId();
         } else if (!queueObjectId.equals(metadata.getQueueObjectId())) {
@@ -208,6 +226,13 @@ public final class YtQueueSplitEnumerator
         }
         latestMetadata = metadata;
         metadataValidated = true;
+        if (previousMetadata == null
+                || previousMetadata.getPartitionCount() != metadata.getPartitionCount()) {
+            log.info(
+                    "Discovered YT queue {} with {} partitions",
+                    metadata.getQueueObjectId(),
+                    metadata.getPartitionCount());
+        }
         assignAvailableSplits();
         if (!initializationInProgress
                 && initializedPartitionCount < metadata.getPartitionCount()) {
@@ -219,6 +244,10 @@ public final class YtQueueSplitEnumerator
         int firstPartition = initializedPartitionCount;
         int partitionCount = metadata.getPartitionCount();
         initializationInProgress = true;
+        log.info(
+                "Initializing YT queue offsets for partitions {}..{}",
+                firstPartition,
+                partitionCount - 1);
         context.callAsync(
                 () -> initializeSplits(metadata, firstPartition, partitionCount),
                 (splits, error) -> handleInitializedSplits(
@@ -295,6 +324,7 @@ public final class YtQueueSplitEnumerator
         }
         initializedPartitionCount = partitionCount;
         initializationInProgress = false;
+        log.info("Initialized YT queue splits: {}", splits);
         assignAvailableSplits();
 
         if (initializedPartitionCount
@@ -335,6 +365,7 @@ public final class YtQueueSplitEnumerator
             return;
         }
         context.assignSplits(new SplitsAssignment<>(assignments));
+        log.info("Assigned YT queue splits: {}", assignments);
         for (Integer partition : assignedPartitions) {
             unassignedSplits.remove(partition);
         }
