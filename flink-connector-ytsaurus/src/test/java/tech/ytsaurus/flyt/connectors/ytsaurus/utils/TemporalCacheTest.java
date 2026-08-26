@@ -16,6 +16,7 @@ import org.junit.jupiter.api.Timeout;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 
+@SuppressWarnings("deprecation")
 public class TemporalCacheTest {
     @Test
     public void testRemoveAfterExpire() {

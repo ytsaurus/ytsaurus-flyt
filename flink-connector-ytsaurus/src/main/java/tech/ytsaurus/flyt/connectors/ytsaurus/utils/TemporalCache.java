@@ -3,10 +3,8 @@ package tech.ytsaurus.flyt.connectors.ytsaurus.utils;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.Collection;
-import java.util.Iterator;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -17,6 +15,8 @@ import java.util.stream.Collectors;
 
 import javax.annotation.Nullable;
 
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.Getter;
@@ -24,15 +24,25 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.util.Preconditions;
 
+/**
+ * @deprecated Use Caffeine directly for general-purpose caches. The writer pool uses a domain-specific
+ * Caffeine-backed cache that retains writers with uncommitted data.
+ */
+@Deprecated
 @Slf4j
 public class TemporalCache<K, V> {
-    private final Map<K, CacheEntry> cacheEntryMap;
+    private final Cache<K, CacheEntry> cache;
     private final Duration ttl;
     private final long cleanupPeriod;
-    private Consumer<Map.Entry<K, V>> removalListener;
-    private ScheduledFuture<?> cleanupFuture;
+    private final Consumer<Map.Entry<K, V>> removalListener;
+    private final Object cleanupLock = new Object();
     @Nullable
-    private Function<V, Boolean> expirationCondition;
+    private final Function<V, Boolean> expirationCondition;
+    @Nullable
+    private ScheduledExecutorService cleanupExecutor;
+    @Nullable
+    private ScheduledFuture<?> cleanupFuture;
+    private volatile boolean cleanupEnabled;
 
     public TemporalCache(Duration ttl,
                          long cleanupPeriodMs,
@@ -44,7 +54,7 @@ public class TemporalCache<K, V> {
         this.cleanupPeriod = cleanupPeriodMs;
         this.removalListener = removalListener;
         this.expirationCondition = expirationCondition;
-        this.cacheEntryMap = new ConcurrentHashMap<>();
+        this.cache = Caffeine.newBuilder().build();
     }
 
     public static <K, V> TemporalCacheBuilder<K, V> builder() {
@@ -59,35 +69,36 @@ public class TemporalCache<K, V> {
     }
 
     public void put(K key, V value) {
-        cacheEntryMap.put(key, new CacheEntry(value, LocalDateTime.now(), expirationCondition, 0));
+        cache.put(key, new CacheEntry(value, LocalDateTime.now(), expirationCondition, 0));
     }
 
     public boolean containsKey(K key) {
-        return cacheEntryMap.containsKey(key);
+        return cache.asMap().containsKey(key);
     }
 
     public int getSize() {
-        return cacheEntryMap.size();
+        return cache.asMap().size();
     }
 
     public V get(K key) {
-        CacheEntry entry = cacheEntryMap.get(key);
-        if (entry == null) {
-            return null;
-        }
-
-        entry.prolong();
-        return entry.getValue();
+        CacheEntry entry = cache.asMap().computeIfPresent(key, (ignored, current) -> {
+            current.prolong();
+            return current;
+        });
+        return entry == null ? null : entry.getValue();
     }
 
     public Collection<V> values() {
-        return cacheEntryMap.values().stream().map(CacheEntry::getValue).collect(Collectors.toUnmodifiableList());
+        return cache.asMap().values().stream()
+                .map(CacheEntry::getValue)
+                .collect(Collectors.toUnmodifiableList());
     }
 
-    public void schedule() {
-        Preconditions.checkArgument(cleanupFuture == null, "Cache cleanup is already scheduled");
-        ScheduledExecutorService service = Executors.newSingleThreadScheduledExecutor();
-        cleanupFuture = service.scheduleWithFixedDelay(
+    public synchronized void schedule() {
+        Preconditions.checkState(cleanupFuture == null, "Cache cleanup is already scheduled");
+        cleanupEnabled = true;
+        cleanupExecutor = Executors.newSingleThreadScheduledExecutor();
+        cleanupFuture = cleanupExecutor.scheduleWithFixedDelay(
                 this::cleanup,
                 cleanupPeriod,
                 cleanupPeriod,
@@ -96,38 +107,62 @@ public class TemporalCache<K, V> {
 
     @VisibleForTesting
     public void cleanup() {
+        synchronized (cleanupLock) {
+            if (cleanupFuture == null || cleanupEnabled) {
+                cleanupEntries();
+            }
+        }
+    }
+
+    private void cleanupEntries() {
+        LocalDateTime now = LocalDateTime.now();
         try {
-            LocalDateTime frozenCurrent = LocalDateTime.now();
-            Iterator<Map.Entry<K, CacheEntry>> entryIterator = cacheEntryMap.entrySet().iterator();
-            while (entryIterator.hasNext()) {
-                Map.Entry<K, CacheEntry> current = entryIterator.next();
-                CacheEntry entry = current.getValue();
-                try {
-                    if (entry.isExpired(frozenCurrent)) {
-                        try {
-                            if (removalListener != null) {
-                                removalListener.accept(Map.entry(current.getKey(), entry.getValue()));
-                            }
-                            entryIterator.remove();
-                        } catch (Exception e) {
-                            entry.increaseFailureCount();
-                            log.error("Unable to accept removal listener for key: {} " +
-                                            "(total cleanup failures for the entry: {})",
-                                    current.getKey(), entry.getCleanupFailureCount(), e);
-                        }
-                    }
-                } catch (Exception e) {
-                    log.error("Unable to check expiration for key: {}", current.getKey(), e);
-                }
+            for (K key : cache.asMap().keySet()) {
+                cache.asMap().computeIfPresent(key, (ignored, entry) -> cleanupEntry(key, entry, now));
             }
         } catch (Exception e) {
             log.error("Unable to finish cleanup operation", e);
         }
     }
 
+    private CacheEntry cleanupEntry(K key, CacheEntry entry, LocalDateTime now) {
+        try {
+            if (!entry.isExpired(now)) {
+                return entry;
+            }
+        } catch (Exception e) {
+            log.error("Unable to check expiration for key: {}", key, e);
+            return entry;
+        }
+
+        try {
+            if (removalListener != null) {
+                removalListener.accept(Map.entry(key, entry.getValue()));
+            }
+            return null;
+        } catch (Exception e) {
+            entry.increaseFailureCount();
+            log.error("Unable to accept removal listener for key: {} "
+                            + "(total cleanup failures for the entry: {})",
+                    key, entry.getCleanupFailureCount(), e);
+            return entry;
+        }
+    }
+
     public void cancel() {
-        Preconditions.checkNotNull(cleanupFuture, "TemporalCache has not been scheduled");
-        cleanupFuture.cancel(true);
+        synchronized (this) {
+            ScheduledFuture<?> future = Preconditions.checkNotNull(
+                    cleanupFuture, "TemporalCache has not been scheduled");
+            cleanupEnabled = false;
+            future.cancel(false);
+            ScheduledExecutorService executor = Preconditions.checkNotNull(
+                    cleanupExecutor, "TemporalCache cleanup executor is not initialized");
+            executor.shutdown();
+        }
+
+        synchronized (cleanupLock) {
+            // Wait for a running listener before callers operate on the remaining values.
+        }
     }
 
     @Nullable
@@ -146,9 +181,9 @@ public class TemporalCache<K, V> {
     @Data
     @AllArgsConstructor
     private class CacheEntry {
-        V value;
-        LocalDateTime accessedAt;
-        Function<V, Boolean> expirationCondition;
+        private V value;
+        private LocalDateTime accessedAt;
+        private Function<V, Boolean> expirationCondition;
 
         @Getter
         private int cleanupFailureCount;

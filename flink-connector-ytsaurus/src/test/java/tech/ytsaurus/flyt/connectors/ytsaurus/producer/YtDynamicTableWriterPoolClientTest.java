@@ -62,7 +62,6 @@ import tech.ytsaurus.flyt.connectors.ytsaurus.test.TestYtClient;
 import tech.ytsaurus.flyt.connectors.ytsaurus.test.YtClientPool;
 import tech.ytsaurus.flyt.connectors.ytsaurus.test.component.BasicEmulatingNodeComponent;
 import tech.ytsaurus.flyt.connectors.ytsaurus.test.component.StubFailingCountingTransactionComponent;
-import tech.ytsaurus.flyt.connectors.ytsaurus.utils.TemporalCache;
 
 @Slf4j
 // Enable logging if in need to investigate.
@@ -155,14 +154,7 @@ public class YtDynamicTableWriterPoolClientTest {
         CountDownLatch cacheCleanupFinished = new CountDownLatch(1);
         AtomicReference<String> failMessage = new AtomicReference<>();
 
-        var defaultCache = YtDynamicTableWriterPool.makeDefaultCache();
-        var cache = Mockito.spy(defaultCache.toBuilder()
-                .ttl(Duration.ZERO, defaultCache.getExpirationCondition())
-                .cleanupPeriod(Integer.MAX_VALUE, TimeUnit.DAYS)
-                .removalListener(entry -> failMessage.set(
-                        entry.getKey() + " must not have been evicted from the cache! " +
-                                "This is a data loss"))
-                .build());
+        var cache = Mockito.spy(new YtDynamicTableWriterCache(Duration.ZERO, Duration.ofDays(1)));
         var client = new TestYtClient<>(
                 new BasicEmulatingNodeComponent(),
                 new StubFailingCountingTransactionComponent(
@@ -192,7 +184,10 @@ public class YtDynamicTableWriterPoolClientTest {
                     log.debug("Cache cleanup began");
                     // this must not evict current writer (even though its expired)
                     // because it holds an uncommitted transaction
-                    cache.cleanup();
+                    cache.cleanupExpired();
+                    if (cache.getSize() != 1) {
+                        failMessage.set("Writer must not have been evicted from the cache! This is a data loss");
+                    }
                     log.debug("Cache cleanup finished");
                     cacheCleanupFinished.countDown();
                 } catch (InterruptedException e) {
@@ -208,7 +203,7 @@ public class YtDynamicTableWriterPoolClientTest {
         }
 
         Assertions.assertNull(failMessage.get());
-        Mockito.verify(cache, Mockito.times(1)).cleanup();
+        Mockito.verify(cache, Mockito.times(1)).cleanupExpired();
         Assertions.assertEquals(
                 ytWriterOptions.getRowsInTransactionLimit(),
                 client.transactions().getCommittedRows());
@@ -402,6 +397,6 @@ public class YtDynamicTableWriterPoolClientTest {
         String schema;
         LogicalType logicalType;
         YtClientPool<?> clientPool;
-        TemporalCache<String, YtDynamicTableWriter> customCache;
+        YtDynamicTableWriterCache customCache;
     }
 }
