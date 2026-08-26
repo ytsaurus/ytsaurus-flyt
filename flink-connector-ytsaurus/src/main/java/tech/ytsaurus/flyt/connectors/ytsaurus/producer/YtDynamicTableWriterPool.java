@@ -18,7 +18,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.api.common.functions.RuntimeContext;
 import org.apache.flink.table.types.DataType;
-import org.apache.flink.util.Preconditions;
 import org.apache.flink.util.concurrent.ExponentialBackoffRetryStrategy;
 import org.apache.flink.util.concurrent.RetryStrategy;
 import tech.ytsaurus.client.YTsaurusClient;
@@ -41,7 +40,6 @@ import tech.ytsaurus.flyt.connectors.ytsaurus.common.providers.reshard.FixedResh
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.providers.reshard.LastPartitionsReshardProvider;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.providers.reshard.ReshardProvider;
 import tech.ytsaurus.flyt.connectors.ytsaurus.producer.converters.RowDataToYtListConverters;
-import tech.ytsaurus.flyt.connectors.ytsaurus.utils.TemporalCache;
 
 @Slf4j
 public class YtDynamicTableWriterPool implements Serializable, Closeable {
@@ -51,7 +49,7 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
     private static final Duration CACHE_CLEANUP_INTERVAL = Duration.ofMinutes(1);
 
     private final transient Supplier<YTsaurusClient> clientSupplier;
-    private final transient WriterCache cache;
+    private final transient YtDynamicTableWriterCache cache;
 
     private final transient Map<String, MetricsSupplier> metricsSuppliers;
 
@@ -77,7 +75,7 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
 
     @VisibleForTesting
     @SuppressWarnings("checkstyle:ParameterNumber")
-    YtDynamicTableWriterPool(@Nullable WriterCache cache,
+    YtDynamicTableWriterPool(@Nullable YtDynamicTableWriterCache cache,
                              Supplier<YTsaurusClient> clientSupplier,
                              RowDataToYtListConverters.RowDataToYtMapConverter ytConverter,
                              ComplexYtPath path,
@@ -113,42 +111,6 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
         this.dataMetrics.open(context);
 
         cache.startCleanup();
-    }
-
-    /**
-     * @deprecated Custom {@link TemporalCache} injection is retained for compatibility. Use the constructor without
-     * a cache parameter.
-     */
-    @Deprecated
-    @SuppressWarnings("checkstyle:ParameterNumber")
-    public YtDynamicTableWriterPool(@Nullable TemporalCache<String, YtDynamicTableWriter> cache,
-                                    Supplier<YTsaurusClient> clientSupplier,
-                                    RowDataToYtListConverters.RowDataToYtMapConverter ytConverter,
-                                    ComplexYtPath path,
-                                    String ysonSchemaString,
-                                    TrackableField trackableField,
-                                    RetryStrategy retryStrategy,
-                                    RuntimeContext context,
-                                    YtTableAttributes tableAttributes,
-                                    ReshardingConfig reshardingConfig,
-                                    YtWriterOptions ytWriterOptions,
-                                    LocksProvider locksProvider,
-                                    DataType dataType,
-                                    @Nullable DataMetricsConfig dataMetricsConfig) {
-        this(cache == null ? makeDefaultCache() : new TemporalCacheAdapter(cache),
-                clientSupplier,
-                ytConverter,
-                path,
-                ysonSchemaString,
-                trackableField,
-                retryStrategy,
-                context,
-                tableAttributes,
-                reshardingConfig,
-                ytWriterOptions,
-                locksProvider,
-                dataType,
-                dataMetricsConfig);
     }
 
     @SuppressWarnings("checkstyle:ParameterNumber")
@@ -333,42 +295,6 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
             default:
                 throw new IllegalArgumentException("Unsupported resharding strategy: "
                         + reshardingConfig.getReshardStrategy());
-        }
-    }
-
-    @SuppressWarnings("deprecation")
-    private static final class TemporalCacheAdapter implements WriterCache {
-        private final TemporalCache<String, YtDynamicTableWriter> cache;
-
-        private TemporalCacheAdapter(TemporalCache<String, YtDynamicTableWriter> cache) {
-            this.cache = cache;
-        }
-
-        @Override
-        public synchronized YtDynamicTableWriter getOrAcquire(
-                String tableName,
-                Supplier<YtDynamicTableWriter> writerSupplier) {
-            YtDynamicTableWriter writer = cache.get(tableName);
-            if (writer == null) {
-                writer = Preconditions.checkNotNull(writerSupplier.get());
-                cache.put(tableName, writer);
-            }
-            return writer;
-        }
-
-        @Override
-        public Collection<YtDynamicTableWriter> valuesSnapshot() {
-            return cache.values();
-        }
-
-        @Override
-        public void startCleanup() {
-            cache.schedule();
-        }
-
-        @Override
-        public void stopCleanup() {
-            cache.cancel();
         }
     }
 }

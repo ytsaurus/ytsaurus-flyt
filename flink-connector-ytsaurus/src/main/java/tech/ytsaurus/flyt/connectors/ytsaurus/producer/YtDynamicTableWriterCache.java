@@ -19,16 +19,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.util.Preconditions;
 
-interface WriterCache {
-    YtDynamicTableWriter getOrAcquire(String tableName, Supplier<YtDynamicTableWriter> writerSupplier);
-
-    Collection<YtDynamicTableWriter> valuesSnapshot();
-
-    void startCleanup();
-
-    void stopCleanup();
-}
-
 /**
  * A Caffeine-backed writer cache with conditional expiration.
  *
@@ -36,7 +26,7 @@ interface WriterCache {
  * Caffeine for atomic per-key operations and checks the writer state immediately before closing and removing it.
  */
 @Slf4j
-final class YtDynamicTableWriterCache implements WriterCache {
+final class YtDynamicTableWriterCache {
     private final Cache<String, CacheEntry> cache;
     private final long ttlNanos;
     private final long cleanupPeriodNanos;
@@ -67,8 +57,7 @@ final class YtDynamicTableWriterCache implements WriterCache {
         this.ticker = Preconditions.checkNotNull(ticker);
     }
 
-    @Override
-    public YtDynamicTableWriter getOrAcquire(String tableName, Supplier<YtDynamicTableWriter> writerSupplier) {
+    YtDynamicTableWriter getOrAcquire(String tableName, Supplier<YtDynamicTableWriter> writerSupplier) {
         CacheEntry result = cache.asMap().compute(tableName, (ignored, current) -> {
             if (current == null) {
                 YtDynamicTableWriter writer = Preconditions.checkNotNull(writerSupplier.get());
@@ -79,15 +68,13 @@ final class YtDynamicTableWriterCache implements WriterCache {
         return Preconditions.checkNotNull(result).getWriter();
     }
 
-    @Override
-    public Collection<YtDynamicTableWriter> valuesSnapshot() {
+    Collection<YtDynamicTableWriter> valuesSnapshot() {
         return cache.asMap().values().stream()
                 .map(CacheEntry::getWriter)
                 .collect(Collectors.toUnmodifiableList());
     }
 
-    @Override
-    public synchronized void startCleanup() {
+    synchronized void startCleanup() {
         Preconditions.checkState(cleanupFuture == null, "Cache cleanup is already scheduled");
         cleanupEnabled = true;
         cleanupExecutor = Executors.newSingleThreadScheduledExecutor();
@@ -107,7 +94,7 @@ final class YtDynamicTableWriterCache implements WriterCache {
     }
 
     @VisibleForTesting
-    public void cleanupExpired() {
+    void cleanupExpired() {
         synchronized (cleanupLock) {
             cleanupExpiredEntries();
         }
@@ -144,8 +131,7 @@ final class YtDynamicTableWriterCache implements WriterCache {
         }
     }
 
-    @Override
-    public void stopCleanup() {
+    void stopCleanup() {
         ScheduledExecutorService executor;
         ScheduledFuture<?> future;
         synchronized (this) {
