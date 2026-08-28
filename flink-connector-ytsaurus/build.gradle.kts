@@ -75,6 +75,7 @@ tasks.compileJava {
 tasks.shadowJar {
     mergeServiceFiles()
     relocate("com.google.protobuf", "tech.ytsaurus.flyt.connectors.ytsaurus.shaded.com.google.protobuf")
+    relocate("NYT", "tech.ytsaurus.flyt.connectors.ytsaurus.shaded.NYT")
 }
 
 tasks.withType<Checkstyle> {
