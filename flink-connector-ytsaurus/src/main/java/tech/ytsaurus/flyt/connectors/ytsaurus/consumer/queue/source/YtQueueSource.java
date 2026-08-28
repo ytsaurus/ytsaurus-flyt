@@ -56,6 +56,9 @@ public final class YtQueueSource<T>
 
     private final CredentialsProvider credentialsProvider;
 
+    @Nullable
+    private final String credentialsCluster;
+
     private final YtQueueRecordDeserializer<T> recordDeserializer;
 
     private final TypeInformation<T> producedType;
@@ -76,6 +79,7 @@ public final class YtQueueSource<T>
             String proxy,
             String queuePath,
             CredentialsProvider credentialsProvider,
+            @Nullable String credentialsCluster,
             YtQueueRecordDeserializer<T> recordDeserializer,
             TypeInformation<T> producedType,
             YtQueueStartupMode startupMode,
@@ -86,6 +90,9 @@ public final class YtQueueSource<T>
         this.proxy = requireNonBlank(proxy, "proxy");
         this.queuePath = requireNonBlank(queuePath, "queuePath");
         this.credentialsProvider = Objects.requireNonNull(credentialsProvider, "credentialsProvider");
+        this.credentialsCluster = credentialsCluster == null
+                ? null
+                : requireNonBlank(credentialsCluster, "credentialsCluster");
         this.recordDeserializer = Objects.requireNonNull(recordDeserializer, "recordDeserializer");
         this.producedType = Objects.requireNonNull(producedType, "producedType");
         this.startupMode = Objects.requireNonNull(startupMode, "startupMode");
@@ -206,7 +213,8 @@ public final class YtQueueSource<T>
     }
 
     private YTsaurusClient createClient() {
-        return YtUtils.makeYtClient(proxy, credentialsProvider.getCredentials(proxy));
+        String resolvedCredentialsCluster = credentialsCluster == null ? proxy : credentialsCluster;
+        return YtUtils.makeYtClient(proxy, credentialsProvider.getCredentials(resolvedCredentialsCluster));
     }
 
     private static String requireNonBlank(String value, String fieldName) {
@@ -249,6 +257,9 @@ public final class YtQueueSource<T>
 
         private CredentialsProvider credentialsProvider;
 
+        @Nullable
+        private String credentialsCluster;
+
         private YtQueueRecordDeserializer<T> recordDeserializer;
 
         private TypeInformation<T> producedType;
@@ -287,6 +298,11 @@ public final class YtQueueSource<T>
 
         public Builder<T> credentialsProvider(CredentialsProvider credentialsProvider) {
             this.credentialsProvider = credentialsProvider;
+            return this;
+        }
+
+        public Builder<T> credentialsCluster(@Nullable String credentialsCluster) {
+            this.credentialsCluster = credentialsCluster;
             return this;
         }
 
@@ -374,6 +390,7 @@ public final class YtQueueSource<T>
                     proxy,
                     queuePath,
                     credentialsProvider,
+                    credentialsCluster,
                     recordDeserializer,
                     producedType,
                     startupMode,

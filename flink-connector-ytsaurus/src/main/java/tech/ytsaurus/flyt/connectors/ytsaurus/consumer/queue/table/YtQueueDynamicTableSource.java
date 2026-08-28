@@ -35,6 +35,9 @@ public class YtQueueDynamicTableSource implements ScanTableSource {
 
     private final CredentialsProvider credentialsProvider;
 
+    @Nullable
+    private final String credentialsCluster;
+
     private final DecodingFormat<DeserializationSchema<RowData>> decodingFormat;
 
     private final DataType physicalRowDataType;
@@ -73,6 +76,7 @@ public class YtQueueDynamicTableSource implements ScanTableSource {
                 .proxy(proxy)
                 .queuePath(queuePath)
                 .credentialsProvider(credentialsProvider)
+                .credentialsCluster(credentialsCluster)
                 .recordDeserializer(createRecordDeserializer(deserializer))
                 .producedType(producedType)
                 .startupMode(startupMode)
@@ -104,6 +108,7 @@ public class YtQueueDynamicTableSource implements ScanTableSource {
                 .proxy(proxy)
                 .queuePath(queuePath)
                 .credentialsProvider(credentialsProvider)
+                .credentialsCluster(credentialsCluster)
                 .decodingFormat(decodingFormat)
                 .physicalRowDataType(physicalRowDataType)
                 .startupMode(startupMode)

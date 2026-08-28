@@ -680,7 +680,7 @@ The `ytsaurus-queue` connector continuously reads an ordered dynamic table witho
 
 The table schema comes from the Flink DDL. In the default `ROW` read mode queue rows are YSON maps, so this source supports only the insert-only `format = 'yson'` decoder; see [Read modes](#read-modes) for reading a payload out of a single column instead. There is no YSON table schema option. Install the [Flink YSON format](../flink-yson/README.md) alongside the connector.
 
-The `env` credentials provider reads `YT_USERNAME` and `YT_TOKEN`. With `credentials-source = 'options'`, both `username` and `token` must be set in the table options.
+The `env` credentials provider reads `YT_USERNAME` and `YT_TOKEN`. With `credentials-source = 'options'`, both `username` and `token` must be set in the table options. By default, the connector asks the credentials provider for credentials associated with `proxy`. Set `credentials-cluster` when credentials must be resolved using another cluster name. This option affects only credentials resolution; queue requests are still sent to `proxy`.
 
 For the DataStream API, construct the FLIP-27 source directly:
 
@@ -774,6 +774,7 @@ Metadata columns are not supported in either mode, so `$timestamp`, `$cumulative
 | `proxy` | String | - | Required YTsaurus RPC proxy address |
 | `path` | String | - | Required queue path |
 | `credentials-source` | String | - | Required credentials provider identifier |
+| `credentials-cluster` | String | `proxy` | Cluster name passed to the credentials provider; does not change the queue proxy |
 | `format` | String | - | Required insert-only format; must be `yson` in `ROW` read mode |
 | `username` | String | - | Username for the `options` credentials provider |
 | `token` | String | - | Token for the `options` credentials provider |

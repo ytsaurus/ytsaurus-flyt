@@ -57,6 +57,7 @@ class YTsaurusQueueDynamicTableFactoryTest {
         options.put("scan.async.buffer-capacity", "4");
         options.put("scan.parallelism", "2");
         options.put("scan.trimmed-offset-policy", "SKIP");
+        options.put("credentials-cluster", "hahn");
         DynamicTableSource source = createSource(options);
 
         assertThat(source).isInstanceOf(YtQueueDynamicTableSource.class);
@@ -64,6 +65,7 @@ class YTsaurusQueueDynamicTableFactoryTest {
                 .isEqualTo(List.of(10L, 20L, 30L));
         assertThat(source).extracting("trimmedOffsetPolicy")
                 .isEqualTo(YtQueueTrimmedOffsetPolicy.SKIP);
+        assertThat(source).extracting("credentialsCluster").isEqualTo("hahn");
     }
 
     @Test
