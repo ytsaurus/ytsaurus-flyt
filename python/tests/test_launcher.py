@@ -5,9 +5,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from ytsaurus_flyt.config import FlytConfig
-from ytsaurus_flyt.launcher import launch_vanilla_job
-from ytsaurus_flyt.models import ClusterParams
+from ytsaurus_flyt.config.config import FlytConfig
+from ytsaurus_flyt.config.models import ClusterParams
+from ytsaurus_flyt.submit.launcher import launch_vanilla_job
 
 
 @pytest.fixture
@@ -15,9 +15,9 @@ def mock_yt_client():
     return MagicMock()
 
 
-def test_launch_rejects_squashfs_without_runtime_packages(mock_yt_client):
-    cfg = FlytConfig(runtime_python_packages=[])
-    with pytest.raises(ValueError, match="runtime_python_packages"):
+def test_launch_rejects_squashfs_without_flink_version(mock_yt_client):
+    cfg = FlytConfig(flink_version="")
+    with pytest.raises(ValueError, match="flink_version"):
         launch_vanilla_job(
             cfg,
             mock_yt_client,
@@ -28,7 +28,7 @@ def test_launch_rejects_squashfs_without_runtime_packages(mock_yt_client):
 
 
 def test_launch_rejects_squashfs_without_runtime_python_version(mock_yt_client):
-    cfg = FlytConfig(runtime_python_packages=["apache-flink==1.20.1"], runtime_python_version="")
+    cfg = FlytConfig(flink_version="1.20.1", runtime_python_version="")
     with pytest.raises(ValueError, match="runtime_python_version"):
         launch_vanilla_job(
             cfg,

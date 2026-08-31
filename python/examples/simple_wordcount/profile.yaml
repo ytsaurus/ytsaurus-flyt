@@ -1,17 +1,20 @@
 service_name: "simple-wordcount"
 
+flink_version: "1.20.1"
+runtime_python_version: "3.10"
+java_version: "11"
+
 proxy: "http://localhost:50005"
 yt_ui_base_url: "http://localhost:50004"
 
 pool: "default"
 preset: "micro"
 
-cypress_base_path: "//home/flyt/clusters/simple-wordcount"
+squashfs_layer_paths:
+  - "//sys/flink/flyt-flink120-py310.squashfs"
 squashfs_layer_delivery: "sandbox_unpack"
+unsquashfs_path: "//sys/flink/unsquashfs"
 
-runtime_python_packages:
-  - "apache-flink==1.20.1"
-runtime_python_version: "3.8"
-
-java_home: "/usr/lib/jvm/java-11-openjdk-amd64"
-python_bin: "/usr/bin/python3"
+yt_client_config:
+  proxy:
+    enable_proxy_discovery: false

@@ -92,15 +92,13 @@ def resolve_proxy_pool(
     cli_proxy: Optional[str],
     cli_pool: Optional[str],
 ) -> Tuple[str, str]:
-    """Merge CLI, env (FLYT_* / YT_*), then profile. CLI wins, then env overrides profile."""
-    env_proxy = (os.environ.get("FLYT_PROXY") or os.environ.get("YT_PROXY") or "").strip()
-    env_pool = (os.environ.get("FLYT_POOL") or os.environ.get("YT_POOL") or "").strip()
+    """Merge CLI, env (YT_PROXY / YT_POOL), then profile. CLI wins, then env overrides profile."""
+    env_proxy = (os.environ.get("YT_PROXY") or "").strip()
+    env_pool = (os.environ.get("YT_POOL") or "").strip()
     proxy = (cli_proxy or "").strip() or env_proxy or (profile_proxy or "").strip()
     pool = (cli_pool or "").strip() or env_pool or (profile_pool or "").strip()
     if not proxy:
-        raise ValueError(
-            "No YT HTTP proxy configured. Set proxy in a flyt profile, pass --proxy, or set FLYT_PROXY / YT_PROXY."
-        )
+        raise ValueError("No YT HTTP proxy configured. Set proxy in a flyt profile, pass --proxy, or set YT_PROXY.")
     if not pool:
-        raise ValueError("No pool configured. Set pool in a flyt profile, pass --pool, or set FLYT_POOL / YT_POOL.")
+        raise ValueError("No pool configured. Set pool in a flyt profile, pass --pool, or set YT_POOL.")
     return proxy, pool

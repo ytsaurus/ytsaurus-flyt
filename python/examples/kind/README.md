@@ -40,7 +40,10 @@ flyt profile add kind-dev --proxy http://localhost:50005
 Edit `~/.config/flyt/profiles/kind-dev.yaml` and set **`squashfs_layer_delivery: sandbox_unpack`** (default `flyt profile add` is **`layer_paths`**, which fits production clusters; Kind needs unpack-in-sandbox).
 
 ```bash
-flyt install
+# Build + upload the runtime layer; then set squashfs_layer_paths: ["//sys/flink/flyt-flink120-py310.squashfs"] in the profile.
+flyt build layer --upload //sys/flink/flyt-flink120-py310.squashfs
+# sandbox_unpack also needs an `unsquashfs` helper on YT; then set unsquashfs_path: "//sys/flink/unsquashfs" in the profile.
+flyt build unsquashfs --upload //sys/flink/unsquashfs
 flyt run "examples/simple_wordcount/pipeline.py"
 ```
 

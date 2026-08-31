@@ -1,8 +1,8 @@
 """Tests for Vanilla spec assembly and run-script selection."""
 
-from ytsaurus_flyt.config import FlytConfig
-from ytsaurus_flyt.models import ClusterPreset, JobmanagerParams, OperationParams
-from ytsaurus_flyt.spec import _build_run_script, build_vanilla_operation_spec
+from ytsaurus_flyt.config.config import FlytConfig
+from ytsaurus_flyt.config.models import ClusterPreset, JobmanagerParams, OperationParams
+from ytsaurus_flyt.submit.spec import _build_run_script, build_vanilla_operation_spec
 
 
 def _jobmanager_from_preset() -> JobmanagerParams:
@@ -14,7 +14,7 @@ def _jobmanager_from_preset() -> JobmanagerParams:
 
 
 def test_build_run_script_squashfs_unpack_includes_unpack_fragment():
-    cfg = FlytConfig(python_bin="/usr/bin/python3")
+    cfg = FlytConfig()
     script = _build_run_script(
         "pipeline.py",
         cfg,
@@ -27,8 +27,27 @@ def test_build_run_script_squashfs_unpack_includes_unpack_fragment():
     assert script.index("01_prepare_squashfs.sh") < script.index("21_prepare_libs.sh")
 
 
+def test_build_run_script_templates_ordered_unpack_layers():
+    cfg = FlytConfig(squashfs_layer_delivery="sandbox_unpack")
+    script = _build_run_script(
+        "pipeline.py",
+        cfg,
+        "svc",
+        use_squashfs_sandbox_unpack=True,
+        sandbox_unpack_layers=["base.squashfs", "runtime-abc.squashfs"],
+    )
+    assert '_FLYT_LAYERS="base.squashfs runtime-abc.squashfs"' in script
+
+
+def test_build_run_script_unpack_falls_back_to_glob_without_layers():
+    cfg = FlytConfig(squashfs_layer_delivery="sandbox_unpack")
+    script = _build_run_script("pipeline.py", cfg, "svc", use_squashfs_sandbox_unpack=True)
+    assert '_FLYT_LAYERS=""' in script
+    assert "runtime-*.squashfs" in script  # glob fallback
+
+
 def test_build_run_script_uses_set_for_job_args():
-    cfg = FlytConfig(python_bin="/usr/bin/python3")
+    cfg = FlytConfig()
     script = _build_run_script(
         "pipeline.py --foo",
         cfg,
@@ -40,7 +59,7 @@ def test_build_run_script_uses_set_for_job_args():
 
 
 def test_build_run_script_squashfs_layer_paths_skips_unpack():
-    cfg = FlytConfig(python_bin="/usr/bin/python3")
+    cfg = FlytConfig()
     script = _build_run_script(
         "pipeline.py",
         cfg,
@@ -54,7 +73,7 @@ def test_build_run_script_squashfs_layer_paths_skips_unpack():
 
 
 def test_build_vanilla_operation_spec_layer_paths_and_tmpfs():
-    config = FlytConfig(service_name="t", java_home="/jdk", python_bin="/py")
+    config = FlytConfig(service_name="t")
     op = OperationParams(
         file_paths=["//tmp/wheel.whl"],
         layer_paths=["//home/layers/runtime.squashfs"],
@@ -78,7 +97,7 @@ def test_build_vanilla_operation_spec_layer_paths_and_tmpfs():
 
 
 def test_build_vanilla_operation_spec_sandbox_unpack_no_layer_paths_in_task():
-    config = FlytConfig(service_name="t", java_home="/jdk", python_bin="/py")
+    config = FlytConfig(service_name="t")
     op = OperationParams(
         file_paths=["//layer.squashfs", "//tool", "//wheel.whl"],
         layer_paths=[],
@@ -101,7 +120,7 @@ def test_build_vanilla_operation_spec_sandbox_unpack_no_layer_paths_in_task():
 
 
 def test_build_vanilla_operation_spec_environment_no_hardcoded_flink_paths():
-    config = FlytConfig(service_name="t", java_home="/jdk", python_bin="/py")
+    config = FlytConfig(service_name="t")
     op = OperationParams(file_paths=[], pool="pool")
     jm = _jobmanager_from_preset()
     builder = build_vanilla_operation_spec(
@@ -114,14 +133,15 @@ def test_build_vanilla_operation_spec_environment_no_hardcoded_flink_paths():
     )
     spec = builder.build()
     env = spec["tasks"]["flink"]["environment"]
-    assert env["JAVA_HOME"] == "/jdk"
+    # JAVA_HOME / PYTHON_BIN are layer-relative now, set in the run script (not the spec env).
+    assert "JAVA_HOME" not in env
     assert "FLINK_HOME" not in env
     assert "FLINK_LIB_DIR" not in env
     assert env["YT_ALLOW_HTTP_REQUESTS_TO_YT_FROM_JOB"] == "1"
 
 
 def test_build_vanilla_operation_spec_java_opts_heap_only():
-    config = FlytConfig(service_name="t", java_home="/jdk", python_bin="/py")
+    config = FlytConfig(service_name="t")
     op = OperationParams(file_paths=[], pool="pool")
     jm = _jobmanager_from_preset()
     builder = build_vanilla_operation_spec(
@@ -139,7 +159,7 @@ def test_build_vanilla_operation_spec_java_opts_heap_only():
 
 
 def test_build_vanilla_operation_spec_java_opts_with_off_heap():
-    config = FlytConfig(service_name="t", java_home="/jdk", python_bin="/py")
+    config = FlytConfig(service_name="t")
     op = OperationParams(file_paths=[], pool="pool")
     jm = _jobmanager_from_preset()
     builder = build_vanilla_operation_spec(
