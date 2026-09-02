@@ -61,7 +61,7 @@ final class YtDynamicTableWriterCache {
         CacheEntry result = cache.asMap().compute(tableName, (ignored, current) -> {
             if (current == null) {
                 YtDynamicTableWriter writer = Preconditions.checkNotNull(writerSupplier.get());
-                return new CacheEntry(writer, ticker.read(), 0);
+                return new CacheEntry(writer, ticker.read());
             }
             return current.withAccessTime(ticker.read());
         });
@@ -112,23 +112,16 @@ final class YtDynamicTableWriterCache {
     }
 
     private CacheEntry cleanupEntry(String key, CacheEntry entry, long now) {
-        if (!entry.isExpired(now, ttlNanos)) {
+        if (!entry.isExpired(now, ttlNanos) || entry.getWriter().isBusy()) {
             return entry;
         }
 
         try {
-            if (entry.getWriter().isBusy()) {
-                return entry;
-            }
             entry.getWriter().close();
-            return null;
         } catch (Exception e) {
-            CacheEntry failedEntry = entry.withCleanupFailure();
-            log.error("Unable to clean up writer cache entry for key: {} "
-                            + "(total cleanup failures for the entry: {})",
-                    key, failedEntry.getCleanupFailureCount(), e);
-            return failedEntry;
+            log.error("Unable to close writer cache entry for key: {}", key, e);
         }
+        return null;
     }
 
     void stopCleanup() {
@@ -171,20 +164,14 @@ final class YtDynamicTableWriterCache {
     private static final class CacheEntry {
         private final YtDynamicTableWriter writer;
         private final long accessedAtNanos;
-        private final int cleanupFailureCount;
 
-        private CacheEntry(YtDynamicTableWriter writer, long accessedAtNanos, int cleanupFailureCount) {
+        private CacheEntry(YtDynamicTableWriter writer, long accessedAtNanos) {
             this.writer = writer;
             this.accessedAtNanos = accessedAtNanos;
-            this.cleanupFailureCount = cleanupFailureCount;
         }
 
         private CacheEntry withAccessTime(long newAccessedAtNanos) {
-            return new CacheEntry(writer, newAccessedAtNanos, cleanupFailureCount);
-        }
-
-        private CacheEntry withCleanupFailure() {
-            return new CacheEntry(writer, accessedAtNanos, cleanupFailureCount + 1);
+            return new CacheEntry(writer, newAccessedAtNanos);
         }
 
         private boolean isExpired(long now, long ttl) {

@@ -80,21 +80,19 @@ public class YtDynamicTableWriterCacheTest {
     }
 
     @Test
-    public void testRetryCleanupAfterCloseFailure() {
+    public void testRemoveEntryAfterCloseFailure() {
         YtDynamicTableWriter writer = Mockito.mock(YtDynamicTableWriter.class);
-        Mockito.doThrow(new RuntimeException("close failed"))
-                .doNothing()
-                .when(writer).close();
+        YtDynamicTableWriter replacement = Mockito.mock(YtDynamicTableWriter.class);
+        Mockito.doThrow(new RuntimeException("close failed")).when(writer).close();
         YtDynamicTableWriterCache cache = makeCache();
         cache.getOrAcquire("table", () -> writer);
         ticker.advance(TTL);
 
         cache.cleanupExpired();
-        Assertions.assertEquals(1, cache.getSize());
-
-        cache.cleanupExpired();
         Assertions.assertEquals(0, cache.getSize());
-        Mockito.verify(writer, Mockito.times(2)).close();
+        Mockito.verify(writer).close();
+
+        Assertions.assertSame(replacement, cache.getOrAcquire("table", () -> replacement));
     }
 
     @Test
