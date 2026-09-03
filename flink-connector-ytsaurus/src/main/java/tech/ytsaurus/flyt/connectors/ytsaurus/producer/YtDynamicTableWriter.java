@@ -170,6 +170,9 @@ public class YtDynamicTableWriter implements Serializable {
 
     private transient String acquiredLock;
 
+    @Nullable
+    private transient volatile Runnable cacheStateListener;
+
     // Shared data metrics delegate (managed by pool, not by individual writers)
     private final DataMetricsWriterDelegate dataMetrics;
 
@@ -252,6 +255,7 @@ public class YtDynamicTableWriter implements Serializable {
                         error.set(e);
                     } finally {
                         commitTransactionLock.unlock();
+                        notifyCacheStateListener();
                     }
                 }
             }, 0L, ytWriterOptions.getCommitTransactionPeriod().toMillis(), TimeUnit.MILLISECONDS);
@@ -398,34 +402,38 @@ public class YtDynamicTableWriter implements Serializable {
     }
 
     public void write(RowData record) {
-        dataMetrics.onRecord(record);
+        try {
+            dataMetrics.onRecord(record);
 
-        if (modificationSize() == ytWriterOptions.getRowsInModificationLimit()) {
+            if (modificationSize() == ytWriterOptions.getRowsInModificationLimit()) {
+                flushModificationLock.lock();
+                try {
+                    flushModification();
+                } finally {
+                    flushModificationLock.unlock();
+                }
+            }
+            if (rowsInTransaction.get() >= ytWriterOptions.getRowsInTransactionLimit()) {
+                commitTransactionLock.lock();
+                try {
+                    if (rowsInTransaction.get() >= ytWriterOptions.getRowsInTransactionLimit()) {
+                        commitTransaction();
+                    }
+                } finally {
+                    commitTransactionLock.unlock();
+                }
+            }
             flushModificationLock.lock();
             try {
-                flushModification();
+                final Map<String, ? extends Serializable> row = createRow(record);
+                modificationBuffer.addInsert(row);
+                unflushedRows.add(row);
+                rowsInBuffer.incrementAndGet();
             } finally {
                 flushModificationLock.unlock();
             }
-        }
-        if (rowsInTransaction.get() >= ytWriterOptions.getRowsInTransactionLimit()) {
-            commitTransactionLock.lock();
-            try {
-                if (rowsInTransaction.get() >= ytWriterOptions.getRowsInTransactionLimit()) {
-                    commitTransaction();
-                }
-            } finally {
-                commitTransactionLock.unlock();
-            }
-        }
-        flushModificationLock.lock();
-        try {
-            final Map<String, ? extends Serializable> row = createRow(record);
-            modificationBuffer.addInsert(row);
-            unflushedRows.add(row);
-            rowsInBuffer.incrementAndGet();
         } finally {
-            flushModificationLock.unlock();
+            notifyCacheStateListener();
         }
     }
 
@@ -489,6 +497,7 @@ public class YtDynamicTableWriter implements Serializable {
         } finally {
             commitTransactionLock.unlock();
             flushModificationLock.unlock();
+            notifyCacheStateListener();
         }
     }
 
@@ -875,6 +884,21 @@ public class YtDynamicTableWriter implements Serializable {
 
     public boolean isBusy() {
         return rowsInBuffer.get() != 0 || rowsInTransaction.get() != 0;
+    }
+
+    void setCacheStateListener(Runnable listener) {
+        cacheStateListener = listener;
+    }
+
+    void clearCacheStateListener() {
+        cacheStateListener = null;
+    }
+
+    private void notifyCacheStateListener() {
+        Runnable listener = cacheStateListener;
+        if (listener != null) {
+            listener.run();
+        }
     }
 
     @Override
