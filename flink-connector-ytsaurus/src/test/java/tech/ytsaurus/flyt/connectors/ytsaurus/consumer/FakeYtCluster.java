@@ -6,6 +6,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -14,7 +16,6 @@ import java.util.stream.IntStream;
 import tech.ytsaurus.client.TableReader;
 import tech.ytsaurus.client.YTsaurusClient;
 import tech.ytsaurus.client.request.ReadTable;
-import tech.ytsaurus.core.tables.TableSchema;
 import tech.ytsaurus.rpcproxy.TReqReadTable;
 import tech.ytsaurus.ysontree.YTree;
 import tech.ytsaurus.ysontree.YTreeNode;
@@ -92,7 +93,7 @@ final class FakeYtCluster {
                 requestedPaths.add(path);
                 requestedStartRows.add(startRow);
             }
-            return CompletableFuture.completedFuture(new FakeTableReader(startRow));
+            return CompletableFuture.completedFuture(reader(startRow));
         });
         return client;
     }
@@ -117,80 +118,32 @@ final class FakeYtCluster {
      * Emits one row per batch and signals EOF the way the real reader does: the last read returns
      * nothing and flips {@code canRead()} in the same call.
      */
-    private final class FakeTableReader implements TableReader<YTreeNode> {
+    private TableReader<YTreeNode> reader(int startRow) throws Exception {
+        @SuppressWarnings("unchecked")
+        TableReader<YTreeNode> reader = mock(TableReader.class);
+        AtomicInteger next = new AtomicInteger(startRow);
+        AtomicBoolean eof = new AtomicBoolean();
 
-        private final int startRow;
-        private int offset;
-        private boolean eof;
-
-        private FakeTableReader(int startRow) {
-            this.startRow = startRow;
-        }
-
-        @Override
-        public List<YTreeNode> read() throws Exception {
-            int index = startRow + offset;
-            synchronized (FakeYtCluster.this) {
-                if (failuresLeft > 0 && index >= failAtRow) {
-                    failuresLeft--;
-                    throw new IOException("transient YT failure at row " + index);
-                }
-            }
+        when(reader.readyEvent()).thenReturn(CompletableFuture.completedFuture(null));
+        when(reader.close()).thenReturn(CompletableFuture.completedFuture(null));
+        when(reader.canRead()).thenAnswer(invocation -> !eof.get());
+        when(reader.read()).thenAnswer(invocation -> {
+            int index = next.get();
+            failIfArmed(index);
             if (index >= rows.size()) {
-                eof = true;
+                eof.set(true);
                 return null;
             }
-            offset++;
+            next.incrementAndGet();
             return List.of(rows.get(index));
-        }
+        });
+        return reader;
+    }
 
-        @Override
-        public boolean canRead() {
-            return !eof;
-        }
-
-        @Override
-        public CompletableFuture<Void> readyEvent() {
-            return CompletableFuture.completedFuture(null);
-        }
-
-        @Override
-        public CompletableFuture<Void> close() {
-            return CompletableFuture.completedFuture(null);
-        }
-
-        @Override
-        public void cancel() {
-        }
-
-        @Override
-        public long getStartRowIndex() {
-            return startRow;
-        }
-
-        @Override
-        public long getTotalRowCount() {
-            return rows.size();
-        }
-
-        @Override
-        public NYT.NChunkClient.NProto.DataStatistics.TDataStatistics getDataStatistics() {
-            return NYT.NChunkClient.NProto.DataStatistics.TDataStatistics.getDefaultInstance();
-        }
-
-        @Override
-        public TableSchema getTableSchema() {
-            return TableSchema.builder().build();
-        }
-
-        @Override
-        public TableSchema getCurrentReadSchema() {
-            return getTableSchema();
-        }
-
-        @Override
-        public List<String> getOmittedInaccessibleColumns() {
-            return List.of();
+    private synchronized void failIfArmed(int index) throws IOException {
+        if (failuresLeft > 0 && index >= failAtRow) {
+            failuresLeft--;
+            throw new IOException("transient YT failure at row " + index);
         }
     }
 }
