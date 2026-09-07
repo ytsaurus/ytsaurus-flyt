@@ -69,8 +69,6 @@ import tech.ytsaurus.flyt.locks.api.LockConfigOptions;
 import tech.ytsaurus.ysontree.YTreeNode;
 import tech.ytsaurus.ysontree.YTreeTextSerializer;
 
-import static tech.ytsaurus.flyt.connectors.ytsaurus.common.RetryStrategy.EXPONENTIAL;
-import static tech.ytsaurus.flyt.connectors.ytsaurus.common.RetryStrategy.NO_RETRY;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.CLUSTER_PICK_STRATEGY;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.COMMIT_TRANSACTION_PERIOD;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.CREDENTIALS_SOURCE;
@@ -230,8 +228,7 @@ public class YTsaurusDynamicTableFactory implements DynamicTableSinkFactory, Dyn
                 .partitionConfig(partitionConfig)
                 .asyncLookup(options.get(LOOKUP_ASYNC))
                 .lookupMethod(options.get(LOOKUP_METHOD))
-                .scanRetryStrategy(getRetryStrategy(options, NO_RETRY))
-                .fullCacheRetryStrategy(getRetryStrategy(options, EXPONENTIAL))
+                .retryStrategy(getRetryStrategy(options))
                 .options(options)
                 .build();
     }
@@ -486,19 +483,8 @@ public class YTsaurusDynamicTableFactory implements DynamicTableSinkFactory, Dyn
     }
 
     private SerializableSupplier<RetryStrategy> getRetryStrategy(ReadableConfig options) {
-        return getRetryStrategy(options, EXPONENTIAL);
-    }
-
-    /**
-     * Reads the 'retry-strategy' option, falling back to {@code whenUnset} when the user has not
-     * set it: a scan wants no retries by default, a write or a lookup 'FULL' cache reload wants
-     * backoff.
-     */
-    private SerializableSupplier<RetryStrategy> getRetryStrategy(
-            ReadableConfig options,
-            tech.ytsaurus.flyt.connectors.ytsaurus.common.RetryStrategy whenUnset) {
         tech.ytsaurus.flyt.connectors.ytsaurus.common.RetryStrategy retryStrategy =
-                options.getOptional(RETRY_STRATEGY).orElse(whenUnset);
+                options.get(RETRY_STRATEGY);
         switch (retryStrategy) {
             case EXPONENTIAL:
                 return () -> new ExponentialBackoffRetryStrategy(

@@ -101,9 +101,9 @@ class YtRowDataInputFormatRetryTest {
                 .hasRootCauseMessage("transient YT failure at row 4");
     }
 
-    /** A plain scan has no such blocking phase, so its very first read honours the strategy. */
+    /** A non-cache read has no such blocking phase, so its very first read honours the strategy. */
     @Test
-    void plainScanRetriesOnItsFirstRead() throws Exception {
+    void nonCacheReadRetriesOnItsFirstRead() throws Exception {
         FakeYtCluster cluster = FakeYtCluster.register(FULL_PATH, 10, 4, 1);
 
         assertThat(readAll(IMMEDIATE_RETRIES, false, 1)).isEqualTo(cluster.expectedIds());

@@ -135,9 +135,9 @@ public class YtConnectorOptions {
             .enumType(RetryStrategy.class)
             .defaultValue(RetryStrategy.EXPONENTIAL)
             .withDeprecatedKeys("retryStrategy")
-            .withDescription("Applies to writes, table scans and lookup 'FULL' cache reloads. "
-                    + "When left unset, a scan falls back to no retries, while writes and "
-                    + "cache reloads fall back to exponential backoff.");
+            .withDescription("Applies to writes and lookup 'FULL' cache reloads, where a failure "
+                    + "permanently disables the shared cache. Table scans never retry: a failed "
+                    + "scan only fails the task and Flink re-reads on restart.");
 
     public static final ConfigOption<String> TABLET_CELL_BUNDLE = ConfigOptions.key("tablet-cell-bundle")
             .stringType()

@@ -1,5 +1,6 @@
 package tech.ytsaurus.flyt.connectors.ytsaurus.consumer;
 
+import java.time.Duration;
 import java.util.Map;
 import java.util.Objects;
 import java.util.stream.Collectors;
@@ -30,6 +31,7 @@ import org.apache.flink.table.runtime.connector.source.ScanRuntimeProviderContex
 import org.apache.flink.table.types.DataType;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.util.Preconditions;
+import org.apache.flink.util.concurrent.FixedRetryStrategy;
 import org.apache.flink.util.concurrent.RetryStrategy;
 import org.apache.flink.util.function.SerializableFunction;
 import org.apache.flink.util.function.SerializableSupplier;
@@ -48,6 +50,10 @@ public class YtDynamicTableSource
         LookupTableSource,
         SupportsProjectionPushDown,
         SupportsLimitPushDown {
+
+    /** A failed scan only fails the task and Flink re-reads the table on restart. */
+    private static final SerializableSupplier<RetryStrategy> NO_RETRY =
+            () -> new FixedRetryStrategy(0, Duration.ZERO);
 
     private final DataType type;
 
@@ -80,9 +86,7 @@ public class YtDynamicTableSource
 
     private ReadableConfig options;
 
-    private SerializableSupplier<RetryStrategy> scanRetryStrategy;
-
-    private SerializableSupplier<RetryStrategy> fullCacheRetryStrategy;
+    private SerializableSupplier<RetryStrategy> retryStrategy;
 
     @Override
     public LookupRuntimeProvider getLookupRuntimeProvider(LookupContext context) {
@@ -161,7 +165,7 @@ public class YtDynamicTableSource
                 // LookupFullCache, so transient YT errors must be retried here.
                 return cacheBuilder.apply(lookupFunction,
                         createInputFormatProvider(ScanRuntimeProviderContext.INSTANCE,
-                                fullCacheRetryStrategy, true));
+                                retryStrategy, true));
             } else if (cacheType == LookupOptions.LookupCacheType.PARTIAL) {
                 log.info("Enable PARTIAL lookup cache for table {}", compilePathName());
                 return cacheBuilder.apply(lookupFunction, null);
@@ -186,8 +190,7 @@ public class YtDynamicTableSource
                 .asyncLookup(asyncLookup)
                 .lookupMethod(lookupMethod)
                 .options(options)
-                .scanRetryStrategy(scanRetryStrategy)
-                .fullCacheRetryStrategy(fullCacheRetryStrategy)
+                .retryStrategy(retryStrategy)
                 .clusterPickStrategy(clusterPickStrategy)
                 .build();
     }
@@ -216,7 +219,7 @@ public class YtDynamicTableSource
     public ScanRuntimeProvider getScanRuntimeProvider(ScanContext context) {
         // A failed scan just fails the task and Flink re-reads the table on restart,
         // so it does not need connector-level retries.
-        return createInputFormatProvider(context, scanRetryStrategy, false);
+        return createInputFormatProvider(context, NO_RETRY, false);
     }
 
     private ScanRuntimeProvider createInputFormatProvider(
