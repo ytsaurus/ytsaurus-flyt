@@ -1,11 +1,10 @@
-package tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue;
+package tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.table;
 
 import java.util.Objects;
 
 import javax.annotation.Nullable;
 
 import org.apache.flink.api.common.serialization.DeserializationSchema;
-import org.apache.flink.api.connector.source.SourceReaderContext;
 import tech.ytsaurus.client.rows.UnversionedRow;
 import tech.ytsaurus.client.rows.UnversionedValue;
 import tech.ytsaurus.core.tables.ColumnValueType;
@@ -18,12 +17,10 @@ import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.codec.YtValueCodecs
  * configured, the payload is decompressed with the codec named in that column before it is passed to
  * the wrapped format deserializer; without a codec column the payload is read as is.
  */
-public class YtQueueColumnValueDeserializer<T> implements YtQueueRecordDeserializer<T> {
+public class YtQueueColumnValueDeserializer<T> extends YtQueueDeserializationSchemaAdapter<T> {
     public static final String DEFAULT_VALUE_COLUMN = "value";
 
     private static final long serialVersionUID = 1L;
-
-    private final DeserializationSchema<T> deserializationSchema;
 
     private final String valueColumn;
 
@@ -44,17 +41,12 @@ public class YtQueueColumnValueDeserializer<T> implements YtQueueRecordDeseriali
             DeserializationSchema<T> deserializationSchema,
             String valueColumn,
             @Nullable String codecColumn) {
-        this.deserializationSchema = Objects.requireNonNull(deserializationSchema, "deserializationSchema");
+        super(deserializationSchema);
         this.valueColumn = requireNonBlank(valueColumn, "valueColumn");
         this.codecColumn = codecColumn == null ? null : requireNonBlank(codecColumn, "codecColumn");
         if (this.valueColumn.equals(this.codecColumn)) {
             throw new IllegalArgumentException("valueColumn and codecColumn must be different");
         }
-    }
-
-    @Override
-    public void open(SourceReaderContext context) throws Exception {
-        YtQueueDeserializationSchemas.open(deserializationSchema, context);
     }
 
     @Override
@@ -77,9 +69,9 @@ public class YtQueueColumnValueDeserializer<T> implements YtQueueRecordDeseriali
             return null;
         }
         if (codecIndex < 0) {
-            return deserializationSchema.deserialize(value);
+            return deserializationSchema().deserialize(value);
         }
-        return deserializationSchema.deserialize(YtValueCodecs.forName(codecName).decompress(value));
+        return deserializationSchema().deserialize(YtValueCodecs.forName(codecName).decompress(value));
     }
 
     private static int columnIndex(TableSchema schema, String column) {

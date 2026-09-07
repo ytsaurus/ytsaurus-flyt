@@ -18,7 +18,6 @@ import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.types.DataType;
 
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.credentials.CredentialsProvider;
-import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.YtQueueColumnValueDeserializer;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.YtQueueRecordDeserializer;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.config.YtQueueColumnModeOptions;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.config.YtQueueReadMode;
@@ -34,9 +33,6 @@ public class YtQueueDynamicTableSource implements ScanTableSource {
     private final String queuePath;
 
     private final CredentialsProvider credentialsProvider;
-
-    @Nullable
-    private final String credentialsCluster;
 
     private final DecodingFormat<DeserializationSchema<RowData>> decodingFormat;
 
@@ -76,7 +72,6 @@ public class YtQueueDynamicTableSource implements ScanTableSource {
                 .proxy(proxy)
                 .queuePath(queuePath)
                 .credentialsProvider(credentialsProvider)
-                .credentialsCluster(credentialsCluster)
                 .recordDeserializer(createRecordDeserializer(deserializer))
                 .producedType(producedType)
                 .startupMode(startupMode)
@@ -90,16 +85,20 @@ public class YtQueueDynamicTableSource implements ScanTableSource {
 
     private YtQueueRecordDeserializer<RowData> createRecordDeserializer(
             DeserializationSchema<RowData> deserializer) {
-        if (readMode != YtQueueReadMode.COLUMN) {
-            return new YtQueueRowDataDeserializer(deserializer);
+        switch (readMode) {
+            case ROW:
+                return new YtQueueRowDataDeserializer(deserializer);
+            case COLUMN:
+                YtQueueColumnModeOptions options = Objects.requireNonNull(
+                        columnModeOptions,
+                        "columnModeOptions are required for COLUMN read mode");
+                return new YtQueueColumnValueDeserializer<>(
+                        deserializer,
+                        options.getValueColumn(),
+                        options.getCodecColumn());
+            default:
+                throw new IllegalStateException("Unsupported YT queue read mode: " + readMode);
         }
-        YtQueueColumnModeOptions options = Objects.requireNonNull(
-                columnModeOptions,
-                "columnModeOptions are required for COLUMN read mode");
-        return new YtQueueColumnValueDeserializer<>(
-                deserializer,
-                options.getValueColumn(),
-                options.getCodecColumn());
     }
 
     @Override
@@ -108,7 +107,6 @@ public class YtQueueDynamicTableSource implements ScanTableSource {
                 .proxy(proxy)
                 .queuePath(queuePath)
                 .credentialsProvider(credentialsProvider)
-                .credentialsCluster(credentialsCluster)
                 .decodingFormat(decodingFormat)
                 .physicalRowDataType(physicalRowDataType)
                 .startupMode(startupMode)

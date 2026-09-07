@@ -1,4 +1,4 @@
-package tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue;
+package tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.table;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;

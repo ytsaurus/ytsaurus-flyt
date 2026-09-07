@@ -64,11 +64,6 @@ public class YtConnectorOptions {
             .noDefaultValue()
             .withDeprecatedKeys("credentialsSource");
 
-    public static final ConfigOption<String> CREDENTIALS_CLUSTER = ConfigOptions.key("credentials-cluster")
-            .stringType()
-            .noDefaultValue()
-            .withDescription("Cluster name used only to resolve credentials. Defaults to the proxy cluster");
-
     public static final ConfigOption<String> YT_USERNAME_OPTION = ConfigOptions.key("username")
             .stringType()
             .noDefaultValue()

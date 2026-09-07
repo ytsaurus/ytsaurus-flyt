@@ -26,7 +26,6 @@ import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.YtQueueReade
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.table.YtQueueDynamicTableSource;
 import tech.ytsaurus.flyt.connectors.ytsaurus.utils.YtConfigUtils;
 
-import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.CREDENTIALS_CLUSTER;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.CREDENTIALS_SOURCE;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.PATH;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.PROXY;
@@ -44,7 +43,7 @@ import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOpti
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.STARTUP_MODE;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.TRIMMED_OFFSET_POLICY;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.VALUE_COLUMN;
-import static tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.YtQueueColumnValueDeserializer.DEFAULT_VALUE_COLUMN;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.table.YtQueueColumnValueDeserializer.DEFAULT_VALUE_COLUMN;
 
 public class YTsaurusQueueDynamicTableFactory implements DynamicTableSourceFactory {
     public static final String IDENTIFIER = "ytsaurus-queue";
@@ -71,7 +70,6 @@ public class YTsaurusQueueDynamicTableFactory implements DynamicTableSourceFacto
                 .proxy(options.get(PROXY))
                 .queuePath(options.get(PATH))
                 .credentialsProvider(credentialsProvider)
-                .credentialsCluster(options.getOptional(CREDENTIALS_CLUSTER).orElse(null))
                 .decodingFormat(decodingFormat)
                 .physicalRowDataType(context.getPhysicalRowDataType())
                 .startupMode(options.get(STARTUP_MODE))
@@ -100,7 +98,6 @@ public class YTsaurusQueueDynamicTableFactory implements DynamicTableSourceFacto
         return Set.of(
                 YT_USERNAME_OPTION,
                 YT_TOKEN_OPTION,
-                CREDENTIALS_CLUSTER,
                 STARTUP_MODE,
                 SPECIFIC_OFFSETS,
                 TRIMMED_OFFSET_POLICY,
@@ -121,8 +118,6 @@ public class YTsaurusQueueDynamicTableFactory implements DynamicTableSourceFacto
         validateNonBlank(options.get(PATH), "path");
         options.getOptional(CREDENTIALS_SOURCE)
                 .ifPresent(credentialsSource -> validateNonBlank(credentialsSource, "credentials-source"));
-        options.getOptional(CREDENTIALS_CLUSTER)
-                .ifPresent(credentialsCluster -> validateNonBlank(credentialsCluster, "credentials-cluster"));
         options.getOptional(FactoryUtil.SOURCE_PARALLELISM).ifPresent(parallelism -> {
             if (parallelism <= 0) {
                 throw new ValidationException("'scan.parallelism' must be greater than zero");

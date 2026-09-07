@@ -5,6 +5,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.api.Schema;
@@ -15,8 +16,12 @@ import org.apache.flink.table.catalog.ObjectIdentifier;
 import org.apache.flink.table.catalog.ResolvedCatalogTable;
 import org.apache.flink.table.catalog.ResolvedSchema;
 import org.apache.flink.table.connector.source.DynamicTableSource;
+import org.apache.flink.table.connector.source.ScanTableSource;
+import org.apache.flink.table.connector.source.SourceProvider;
+import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.factories.DynamicTableSourceFactory;
 import org.apache.flink.table.factories.FactoryUtil;
+import org.apache.flink.table.types.DataType;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -24,11 +29,16 @@ import org.junit.jupiter.params.provider.CsvSource;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.config.YtQueueReadMode;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.config.YtQueueStartupMode;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.config.YtQueueTrimmedOffsetPolicy;
+import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.table.YtQueueColumnValueDeserializer;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.table.YtQueueDynamicTableSource;
+import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.table.YtQueueRowDataDeserializer;
 import tech.ytsaurus.flyt.formats.yson.YsonFormatFactory;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.mock;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.CREDENTIALS_SOURCE;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.PARTITION_DISCOVERY_INTERVAL;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.SPECIFIC_OFFSETS;
@@ -57,7 +67,6 @@ class YTsaurusQueueDynamicTableFactoryTest {
         options.put("scan.async.buffer-capacity", "4");
         options.put("scan.parallelism", "2");
         options.put("scan.trimmed-offset-policy", "SKIP");
-        options.put("credentials-cluster", "hahn");
         DynamicTableSource source = createSource(options);
 
         assertThat(source).isInstanceOf(YtQueueDynamicTableSource.class);
@@ -65,7 +74,6 @@ class YTsaurusQueueDynamicTableFactoryTest {
                 .isEqualTo(List.of(10L, 20L, 30L));
         assertThat(source).extracting("trimmedOffsetPolicy")
                 .isEqualTo(YtQueueTrimmedOffsetPolicy.SKIP);
-        assertThat(source).extracting("credentialsCluster").isEqualTo("hahn");
     }
 
     @Test
@@ -185,6 +193,7 @@ class YTsaurusQueueDynamicTableFactoryTest {
         assertThat(source).extracting("readMode").isEqualTo(YtQueueReadMode.COLUMN);
         assertThat(source).extracting("columnModeOptions.valueColumn").isEqualTo("value");
         assertThat(source).extracting("columnModeOptions.codecColumn").isNull();
+        assertRecordDeserializer(source, YtQueueColumnValueDeserializer.class);
     }
 
     @Test
@@ -206,6 +215,7 @@ class YTsaurusQueueDynamicTableFactoryTest {
 
         assertThat(source).extracting("readMode").isEqualTo(YtQueueReadMode.ROW);
         assertThat(source).extracting("columnModeOptions").isNull();
+        assertRecordDeserializer(source, YtQueueRowDataDeserializer.class);
     }
 
     @Test
@@ -280,6 +290,22 @@ class YTsaurusQueueDynamicTableFactoryTest {
                 new Configuration(),
                 YTsaurusQueueDynamicTableFactoryTest.class.getClassLoader(),
                 false);
+    }
+
+    private static void assertRecordDeserializer(
+            DynamicTableSource tableSource,
+            Class<?> expectedDeserializerClass) {
+        ScanTableSource.ScanContext context = mock(ScanTableSource.ScanContext.class);
+        doReturn(TypeInformation.of(RowData.class))
+                .when(context)
+                .createTypeInformation(any(DataType.class));
+
+        SourceProvider runtimeProvider = (SourceProvider) ((ScanTableSource) tableSource)
+                .getScanRuntimeProvider(context);
+
+        assertThat(runtimeProvider.createSource())
+                .extracting("recordDeserializer")
+                .isInstanceOf(expectedDeserializerClass);
     }
 
     private static Map<String, String> validSqlOptions() {
