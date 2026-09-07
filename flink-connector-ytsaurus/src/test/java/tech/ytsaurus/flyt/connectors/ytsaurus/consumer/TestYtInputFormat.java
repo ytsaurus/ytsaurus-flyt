@@ -30,17 +30,15 @@ final class TestYtInputFormat extends YtRowDataInputFormat {
             DeserializationSchema<RowData> deserializer,
             TypeInformation<RowData> rowDataTypeInfo,
             CredentialsProvider credentialsProvider,
-            SerializableSupplier<RetryStrategy> retryStrategy,
-            boolean fullCacheLoader) {
+            SerializableSupplier<RetryStrategy> retryStrategy) {
         super(path, ysonSchemaString, limit, deserializer, rowDataTypeInfo, credentialsProvider,
-                retryStrategy, fullCacheLoader);
+                retryStrategy);
     }
 
     static TestYtInputFormat create(
             String basePath,
             String tableName,
-            SerializableSupplier<RetryStrategy> retryStrategy,
-            boolean fullCacheLoader) {
+            SerializableSupplier<RetryStrategy> retryStrategy) {
         return new TestYtInputFormat(
                 ComplexYtPath.builder()
                         .clusterName("fake")
@@ -52,8 +50,7 @@ final class TestYtInputFormat extends YtRowDataInputFormat {
                 new IdDeserializer(),
                 TypeInformation.of(RowData.class),
                 new StubCredentialsProvider(),
-                retryStrategy,
-                fullCacheLoader);
+                retryStrategy);
     }
 
     @Override

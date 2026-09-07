@@ -139,7 +139,7 @@ class YtLookupFullCacheTest {
                 InternalTypeInfo.of(rowType), InternalSerializers.create(rowType), generatedProjection);
 
         InputFormatCacheLoader cacheLoader = new InputFormatCacheLoader(
-                TestYtInputFormat.create(BASE_PATH, TABLE, retryStrategy, true),
+                TestYtInputFormat.create(BASE_PATH, TABLE, retryStrategy),
                 keySelector,
                 rowSerializer);
         cacheLoader.open(new Configuration(), Thread.currentThread().getContextClassLoader());

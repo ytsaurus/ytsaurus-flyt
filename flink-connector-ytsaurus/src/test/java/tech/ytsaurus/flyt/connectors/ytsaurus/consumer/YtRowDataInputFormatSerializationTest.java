@@ -36,7 +36,6 @@ class YtRowDataInputFormatSerializationTest {
                 .rowDataTypeInfo(TypeInformation.of(RowData.class))
                 .credentialsProvider(new StubCredentialsProvider())
                 .retryStrategy(() -> new FixedRetryStrategy(0, Duration.ZERO))
-                .fullCacheLoader(false)
                 .build();
 
         var bytes = SerializationUtils.serialize(format);

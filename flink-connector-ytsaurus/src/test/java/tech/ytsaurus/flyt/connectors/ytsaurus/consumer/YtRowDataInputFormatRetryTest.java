@@ -94,30 +94,21 @@ class YtRowDataInputFormatRetryTest {
      * the cache rather than stall task startup with retries.
      */
     @Test
-    void firstFullCacheLoadDoesNotRetryEvenWhenRetriesAreConfigured() {
+    void firstLoadDoesNotRetryEvenWhenRetriesAreConfigured() {
         FakeYtCluster.register(FULL_PATH, 10, 4, 1);
 
-        assertThatThrownBy(() -> readAll(IMMEDIATE_RETRIES, true, 1))
+        assertThatThrownBy(() -> readAll(IMMEDIATE_RETRIES, 1))
                 .hasRootCauseMessage("transient YT failure at row 4");
-    }
-
-    /** A non-cache read has no such blocking phase, so its very first read honours the strategy. */
-    @Test
-    void nonCacheReadRetriesOnItsFirstRead() throws Exception {
-        FakeYtCluster cluster = FakeYtCluster.register(FULL_PATH, 10, 4, 1);
-
-        assertThat(readAll(IMMEDIATE_RETRIES, false, 1)).isEqualTo(cluster.expectedIds());
     }
 
     /** Reads as a FULL cache reload, i.e. not the blocking first load. */
     private List<Integer> reload(SerializableSupplier<RetryStrategy> retryStrategy) throws Exception {
-        return readAll(retryStrategy, true, 2);
+        return readAll(retryStrategy, 2);
     }
 
     private List<Integer> readAll(
-            SerializableSupplier<RetryStrategy> retryStrategy, boolean fullCacheLoader, int loadNumber)
-            throws Exception {
-        TestYtInputFormat format = TestYtInputFormat.create(BASE_PATH, TABLE, retryStrategy, fullCacheLoader);
+            SerializableSupplier<RetryStrategy> retryStrategy, int loadNumber) throws Exception {
+        TestYtInputFormat format = TestYtInputFormat.create(BASE_PATH, TABLE, retryStrategy);
         List<Integer> ids = new ArrayList<>();
         try {
             format.openInputFormat();

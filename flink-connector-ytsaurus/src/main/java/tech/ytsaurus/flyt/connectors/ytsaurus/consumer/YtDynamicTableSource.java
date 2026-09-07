@@ -164,8 +164,7 @@ public class YtDynamicTableSource
                 // Unlike a plain scan, a failed reload permanently disables the shared
                 // LookupFullCache, so transient YT errors must be retried here.
                 return cacheBuilder.apply(lookupFunction,
-                        createInputFormatProvider(ScanRuntimeProviderContext.INSTANCE,
-                                retryStrategy, true));
+                        createInputFormatProvider(ScanRuntimeProviderContext.INSTANCE, retryStrategy));
             } else if (cacheType == LookupOptions.LookupCacheType.PARTIAL) {
                 log.info("Enable PARTIAL lookup cache for table {}", compilePathName());
                 return cacheBuilder.apply(lookupFunction, null);
@@ -219,11 +218,11 @@ public class YtDynamicTableSource
     public ScanRuntimeProvider getScanRuntimeProvider(ScanContext context) {
         // A failed scan just fails the task and Flink re-reads the table on restart,
         // so it does not need connector-level retries.
-        return createInputFormatProvider(context, NO_RETRY, false);
+        return createInputFormatProvider(context, NO_RETRY);
     }
 
     private ScanRuntimeProvider createInputFormatProvider(
-            ScanContext context, SerializableSupplier<RetryStrategy> retries, boolean fullCacheLoader) {
+            ScanContext context, SerializableSupplier<RetryStrategy> retries) {
         Preconditions.checkNotNull(
                 converter, "Value decoding format must not be null.");
         final DeserializationSchema<RowData> deserializer =
@@ -232,15 +231,15 @@ public class YtDynamicTableSource
                 context.createTypeInformation(physicalRowDataType);
         log.info("Limit = {}", limit);
         if (pathMap.size() == 1) {
-            return getSingleClusterInputFormatProvider(deserializer, typeInfo, retries, fullCacheLoader);
+            return getSingleClusterInputFormatProvider(deserializer, typeInfo, retries);
         } else {
-            return getMultiClusterInputFormatProvider(deserializer, typeInfo, retries, fullCacheLoader);
+            return getMultiClusterInputFormatProvider(deserializer, typeInfo, retries);
         }
     }
 
     private @NonNull InputFormatProvider getSingleClusterInputFormatProvider(
             DeserializationSchema<RowData> deserializer, TypeInformation<RowData> typeInfo,
-            SerializableSupplier<RetryStrategy> retries, boolean fullCacheLoader) {
+            SerializableSupplier<RetryStrategy> retries) {
         ComplexYtPath path = pathMap.values().iterator().next();
         fillTableName(path);
         return InputFormatProvider.of(
@@ -252,7 +251,6 @@ public class YtDynamicTableSource
                         .deserializer(deserializer)
                         .rowDataTypeInfo(typeInfo)
                         .retryStrategy(retries)
-                        .fullCacheLoader(fullCacheLoader)
                         .build()
         );
     }
@@ -267,7 +265,7 @@ public class YtDynamicTableSource
 
     private @NonNull InputFormatProvider getMultiClusterInputFormatProvider(
             DeserializationSchema<RowData> deserializer, TypeInformation<RowData> typeInfo,
-            SerializableSupplier<RetryStrategy> retries, boolean fullCacheLoader) {
+            SerializableSupplier<RetryStrategy> retries) {
         Preconditions.checkNotNull(
                 clusterPickStrategy,
                 "Strategy must be present when given multiple paths"
@@ -293,7 +291,6 @@ public class YtDynamicTableSource
                         .deserializer(deserializer)
                         .rowDataTypeInfo(typeInfo)
                         .retryStrategy(retries)
-                        .fullCacheLoader(fullCacheLoader)
                         .build()
         );
     }

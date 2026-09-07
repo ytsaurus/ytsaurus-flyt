@@ -56,8 +56,6 @@ public abstract class AbstractYtRowDataInputFormat
     protected final TypeInformation<RowData> rowDataTypeInfo;
     protected final CredentialsProvider credentialsProvider;
     protected final SerializableSupplier<RetryStrategy> retryStrategy;
-    /** Whether this format feeds a reloading FULL cache rather than a plain scan. */
-    private final boolean fullCacheLoader;
 
     protected transient YTsaurusClient client;
     protected transient TableReader<YTreeNode> tableReader;
@@ -77,8 +75,7 @@ public abstract class AbstractYtRowDataInputFormat
             DeserializationSchema<RowData> deserializer,
             TypeInformation<RowData> rowDataTypeInfo,
             CredentialsProvider credentialsProvider,
-            SerializableSupplier<RetryStrategy> retryStrategy,
-            boolean fullCacheLoader) {
+            SerializableSupplier<RetryStrategy> retryStrategy) {
 
         this.ysonSchemaString = ysonSchemaString;
         this.limit = limit;
@@ -86,7 +83,6 @@ public abstract class AbstractYtRowDataInputFormat
         this.rowDataTypeInfo = rowDataTypeInfo;
         this.credentialsProvider = credentialsProvider;
         this.retryStrategy = checkNotNull(retryStrategy, "No retry strategy supplied.");
-        this.fullCacheLoader = fullCacheLoader;
     }
 
     @Override
@@ -315,14 +311,15 @@ public abstract class AbstractYtRowDataInputFormat
         // InputFormatCacheLoader calls this on the long-lived instance once per reload and only
         // then clones it for the actual read, so the clone learns which load it belongs to.
         loadNumber++;
-        return new YtInputSplit[]{new YtInputSplit(0, 1, fullCacheLoader && loadNumber == 1)};
+        return new YtInputSplit[]{new YtInputSplit(0, 1, loadNumber == 1)};
     }
 
     /**
-     * The first FULL cache load runs inside {@code LookupFullCache#open}, which blocks the task in
-     * {@code awaitFirstLoad()}: retrying there stalls startup for minutes, and a plain restart
-     * rebuilds the cache anyway. Later reloads run on a background thread and a failure there
-     * permanently disables the cache, so those honour the configured strategy.
+     * The first load of a FULL cache runs inside {@code LookupFullCache#open}, which blocks the
+     * task in {@code awaitFirstLoad()}: retrying there stalls startup for minutes, and a plain
+     * restart rebuilds the cache anyway. Later reloads run on a background thread and a failure
+     * there permanently disables the cache, so those honour the configured strategy. A plain scan
+     * only ever performs load #1 and is handed a no-retry strategy, so this costs it nothing.
      */
     private RetryStrategy newRetryStrategy() {
         return failFast ? new FixedRetryStrategy(0, Duration.ZERO) : retryStrategy.get();

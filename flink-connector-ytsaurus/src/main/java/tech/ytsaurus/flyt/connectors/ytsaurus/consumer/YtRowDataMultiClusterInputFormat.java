@@ -30,10 +30,9 @@ public class YtRowDataMultiClusterInputFormat extends AbstractYtRowDataInputForm
             DeserializationSchema<RowData> deserializer,
             TypeInformation<RowData> rowDataTypeInfo,
             CredentialsProvider credentialsProvider,
-            SerializableSupplier<RetryStrategy> retryStrategy,
-            boolean fullCacheLoader) {
+            SerializableSupplier<RetryStrategy> retryStrategy) {
 
-        super(ysonSchemaString, limit, deserializer, rowDataTypeInfo, credentialsProvider, retryStrategy, fullCacheLoader);
+        super(ysonSchemaString, limit, deserializer, rowDataTypeInfo, credentialsProvider, retryStrategy);
         this.pathMap = pathMap;
         this.clusterPickStrategy = clusterPickStrategy;
     }
