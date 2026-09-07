@@ -20,7 +20,6 @@ import org.apache.flink.metrics.groups.UnregisteredMetricsGroup;
 import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.TimestampData;
 import org.apache.flink.table.types.logical.BigIntType;
-import org.apache.flink.table.types.logical.IntType;
 import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.table.types.logical.TimestampType;
@@ -42,11 +41,6 @@ import tech.ytsaurus.client.request.StartTransaction;
 import tech.ytsaurus.core.GUID;
 import tech.ytsaurus.core.cypress.CypressNodeType;
 import tech.ytsaurus.core.tables.TableSchema;
-import tech.ytsaurus.flyt.locks.noop.NoopLocksProvider;
-import tech.ytsaurus.ysontree.YTree;
-import tech.ytsaurus.ysontree.YTreeNode;
-import tech.ytsaurus.ysontree.YTreeTextSerializer;
-
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.ComplexYtPath;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.ReshardStrategy;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.ReshardingConfig;
@@ -56,6 +50,10 @@ import tech.ytsaurus.flyt.connectors.ytsaurus.common.partition.PartitionScale;
 import tech.ytsaurus.flyt.connectors.ytsaurus.producer.converters.RowDataToYtListConverters;
 import tech.ytsaurus.flyt.connectors.ytsaurus.producer.converters.YtPartitioningInstantRowDataConverter;
 import tech.ytsaurus.flyt.connectors.ytsaurus.utils.PartitionScaleUtils;
+import tech.ytsaurus.flyt.locks.noop.NoopLocksProvider;
+import tech.ytsaurus.ysontree.YTree;
+import tech.ytsaurus.ysontree.YTreeNode;
+import tech.ytsaurus.ysontree.YTreeTextSerializer;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -96,7 +94,7 @@ public class YtDynamicTableWriterPoolTest {
         RowDataToYtListConverters ytConverter = new RowDataToYtListConverters(TimestampFormat.ISO_8601);
         return new YtDynamicTableWriterPool(
                 () -> mockedClient,
-                ytConverter.createConverter(logicalType, YTreeTextSerializer.deserialize(schema)),
+                ytConverter.createTableRowConverter((RowType) logicalType, YTreeTextSerializer.deserialize(schema)),
                 path,
                 schema,
                 null,
@@ -119,7 +117,7 @@ public class YtDynamicTableWriterPoolTest {
     void poolAcquireConnectionThenCheckPathSuccess() {
         setYtPathAvailable("home", "smth", "__tests__", "tests", "sample");
         mockMountAny();
-        try (var pool = makePool("//home/smth/__tests__/tests", "[]", new IntType())) {
+        try (var pool = makePool("//home/smth/__tests__/tests", "[]", new RowType(List.of()))) {
             var writer = pool.getOrAcquire(WriterClassifier.plain("sample"));
             assertEquals("//home/smth/__tests__/tests/sample", writer.toString().split(" ")[3]);
         }
@@ -128,7 +126,7 @@ public class YtDynamicTableWriterPoolTest {
     @Test
     void poolAcquireConnectionForbiddenPathSuccess() {
         setYtPathAvailable("__non_existent__");
-        try (var pool = makePool("//home/smth/__tests__/tests", "[]", new IntType())) {
+        try (var pool = makePool("//home/smth/__tests__/tests", "[]", new RowType(List.of()))) {
             pool.getOrAcquire(WriterClassifier.plain("sample"));
             fail("No exception was thrown acquiring writer for a forbidden path");
         } catch (RuntimeException e) {

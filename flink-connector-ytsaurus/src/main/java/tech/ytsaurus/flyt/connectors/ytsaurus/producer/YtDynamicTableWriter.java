@@ -7,6 +7,7 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -107,6 +108,9 @@ public class YtDynamicTableWriter implements Serializable {
 
     private final RetryStrategy locksRetryStrategy;
 
+    // Rows are kept in memory only to re-send them on commit retry; without retries it is pure waste.
+    private final boolean retainRowsForRetry;
+
     private final LocksProvider locksProvider;
 
     @Nullable
@@ -124,9 +128,10 @@ public class YtDynamicTableWriter implements Serializable {
 
     private transient List<CompletableFuture<Void>> transactionDataBuffer;
 
-    private transient List<Map<String, ? extends Serializable>> uncommittedRows;
+    // Rows are Object[] in YT write-schema order: far cheaper than the per-row HashMap.
+    private transient List<Object[]> uncommittedRows;
 
-    private transient List<Map<String, ? extends Serializable>> unflushedRows;
+    private transient List<Object[]> unflushedRows;
 
     private transient ApiServiceTransaction currentTransaction;
 
@@ -197,6 +202,7 @@ public class YtDynamicTableWriter implements Serializable {
         this.metricsSupplier = metricsSuppliers;
         this.tableAttributes = tableAttributes;
         this.retryStrategy = retryStrategy;
+        this.retainRowsForRetry = retryStrategy.getNumRemainingRetries() > 0;
         this.locksRetryStrategy = locksRetryStrategy;
         this.reshardProvider = reshardProvider;
         this.ytWriterOptions = ytWriterOptions;
@@ -219,10 +225,15 @@ public class YtDynamicTableWriter implements Serializable {
             log.info("Lock for write acquired. {}", path.getFullPath());
 
             transactionDataBuffer = new ArrayList<>();
-            uncommittedRows =
-                    new ArrayList<>(ytWriterOptions.getRowsInTransactionLimit() +
-                            ytWriterOptions.getRowsInModificationLimit());
-            unflushedRows = new ArrayList<>(ytWriterOptions.getRowsInModificationLimit());
+            if (retainRowsForRetry) {
+                uncommittedRows =
+                        new ArrayList<>(ytWriterOptions.getRowsInTransactionLimit() +
+                                ytWriterOptions.getRowsInModificationLimit());
+                unflushedRows = new ArrayList<>(ytWriterOptions.getRowsInModificationLimit());
+            } else {
+                uncommittedRows = new ArrayList<>();
+                unflushedRows = new ArrayList<>();
+            }
             error = new AtomicReference<>();
             lastTransactionCommit = new AtomicLong(System.currentTimeMillis());
             lastModificationFlush = new AtomicLong(System.currentTimeMillis());
@@ -420,9 +431,11 @@ public class YtDynamicTableWriter implements Serializable {
         }
         flushModificationLock.lock();
         try {
-            final Map<String, ? extends Serializable> row = createRow(record);
-            modificationBuffer.addInsert(row);
-            unflushedRows.add(row);
+            final Object[] row = createRow(record);
+            modificationBuffer.addInsert(Arrays.asList(row));
+            if (retainRowsForRetry) {
+                unflushedRows.add(row);
+            }
             rowsInBuffer.incrementAndGet();
         } finally {
             flushModificationLock.unlock();
@@ -783,13 +796,20 @@ public class YtDynamicTableWriter implements Serializable {
         lastCommitTimestamp.set(current);
     }
 
-    private void commitWithRetry() throws InterruptedException {
+    @SneakyThrows
+    private void commitWithRetry() {
         RetryStrategy backoffRetryStrategy = retryStrategy;
-        while (backoffRetryStrategy.getNumRemainingRetries() >= 0) {
+        boolean resendRows = false;
+        while (true) {
             try {
+                if (resendRows) {
+                    currentTransaction = createTransaction();
+                    log.info("Start retry transaction {} for table {}", currentTransaction.getId(), getPath());
+                    resendUncommittedRows();
+                }
                 currentTransaction.commit().join();
                 onCommitSuccess();
-                break;
+                return;
             } catch (Exception e) {
                 log.error("Unable to commit transaction {} for table {}", currentTransaction.getId(), getPath(), e);
                 sumFailedRows.getAndAdd(rowsInTransaction.get());
@@ -800,15 +820,40 @@ public class YtDynamicTableWriter implements Serializable {
                 }
                 backoffRetryStrategy = backoffRetryStrategy.getNextRetryStrategy();
                 Thread.sleep(backoffRetryStrategy.getRetryDelay().toMillis());
-
-                currentTransaction = createTransaction();
-                log.info("Start retry transaction {} for table {}", currentTransaction.getId(), getPath());
-
-                ModifyRowsRequest.Builder modifyRowRequestBuilder = createModifyRowRequestBuilder();
-                uncommittedRows.forEach(modifyRowRequestBuilder::addInsert);
-                currentTransaction.modifyRows(modifyRowRequestBuilder).join();
+                // A failed re-send consumes a retry too, instead of aborting the whole commit.
+                resendRows = true;
             }
         }
+    }
+
+    // Re-sends in modification-sized batches, like the normal write path: one huge request is
+    // more likely to fail again than the batches that already went through.
+    private void resendUncommittedRows() {
+        int batchLimit = ytWriterOptions.getRowsInModificationLimit();
+        List<CompletableFuture<Void>> batches = new ArrayList<>();
+        ModifyRowsRequest.Builder batch = createModifyRowRequestBuilder();
+        int rowsInBatch = 0;
+        for (Object[] row : uncommittedRows) {
+            batch.addInsert(Arrays.asList(row));
+            if (++rowsInBatch == batchLimit) {
+                batches.add(currentTransaction.modifyRows(batch));
+                batch = createModifyRowRequestBuilder();
+                rowsInBatch = 0;
+            }
+        }
+        if (rowsInBatch > 0) {
+            batches.add(currentTransaction.modifyRows(batch));
+        }
+        log.info("Re-sent {} rows in {} batches to transaction {} for table {}",
+                uncommittedRows.size(), batches.size(), currentTransaction.getId(), getPath());
+        FutureUtils.allOf(batches)
+                .orTimeout(ytWriterOptions.getTransactionTimeout().getSeconds(), TimeUnit.SECONDS)
+                .join();
+    }
+
+    @VisibleForTesting
+    int retainedRowsForRetry() {
+        return uncommittedRows.size() + unflushedRows.size();
     }
 
     /**
@@ -831,8 +876,10 @@ public class YtDynamicTableWriter implements Serializable {
                 transactionDataBuffer.add(future);
                 lastModificationFlush.set(System.currentTimeMillis());
                 rowsInTransaction.updateAndGet(v -> v + modificationSize());
-                uncommittedRows.addAll(unflushedRows);
-                unflushedRows.clear();
+                if (retainRowsForRetry) {
+                    uncommittedRows.addAll(unflushedRows);
+                    unflushedRows.clear();
+                }
                 resetModificationBuffer();
             }
         } finally {
@@ -840,12 +887,12 @@ public class YtDynamicTableWriter implements Serializable {
         }
     }
 
-    private Map<String, ? extends Serializable> createRow(RowData record) {
+    private Object[] createRow(RowData record) {
         if (trackableField != null) {
             lastNonCommittedTrackableField.set(
                     trackableField.getConverter().convert(record, trackableField.getIndex()));
         }
-        return (Map<String, ? extends Serializable>) ytConverter.convert(null, record);
+        return (Object[]) ytConverter.convert(null, record);
     }
 
     private void resetModificationBuffer() {
