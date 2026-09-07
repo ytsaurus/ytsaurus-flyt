@@ -6,19 +6,12 @@ import java.util.List;
 
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.core.io.InputSplit;
-import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.util.concurrent.FixedRetryStrategy;
 import org.apache.flink.util.concurrent.RetryStrategy;
 import org.apache.flink.util.function.SerializableSupplier;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
-import tech.ytsaurus.client.YTsaurusClient;
-import tech.ytsaurus.flyt.connectors.ytsaurus.common.ComplexYtPath;
-import tech.ytsaurus.flyt.connectors.ytsaurus.common.credentials.CredentialsProvider;
-import tech.ytsaurus.flyt.connectors.ytsaurus.common.credentials.OAuthCredentialsConfig;
-import tech.ytsaurus.flyt.formats.yson.adapter.YTreeNodeDeserializationSchema;
-import tech.ytsaurus.ysontree.YTreeNode;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -124,7 +117,7 @@ class YtRowDataInputFormatRetryTest {
     private List<Integer> readAll(
             SerializableSupplier<RetryStrategy> retryStrategy, boolean fullCacheLoader, int loadNumber)
             throws Exception {
-        TestInputFormat format = newFormat(retryStrategy, fullCacheLoader);
+        TestYtInputFormat format = TestYtInputFormat.create(BASE_PATH, TABLE, retryStrategy, fullCacheLoader);
         List<Integer> ids = new ArrayList<>();
         try {
             format.openInputFormat();
@@ -147,78 +140,4 @@ class YtRowDataInputFormatRetryTest {
         return ids;
     }
 
-    private static TestInputFormat newFormat(
-            SerializableSupplier<RetryStrategy> retryStrategy, boolean fullCacheLoader) {
-        return new TestInputFormat(
-                ComplexYtPath.builder().clusterName("fake").basePath(BASE_PATH).tableName(TABLE).build(),
-                "<>[]",
-                -1,
-                new IdDeserializer(),
-                TypeInformation.of(RowData.class),
-                new StubCredentialsProvider(),
-                retryStrategy,
-                fullCacheLoader);
-    }
-
-    /** Resolves the YT client to the in-memory cluster instead of dialling a real proxy. */
-    private static final class TestInputFormat extends YtRowDataInputFormat {
-        private static final long serialVersionUID = 1L;
-
-        @SuppressWarnings("checkstyle:parameternumber")
-        private TestInputFormat(
-                ComplexYtPath path,
-                String ysonSchemaString,
-                long limit,
-                org.apache.flink.api.common.serialization.DeserializationSchema<RowData> deserializer,
-                TypeInformation<RowData> rowDataTypeInfo,
-                CredentialsProvider credentialsProvider,
-                SerializableSupplier<RetryStrategy> retryStrategy,
-                boolean fullCacheLoader) {
-            super(path, ysonSchemaString, limit, deserializer, rowDataTypeInfo, credentialsProvider,
-                    retryStrategy, fullCacheLoader);
-        }
-
-        @Override
-        protected YTsaurusClient createClient(ComplexYtPath path) {
-            return FakeYtCluster.get(path.getFullPath()).client();
-        }
-    }
-
-    private static final class IdDeserializer implements YTreeNodeDeserializationSchema {
-        private static final long serialVersionUID = 1L;
-
-        @Override
-        public RowData deserialize(YTreeNode node) {
-            return GenericRowData.of(node.mapNode().getOrThrow("id").intValue());
-        }
-
-        @Override
-        public RowData deserialize(byte[] message) {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public boolean isEndOfStream(RowData nextElement) {
-            return false;
-        }
-
-        @Override
-        public TypeInformation<RowData> getProducedType() {
-            return TypeInformation.of(RowData.class);
-        }
-    }
-
-    private static final class StubCredentialsProvider implements CredentialsProvider {
-        private static final long serialVersionUID = 1L;
-
-        @Override
-        public String getProviderIdentifier() {
-            return "stub";
-        }
-
-        @Override
-        public OAuthCredentialsConfig getCredentials(String clusterName) {
-            return null;
-        }
-    }
 }

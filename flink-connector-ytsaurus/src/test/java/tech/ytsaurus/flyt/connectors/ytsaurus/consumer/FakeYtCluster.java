@@ -35,8 +35,8 @@ final class FakeYtCluster {
     private static final Pattern ROW_INDEX = Pattern.compile("\"row_index\"=(\\d+)");
 
     private final List<YTreeNode> rows;
-    private final long failAtRow;
 
+    private long failAtRow;
     private int failuresLeft;
     private final List<String> requestedPaths = new ArrayList<>();
     private final List<Integer> requestedStartRows = new ArrayList<>();
@@ -53,6 +53,12 @@ final class FakeYtCluster {
         FakeYtCluster cluster = new FakeYtCluster(rowCount, failAtRow, failures);
         CLUSTERS.put(path, cluster);
         return cluster;
+    }
+
+    /** Arms the next {@code failures} reads to fail once they reach {@code failAtRow}. */
+    synchronized void armFailures(long failAtRow, int failures) {
+        this.failAtRow = failAtRow;
+        this.failuresLeft = failures;
     }
 
     static FakeYtCluster get(String path) {
