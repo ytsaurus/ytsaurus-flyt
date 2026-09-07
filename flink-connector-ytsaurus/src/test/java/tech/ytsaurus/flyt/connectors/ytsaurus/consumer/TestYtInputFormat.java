@@ -16,8 +16,8 @@ import tech.ytsaurus.ysontree.YTreeNode;
 /**
  * Input format that talks to a {@link FakeYtCluster} instead of a real proxy.
  *
- * <p>Holds no reference to the fake so that it survives the serialization round trip
- * {@code InputFormatCacheLoader} performs on every reload: the cluster is resolved by table path.
+ * <p>Holds no reference to the fake, so it stays serializable like any Flink input format: the
+ * cluster is resolved by table path instead.
  */
 final class TestYtInputFormat extends YtRowDataInputFormat {
     private static final long serialVersionUID = 1L;

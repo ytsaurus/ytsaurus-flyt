@@ -26,8 +26,8 @@ import static org.mockito.Mockito.when;
 /**
  * In-memory stand-in for a YT cluster that can fail a read a configurable number of times.
  *
- * <p>Registered in a static map so that clones of the input format — {@code InputFormatCacheLoader}
- * makes one per split on every reload — all talk to the same instance.
+ * <p>Registered in a static map and resolved by table path, so the input format under test keeps no
+ * reference to it and stays serializable, as a Flink input format must be.
  */
 final class FakeYtCluster {
 
@@ -36,7 +36,8 @@ final class FakeYtCluster {
 
     private final List<YTreeNode> rows;
 
-    private long failAtRow;
+    private final long failAtRow;
+
     private int failuresLeft;
     private final List<String> requestedPaths = new ArrayList<>();
     private final List<Integer> requestedStartRows = new ArrayList<>();
@@ -53,12 +54,6 @@ final class FakeYtCluster {
         FakeYtCluster cluster = new FakeYtCluster(rowCount, failAtRow, failures);
         CLUSTERS.put(path, cluster);
         return cluster;
-    }
-
-    /** Arms the next {@code failures} reads to fail once they reach {@code failAtRow}. */
-    synchronized void armFailures(long failAtRow, int failures) {
-        this.failAtRow = failAtRow;
-        this.failuresLeft = failures;
     }
 
     static FakeYtCluster get(String path) {
