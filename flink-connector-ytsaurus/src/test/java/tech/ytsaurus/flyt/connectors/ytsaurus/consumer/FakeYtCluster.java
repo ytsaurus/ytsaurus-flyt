@@ -3,9 +3,7 @@ package tech.ytsaurus.flyt.connectors.ytsaurus.consumer;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
@@ -27,12 +25,9 @@ import static org.mockito.Mockito.when;
 /**
  * In-memory stand-in for a YT cluster that can fail a read a configurable number of times.
  *
- * <p>Registered in a static map and resolved by table path, so the input format under test keeps no
- * reference to it and stays serializable, as a Flink input format must be.
  */
 final class FakeYtCluster {
 
-    private static final Map<String, FakeYtCluster> CLUSTERS = new ConcurrentHashMap<>();
     private static final Pattern ROW_INDEX = Pattern.compile("\"row_index\"=(\\d+)");
 
     private final List<YTreeNode> rows;
@@ -43,26 +38,12 @@ final class FakeYtCluster {
     private final List<String> requestedPaths = new ArrayList<>();
     private final List<Integer> requestedStartRows = new ArrayList<>();
 
-    private FakeYtCluster(int rowCount, long failAtRow, int failures) {
+    FakeYtCluster(int rowCount, long failAtRow, int failures) {
         this.rows = IntStream.range(0, rowCount)
                 .mapToObj(i -> YTree.builder().beginMap().key("id").value(i).endMap().build())
                 .collect(Collectors.toList());
         this.failAtRow = failAtRow;
         this.failuresLeft = failures;
-    }
-
-    static FakeYtCluster register(String path, int rowCount, long failAtRow, int failures) {
-        FakeYtCluster cluster = new FakeYtCluster(rowCount, failAtRow, failures);
-        CLUSTERS.put(path, cluster);
-        return cluster;
-    }
-
-    static FakeYtCluster get(String path) {
-        return CLUSTERS.get(path);
-    }
-
-    static void reset() {
-        CLUSTERS.clear();
     }
 
     List<Integer> expectedIds() {
