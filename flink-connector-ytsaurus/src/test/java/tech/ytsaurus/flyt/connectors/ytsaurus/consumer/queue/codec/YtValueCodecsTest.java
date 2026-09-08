@@ -19,11 +19,13 @@ class YtValueCodecsTest {
     private static final byte[] PAYLOAD =
             "{message=\"hello\";count=42}".repeat(20).getBytes(StandardCharsets.UTF_8);
 
+    private final YtValueCodecs codecs = new YtValueCodecs();
+
     @Test
     void passesUncompressedValueThroughForNoneAndMissingCodec() {
-        assertThat(YtValueCodecs.forName("none").decompress(PAYLOAD)).isSameAs(PAYLOAD);
-        assertThat(YtValueCodecs.forName(null).decompress(PAYLOAD)).isSameAs(PAYLOAD);
-        assertThat(YtValueCodecs.forName("  ").decompress(PAYLOAD)).isSameAs(PAYLOAD);
+        assertThat(codecs.forName("none").decompress(PAYLOAD)).isSameAs(PAYLOAD);
+        assertThat(codecs.forName(null).decompress(PAYLOAD)).isSameAs(PAYLOAD);
+        assertThat(codecs.forName("  ").decompress(PAYLOAD)).isSameAs(PAYLOAD);
     }
 
     @ParameterizedTest
@@ -31,14 +33,14 @@ class YtValueCodecsTest {
     void decompressesZstdValues(String codecName) {
         byte[] compressed = compressZstd(PAYLOAD, 6);
 
-        assertThat(YtValueCodecs.forName(codecName).decompress(compressed)).isEqualTo(PAYLOAD);
+        assertThat(codecs.forName(codecName).decompress(compressed)).isEqualTo(PAYLOAD);
     }
 
     @Test
     void decompressesEmptyZstdValue() {
         byte[] compressed = compressZstd(new byte[0], 6);
 
-        assertThat(YtValueCodecs.forName("zstd_6").decompress(compressed)).isEmpty();
+        assertThat(codecs.forName("zstd_6").decompress(compressed)).isEmpty();
     }
 
     @ParameterizedTest
@@ -46,13 +48,16 @@ class YtValueCodecsTest {
     void decompressesCodecsSupportedByTheYtsaurusClient(String codecName) {
         byte[] compressed = rpcCodec(codecName).compress(PAYLOAD);
 
-        assertThat(YtValueCodecs.forName(codecName).decompress(compressed)).isEqualTo(PAYLOAD);
+        assertThat(codecs.forName(codecName).decompress(compressed)).isEqualTo(PAYLOAD);
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"brotli_3", "snappy", "quick_lz", "zstd_0", "zstd_22", "zlib_0", "zlib_10", "zstd_x"})
+    @ValueSource(strings = {
+            "brotli_3", "snappy", "quick_lz", "zstd_0", "zstd_06", "zstd_22", "zlib_0", "zlib_01",
+            "zlib_10", "zstd_x"
+    })
     void rejectsUnsupportedCodecs(String codecName) {
-        assertThatThrownBy(() -> YtValueCodecs.forName(codecName))
+        assertThatThrownBy(() -> codecs.forName(codecName))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining(codecName)
                 .hasMessageContaining(YtValueCodecs.SUPPORTED_CODECS);
@@ -60,13 +65,19 @@ class YtValueCodecsTest {
 
     @Test
     void reusesResolvedCodecInstances() {
-        assertThat(YtValueCodecs.forName("zstd_6")).isSameAs(YtValueCodecs.forName("zstd_6"));
-        assertThat(YtValueCodecs.forName("lz4")).isSameAs(YtValueCodecs.forName("LZ4"));
+        assertThat(codecs.forName("zstd_6")).isSameAs(codecs.forName("zstd_6"));
+        assertThat(codecs.forName("lz4")).isSameAs(codecs.forName("LZ4"));
+    }
+
+    @Test
+    void doesNotShareCacheBetweenResolvers() {
+        assertThat(codecs.forName("lz4"))
+                .isNotSameAs(new YtValueCodecs().forName("lz4"));
     }
 
     @Test
     void rejectsZstdValueWithoutSizeHeader() {
-        assertThatThrownBy(() -> YtValueCodecs.forName("zstd_6").decompress(new byte[] {1, 2, 3}))
+        assertThatThrownBy(() -> codecs.forName("zstd_6").decompress(new byte[] {1, 2, 3}))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("size header");
     }
@@ -77,7 +88,7 @@ class YtValueCodecsTest {
         byte[] corrupted = compressed.clone();
         ByteBuffer.wrap(corrupted, 0, Long.BYTES).order(ByteOrder.LITTLE_ENDIAN).putLong(PAYLOAD.length - 1L);
 
-        assertThatThrownBy(() -> YtValueCodecs.forName("zstd_6").decompress(corrupted))
+        assertThatThrownBy(() -> codecs.forName("zstd_6").decompress(corrupted))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("uncompressed bytes");
     }
@@ -87,7 +98,7 @@ class YtValueCodecsTest {
         byte[] compressed = compressZstd(PAYLOAD, 6);
         byte[] truncated = Arrays.copyOf(compressed, compressed.length - 5);
 
-        assertThatThrownBy(() -> YtValueCodecs.forName("zstd_6").decompress(truncated))
+        assertThatThrownBy(() -> codecs.forName("zstd_6").decompress(truncated))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 

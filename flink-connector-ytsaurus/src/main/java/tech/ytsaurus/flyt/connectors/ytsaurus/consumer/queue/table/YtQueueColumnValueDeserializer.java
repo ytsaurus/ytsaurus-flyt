@@ -27,6 +27,8 @@ public class YtQueueColumnValueDeserializer<T> extends YtQueueDeserializationSch
     @Nullable
     private final String codecColumn;
 
+    private transient YtValueCodecs valueCodecs;
+
     public YtQueueColumnValueDeserializer(DeserializationSchema<T> deserializationSchema) {
         this(deserializationSchema, DEFAULT_VALUE_COLUMN, null);
     }
@@ -71,7 +73,14 @@ public class YtQueueColumnValueDeserializer<T> extends YtQueueDeserializationSch
         if (codecIndex < 0) {
             return deserializationSchema().deserialize(value);
         }
-        return deserializationSchema().deserialize(YtValueCodecs.forName(codecName).decompress(value));
+        return deserializationSchema().deserialize(valueCodecs().forName(codecName).decompress(value));
+    }
+
+    private YtValueCodecs valueCodecs() {
+        if (valueCodecs == null) {
+            valueCodecs = new YtValueCodecs();
+        }
+        return valueCodecs;
     }
 
     private static int columnIndex(TableSchema schema, String column) {

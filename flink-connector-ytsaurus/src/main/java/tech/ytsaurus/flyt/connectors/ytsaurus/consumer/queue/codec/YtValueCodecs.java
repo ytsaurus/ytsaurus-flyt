@@ -1,17 +1,15 @@
 package tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.codec;
 
+import java.util.HashMap;
 import java.util.Locale;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
+import java.util.Map;
 
 import javax.annotation.Nullable;
 
-import lombok.experimental.UtilityClass;
 import tech.ytsaurus.client.rpc.Codec;
 import tech.ytsaurus.client.rpc.Compression;
 
-@UtilityClass
-public class YtValueCodecs {
+public final class YtValueCodecs {
     public static final String NONE = "none";
 
     static final String SUPPORTED_CODECS =
@@ -31,7 +29,7 @@ public class YtValueCodecs {
 
     private static final YtValueCodec IDENTITY = compressed -> compressed;
 
-    private static final ConcurrentMap<String, YtValueCodec> CACHE = new ConcurrentHashMap<>();
+    private final Map<String, YtValueCodec> cache = new HashMap<>();
 
     /**
      * Resolves a YTsaurus compression codec by its name as it is stored in a queue row.
@@ -39,11 +37,18 @@ public class YtValueCodecs {
      * @param codecName codec name; null or blank means that the value is not compressed
      * @return codec that decompresses values written with {@code codecName}
      */
-    public static YtValueCodec forName(@Nullable String codecName) {
+    public YtValueCodec forName(@Nullable String codecName) {
         if (codecName == null || codecName.isBlank()) {
             return IDENTITY;
         }
-        return CACHE.computeIfAbsent(codecName.trim().toLowerCase(Locale.ROOT), YtValueCodecs::resolve);
+        String normalizedCodecName = codecName.trim().toLowerCase(Locale.ROOT);
+        YtValueCodec cached = cache.get(normalizedCodecName);
+        if (cached != null) {
+            return cached;
+        }
+        YtValueCodec resolved = resolve(normalizedCodecName);
+        cache.put(normalizedCodecName, resolved);
+        return resolved;
     }
 
     private static YtValueCodec resolve(String codecName) {
@@ -79,7 +84,7 @@ public class YtValueCodecs {
         } catch (NumberFormatException e) {
             throw new IllegalArgumentException(unsupported(codecName), e);
         }
-        if (level < 1 || level > maxLevel) {
+        if (level < 1 || level > maxLevel || !codecName.equals(prefix + level)) {
             throw new IllegalArgumentException(unsupported(codecName));
         }
         return level;
