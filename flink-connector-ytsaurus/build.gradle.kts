@@ -1,5 +1,5 @@
 group = "tech.ytsaurus.flyt.connectors.ytsaurus"
-version = "1.11.0"
+version = "1.12.0"
 
 plugins {
     id("com.peterabeles.gversion") version "1.10.3"
@@ -20,6 +20,7 @@ dependencies {
     api("tech.ytsaurus:ytsaurus-client:1.2.12")
     implementation(project(":flink-yson-fast-adapter"))
     implementation("jakarta.annotation:jakarta.annotation-api:1.3.5")
+    implementation("com.github.luben:zstd-jni:1.5.2-5")
 
     compileOnly("org.apache.flink:flink-connector-base:1.20.1")
     compileOnly("org.apache.flink:flink-core:1.20.1")
@@ -74,6 +75,7 @@ tasks.compileJava {
 tasks.shadowJar {
     mergeServiceFiles()
     relocate("com.google.protobuf", "tech.ytsaurus.flyt.connectors.ytsaurus.shaded.com.google.protobuf")
+    relocate("NYT", "tech.ytsaurus.flyt.connectors.ytsaurus.shaded.NYT")
 }
 
 tasks.withType<Checkstyle> {
