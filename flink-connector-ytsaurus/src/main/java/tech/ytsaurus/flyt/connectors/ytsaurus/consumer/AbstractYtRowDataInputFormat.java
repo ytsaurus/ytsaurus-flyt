@@ -24,15 +24,12 @@ import org.apache.flink.util.FlinkRuntimeException;
 import org.apache.flink.util.concurrent.FixedRetryStrategy;
 import org.apache.flink.util.concurrent.RetryStrategy;
 import org.apache.flink.util.function.SerializableSupplier;
-import org.apache.flink.util.function.SupplierWithException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import tech.ytsaurus.client.TableReader;
 import tech.ytsaurus.client.YTsaurusClient;
 import tech.ytsaurus.client.request.ReadSerializationContext;
 import tech.ytsaurus.client.request.ReadTable;
-import tech.ytsaurus.core.cypress.Range;
-import tech.ytsaurus.core.cypress.RangeLimit;
 import tech.ytsaurus.core.cypress.YPath;
 import tech.ytsaurus.flyt.connectors.ytsaurus.YtConnectorInfo;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.ComplexYtPath;
@@ -41,8 +38,6 @@ import tech.ytsaurus.flyt.connectors.ytsaurus.common.utils.project.info.ProjectI
 import tech.ytsaurus.flyt.connectors.ytsaurus.utils.YtUtils;
 import tech.ytsaurus.flyt.formats.yson.adapter.YTreeNodeDeserializationSchema;
 import tech.ytsaurus.ysontree.YTreeNode;
-
-import static org.apache.flink.util.Preconditions.checkNotNull;
 
 public abstract class AbstractYtRowDataInputFormat
         extends RichInputFormat<RowData, InputSplit>
@@ -76,13 +71,12 @@ public abstract class AbstractYtRowDataInputFormat
             TypeInformation<RowData> rowDataTypeInfo,
             CredentialsProvider credentialsProvider,
             SerializableSupplier<RetryStrategy> retryStrategy) {
-
         this.ysonSchemaString = ysonSchemaString;
         this.limit = limit;
         this.deserializer = deserializer;
         this.rowDataTypeInfo = rowDataTypeInfo;
         this.credentialsProvider = credentialsProvider;
-        this.retryStrategy = checkNotNull(retryStrategy, "No retry strategy supplied.");
+        this.retryStrategy = retryStrategy;
     }
 
     @Override
@@ -103,14 +97,12 @@ public abstract class AbstractYtRowDataInputFormat
         LOG.info("Yson schema: {}", ysonSchemaString);
         LOG.info("Row Data Type: {}", rowDataTypeInfo);
 
-        failFast = inputSplit instanceof YtInputSplit && ((YtInputSplit) inputSplit).isFailFast();
+        failFast = ((YtInputSplit) inputSplit).isFailFast();
 
-        // open(split) may be called once per split on the same instance, and rowsRead is the
-        // resume offset, so it must start at 0 for each split
+        // open(split) may be called once per split on the same instance, start at 0 for each split
         rowsRead = 0;
         openReaderWithRetry();
-        // the reader is left null only when the thread was interrupted while opening it: report an
-        // empty split so the caller stops cooperatively instead of failing the whole reload
+        // table reader could be null in case of interruption
         hasNext = tableReader != null && tableReader.canRead();
 
         ProjectInfoUtils.registerProjectInFlinkMetrics(YtConnectorInfo.MAVEN_NAME,
@@ -120,12 +112,26 @@ public abstract class AbstractYtRowDataInputFormat
 
 
     @Override
-    public RowData nextRecord(RowData reuse) {
+    public RowData nextRecord(RowData reuse) throws IOException {
         if (!hasNext) {
             return null;
         }
 
-        YTreeNode row = pollRowWithRetry();
+        YTreeNode row;
+        try {
+            row = pollRow();
+        } catch (InterruptedException e) {
+            // cooperative cancellation: stop quietly so close() is not held up and the reload is
+            // reported as interrupted rather than failed
+            Thread.currentThread().interrupt();
+            LOG.info("Interrupted while reading {} after {} rows, stopping.",
+                    path.getFullPath(), rowsRead);
+            hasNext = false;
+            return null;
+        } catch (Exception e) {
+            throw new IOException(String.format(
+                    "Unable to read table %s, failed at row %d", path.getFullPath(), rowsRead), e);
+        }
         if (row == null) {
             LOG.info("Finished reading {} rows from {}", rowsRead, path.getFullPath());
             hasNext = false;
@@ -145,126 +151,115 @@ public abstract class AbstractYtRowDataInputFormat
     }
 
     /**
-     * Returns the next row, retrying transient YT failures with backoff.
+     * Returns the next row, or {@code null} when the table is exhausted.
      *
-     * <p>On retry the reader is re-opened at row {@link #rowsRead}, so no row is emitted twice and
-     * none is skipped. Returns {@code null} only when the table is really exhausted or the thread
-     * was interrupted.
+     * <p>A read that fails is never retried, because row index selectors are not supported for sorted dynamic tables,
+     * while re-reading everything before failed row looks like an overkill. An empty batch is different and is retried.
      */
     @Nullable
-    private YTreeNode pollRowWithRetry() {
-        return doWithRetry("reading", () -> {
-            if (tableReader == null) {
-                openReaderAt(rowsRead);
-            }
-            YTreeNode buffered = readBuffer.poll();
-            if (buffered != null) {
-                return buffered;
-            }
-            if (!tableReader.canRead()) {
-                return null;
-            }
+    private YTreeNode pollRow() throws Exception {
+        YTreeNode buffered = readBuffer.poll();
+        if (buffered != null) {
+            return buffered;
+        }
+        if (!tableReader.canRead()) {
+            return null;
+        }
+
+        RetryStrategy retry = null;
+        while (true) {
             tableReader.readyEvent().get();
             List<YTreeNode> rows = tableReader.read();
             if (rows != null) {
                 readBuffer.addAll(rows);
             }
             YTreeNode row = readBuffer.poll();
-            if (row == null && tableReader.canRead()) {
-                // EOF arrives as an empty batch that flips canRead() as it is read, so an empty
-                // batch with canRead() still true is not the end of the table: readyEvent() also
-                // fires when the request future completes, which can happen before EOF reaches
-                // the stash. Retry instead of truncating the read.
+            if (row != null) {
+                return row;
+            }
+            if (!tableReader.canRead()) {
+                return null;
+            }
+            // EOF arrives as an empty batch that flips canRead() as it is read, so an empty batch
+            // with canRead() still true is not the end of the table: readyEvent() also fires when
+            // the request future completes, which can happen just before EOF reaches the stash.
+            if (retry == null) {
+                retry = newRetryStrategy();
+            }
+            if (retry.getNumRemainingRetries() < 1) {
                 throw new IOException(String.format(
                         "Empty batch from %s at row %d while the reader is not at EOF",
                         path.getFullPath(), rowsRead));
             }
-            return row;
-        });
-    }
-
-    /** Opens the reader at {@link #rowsRead}, retrying transient YT failures with backoff. */
-    private void openReaderWithRetry() {
-        doWithRetry("opening reader for", () -> {
-            openReaderAt(rowsRead);
-            return tableReader;
-        });
+            retry = awaitNextAttempt(retry);
+            if (retry == null) {
+                return null;
+            }
+        }
     }
 
     /**
-     * Runs {@code body} — one attempt at a YT read, throwing to ask for another one — retrying
-     * transient failures with backoff. Between attempts the broken reader is dropped, so the next
-     * one re-opens at {@link #rowsRead}: no row is emitted twice and none is skipped. Returns
-     * {@code null} if the thread was interrupted, which lets the caller stop cooperatively instead
-     * of failing the whole reload; throws once retries run out.
+     * Opens the reader, retrying transient YT failures with backoff.
      */
-    @Nullable
-    private <T> T doWithRetry(String action, SupplierWithException<T, Exception> body) {
+    private void openReaderWithRetry() {
         RetryStrategy retry = newRetryStrategy();
         while (true) {
             try {
-                return body.get();
+                openReader();
+                return;
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                LOG.info("Interrupted while {} {} at row {}, stopping.",
-                        action, path.getFullPath(), rowsRead);
-                return null;
+                LOG.info("Interrupted while opening reader for {}, stopping.", path.getFullPath());
+                return;
             } catch (Exception e) {
-                retry = nextRetryOrThrow(retry, e, action);
-                if (!backoff(retry)) {
-                    return null;
+                closeReaderQuietly();
+                if (retry.getNumRemainingRetries() < 1) {
+                    throw new FlinkRuntimeException(String.format(
+                            "Unable to open reader for table %s", path.getFullPath()), e);
+                }
+                LOG.warn("YT failure while opening reader for {}, retrying in {} ({} attempts left)",
+                        path.getFullPath(), retry.getRetryDelay(), retry.getNumRemainingRetries(), e);
+                retry = awaitNextAttempt(retry);
+                if (retry == null) {
+                    return;
                 }
             }
         }
     }
 
-    /** Drops the broken reader and returns the next strategy, or throws once retries run out. */
-    private RetryStrategy nextRetryOrThrow(RetryStrategy retry, Exception cause, String action) {
-        closeReaderQuietly();
-        if (retry.getNumRemainingRetries() <= 1) {
-            throw new FlinkRuntimeException(String.format(
-                    "Unable to read table %s, failed at row %d", path.getFullPath(), rowsRead), cause);
-        }
-        RetryStrategy next = retry.getNextRetryStrategy();
-        LOG.warn("Transient YT failure while {} {} at row {}, retrying in {} ({} attempts left)",
-                action, path.getFullPath(), rowsRead, next.getRetryDelay(),
-                next.getNumRemainingRetries(), cause);
-        return next;
-    }
-
-    /** @return {@code false} if the thread was interrupted and reading must stop. */
-    private boolean backoff(RetryStrategy retry) {
+    /**
+     * Waits out the current delay and then advances the strategy.
+     *
+     * @return the strategy for the next attempt, or {@code null} if the thread was interrupted and reading must stop
+     */
+    @Nullable
+    private RetryStrategy awaitNextAttempt(RetryStrategy retry) {
         try {
             Thread.sleep(retry.getRetryDelay().toMillis());
-            return true;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            return false;
+            return null;
         }
+        return retry.getNextRetryStrategy();
     }
 
-    private void openReaderAt(long startRow) throws Exception {
-        YPath ypath = YPath.simple(path.getFullPath());
-        if (startRow > 0) {
-            ypath = ypath.plusRange(Range.lower(RangeLimit.row(startRow)));
-            LOG.info("Resuming read of {} from row {}", path.getFullPath(), startRow);
-        }
+    private void openReader() throws Exception {
         readBuffer.clear();
         tableReader = client.readTable(
-                new ReadTable<>(ypath, ReadSerializationContext.ysonBinary())
+                new ReadTable<>(YPath.simple(path.getFullPath()), ReadSerializationContext.ysonBinary())
         ).get();
     }
 
     private void closeReaderQuietly() {
-        TableReader<YTreeNode> reader = tableReader;
-        tableReader = null;
-        if (reader == null) {
+        if (tableReader == null) {
             return;
         }
         try {
-            reader.close().orTimeout(10, TimeUnit.SECONDS);
+            tableReader.close().orTimeout(10, TimeUnit.SECONDS);
         } catch (Exception e) {
             LOG.warn("Unable to close table reader for {}", path.getFullPath(), e);
+        } finally {
+            tableReader = null;
         }
     }
 
@@ -308,18 +303,12 @@ public abstract class AbstractYtRowDataInputFormat
 
     @Override
     public InputSplit[] createInputSplits(int minNumSplits) {
-        // InputFormatCacheLoader calls this on the long-lived instance once per reload and only
-        // then clones it for the actual read, so the clone learns which load it belongs to.
         loadNumber++;
         return new YtInputSplit[]{new YtInputSplit(0, 1, loadNumber == 1)};
     }
 
     /**
-     * The first load of a FULL cache runs inside {@code LookupFullCache#open}, which blocks the
-     * task in {@code awaitFirstLoad()}: retrying there stalls startup for minutes, and a plain
-     * restart rebuilds the cache anyway. Later reloads run on a background thread and a failure
-     * there permanently disables the cache, so those honour the configured strategy. A plain scan
-     * only ever performs load #1 and is handed a no-retry strategy, so this costs it nothing.
+     * The first load of a FULL cache should fail-fast, subsequent reload should be retried.
      */
     private RetryStrategy newRetryStrategy() {
         return failFast ? new FixedRetryStrategy(0, Duration.ZERO) : retryStrategy.get();

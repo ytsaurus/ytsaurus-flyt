@@ -6,8 +6,6 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -28,22 +26,45 @@ import static org.mockito.Mockito.when;
  */
 final class FakeYtCluster {
 
-    private static final Pattern ROW_INDEX = Pattern.compile("\"row_index\"=(\\d+)");
-
     private final List<YTreeNode> rows;
-
     private final long failAtRow;
-
-    private int failuresLeft;
     private final List<String> requestedPaths = new ArrayList<>();
-    private final List<Integer> requestedStartRows = new ArrayList<>();
 
-    FakeYtCluster(int rowCount, long failAtRow, int failures) {
+    private int openFailuresLeft;
+    private int readFailuresLeft;
+    private int emptyBatchesLeft;
+
+    private FakeYtCluster(int rowCount, long failAtRow, int openFailures, int readFailures) {
         this.rows = IntStream.range(0, rowCount)
                 .mapToObj(i -> YTree.builder().beginMap().key("id").value(i).endMap().build())
                 .collect(Collectors.toList());
         this.failAtRow = failAtRow;
-        this.failuresLeft = failures;
+        this.openFailuresLeft = openFailures;
+        this.readFailuresLeft = readFailures;
+    }
+
+    static FakeYtCluster healthy(int rowCount) {
+        return new FakeYtCluster(rowCount, 0, 0, 0);
+    }
+
+    /** Fails the first {@code failures} readTable calls, i.e. before any row has been emitted. */
+    static FakeYtCluster failingOnOpen(int rowCount, int failures) {
+        return new FakeYtCluster(rowCount, 0, failures, 0);
+    }
+
+    /** Fails {@code failures} reads once the stream reaches {@code failAtRow}. */
+    static FakeYtCluster failingAtRow(int rowCount, long failAtRow, int failures) {
+        return new FakeYtCluster(rowCount, failAtRow, 0, failures);
+    }
+
+    /**
+     * Returns {@code emptyBatches} empty batches before any data, without reaching EOF — the race
+     * where readyEvent() fires because the request completed but the stash has nothing yet.
+     */
+    static FakeYtCluster returningEmptyBatches(int rowCount, int emptyBatches) {
+        FakeYtCluster cluster = new FakeYtCluster(rowCount, 0, 0, 0);
+        cluster.emptyBatchesLeft = emptyBatches;
+        return cluster;
     }
 
     List<Integer> expectedIds() {
@@ -55,26 +76,24 @@ final class FakeYtCluster {
         return requestedPaths;
     }
 
-    /** Lower row limit of every readTable request: 0 for a fresh read, N for a resume at row N. */
-    List<Integer> requestedStartRows() {
-        return requestedStartRows;
-    }
-
     int failuresLeft() {
-        return failuresLeft;
+        return openFailuresLeft + readFailuresLeft;
     }
 
     YTsaurusClient client() {
         YTsaurusClient client = mock(YTsaurusClient.class);
         when(client.readTable(any(ReadTable.class))).thenAnswer(invocation -> {
             ReadTable<?> request = invocation.getArgument(0);
-            String path = serializedPath(request);
-            int startRow = startRow(path);
             synchronized (requestedPaths) {
-                requestedPaths.add(path);
-                requestedStartRows.add(startRow);
+                requestedPaths.add(serializedPath(request));
             }
-            return CompletableFuture.completedFuture(reader(startRow));
+            synchronized (this) {
+                if (openFailuresLeft > 0) {
+                    openFailuresLeft--;
+                    throw new IOException("transient YT failure while opening the reader");
+                }
+            }
+            return CompletableFuture.completedFuture(reader());
         });
         return client;
     }
@@ -86,23 +105,13 @@ final class FakeYtCluster {
     }
 
     /**
-     * Parses the lower row limit the input format attaches when it resumes. YPath serializes a row
-     * range as an attribute, e.g.
-     * {@code <"ranges"=[{"lower_limit"={"row_index"=4;};};];>//home/test/table}.
-     */
-    private static int startRow(String path) {
-        Matcher matcher = ROW_INDEX.matcher(path);
-        return matcher.find() ? Integer.parseInt(matcher.group(1)) : 0;
-    }
-
-    /**
      * Emits one row per batch and signals EOF the way the real reader does: the last read returns
      * nothing and flips {@code canRead()} in the same call.
      */
-    private TableReader<YTreeNode> reader(int startRow) throws Exception {
+    private TableReader<YTreeNode> reader() throws Exception {
         @SuppressWarnings("unchecked")
         TableReader<YTreeNode> reader = mock(TableReader.class);
-        AtomicInteger next = new AtomicInteger(startRow);
+        AtomicInteger next = new AtomicInteger();
         AtomicBoolean eof = new AtomicBoolean();
 
         when(reader.readyEvent()).thenReturn(CompletableFuture.completedFuture(null));
@@ -111,6 +120,12 @@ final class FakeYtCluster {
         when(reader.read()).thenAnswer(invocation -> {
             int index = next.get();
             failIfArmed(index);
+            synchronized (this) {
+                if (emptyBatchesLeft > 0) {
+                    emptyBatchesLeft--;
+                    return List.of();
+                }
+            }
             if (index >= rows.size()) {
                 eof.set(true);
                 return null;
@@ -122,8 +137,8 @@ final class FakeYtCluster {
     }
 
     private synchronized void failIfArmed(int index) throws IOException {
-        if (failuresLeft > 0 && index >= failAtRow) {
-            failuresLeft--;
+        if (readFailuresLeft > 0 && index >= failAtRow) {
+            readFailuresLeft--;
             throw new IOException("transient YT failure at row " + index);
         }
     }

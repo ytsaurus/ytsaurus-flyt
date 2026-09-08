@@ -23,8 +23,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Covers the read path that feeds a lookup 'FULL' cache: a transient YT failure must not lose or
- * duplicate rows, because a failed reload permanently disables the shared cache.
+ * Covers the read path that feeds a lookup 'FULL' cache: a transient YT failure while opening the
+ * reader must not fail the reload, because a failed reload permanently disables the shared cache.
  */
 class YtRowDataInputFormatRetryTest {
 
@@ -40,54 +40,121 @@ class YtRowDataInputFormatRetryTest {
             () -> new FixedRetryStrategy(0, Duration.ZERO);
 
     @Test
-    void transientFailureDuringReloadLosesNoRowsAndDuplicatesNone() throws Exception {
-        FakeYtCluster cluster = new FakeYtCluster(10, 4, 1);
+    void transientFailureWhileOpeningIsRetried() throws Exception {
+        FakeYtCluster cluster = FakeYtCluster.failingOnOpen(10, 1);
 
         assertThat(reload(cluster, IMMEDIATE_RETRIES)).isEqualTo(cluster.expectedIds());
         assertThat(cluster.failuresLeft()).as("the failure must actually have been injected").isZero();
+        assertThat(cluster.requestedPaths()).hasSize(2);
     }
 
     @Test
-    void repeatedFailuresStillProduceEveryRowExactlyOnce() throws Exception {
-        FakeYtCluster cluster = new FakeYtCluster(20, 7, 3);
+    void repeatedOpenFailuresAreRetried() throws Exception {
+        FakeYtCluster cluster = FakeYtCluster.failingOnOpen(20, 3);
 
         assertThat(reload(cluster, IMMEDIATE_RETRIES)).isEqualTo(cluster.expectedIds());
         assertThat(cluster.failuresLeft()).isZero();
     }
 
+    /** The strategy allows 5 retries, so the 5th failure must still be recovered from. */
     @Test
-    void readerIsReopenedAtTheRowItFailedOn() throws Exception {
-        FakeYtCluster cluster = new FakeYtCluster(10, 4, 1);
+    void everyAllowedRetryIsUsed() throws Exception {
+        FakeYtCluster cluster = FakeYtCluster.failingOnOpen(10, 5);
 
-        reload(cluster, IMMEDIATE_RETRIES);
-
-        assertThat(cluster.requestedStartRows())
-                .as("the retry resumes at the first row that was not emitted")
-                .containsExactly(0, 4);
-        assertThat(cluster.requestedPaths().get(0))
-                .as("a fresh read carries no range")
-                .isEqualTo(FULL_PATH);
-        assertThat(cluster.requestedPaths().get(1))
-                .as("the range really is sent to YT, not just tracked locally")
-                .contains("row_index")
-                .endsWith(FULL_PATH);
+        assertThat(reload(cluster, IMMEDIATE_RETRIES)).isEqualTo(cluster.expectedIds());
+        assertThat(cluster.requestedPaths())
+                .as("five failed opens plus the successful one")
+                .hasSize(6);
     }
 
     @Test
-    void withoutRetriesTheFailurePropagates() {
-        FakeYtCluster cluster = new FakeYtCluster(10, 4, 1);
+    void oneFailureBeyondTheBudgetPropagates() {
+        FakeYtCluster cluster = FakeYtCluster.failingOnOpen(10, 6);
+
+        assertThatThrownBy(() -> reload(cluster, IMMEDIATE_RETRIES))
+                .hasMessageContaining(FULL_PATH);
+        assertThat(cluster.requestedPaths()).hasSize(6);
+    }
+
+    /**
+     * Resuming mid-stream would need a row-index range, which YT rejects on the sorted dynamic
+     * tables a FULL cache is built over, and re-reading from the start would duplicate the rows
+     * already put in the cache. So a mid-read failure is surfaced rather than retried.
+     */
+    @Test
+    void failureMidReadIsNotRetried() {
+        FakeYtCluster cluster = FakeYtCluster.failingAtRow(10, 4, 1);
+
+        assertThatThrownBy(() -> reload(cluster, IMMEDIATE_RETRIES))
+                .hasMessageContaining(FULL_PATH)
+                .hasMessageContaining("row 4")
+                .hasRootCauseMessage("transient YT failure at row 4");
+        assertThat(cluster.requestedPaths())
+                .as("the reader is not re-opened, so no row can be duplicated")
+                .hasSize(1);
+    }
+
+    @Test
+    void withoutRetriesTheOpenFailurePropagates() {
+        FakeYtCluster cluster = FakeYtCluster.failingOnOpen(10, 1);
 
         assertThatThrownBy(() -> reload(cluster, NO_RETRIES))
                 .hasMessageContaining(FULL_PATH)
-                .hasRootCauseMessage("transient YT failure at row 4");
+                .hasRootCauseMessage("transient YT failure while opening the reader");
     }
 
     @Test
     void healthyReadIssuesASingleRequest() throws Exception {
-        FakeYtCluster cluster = new FakeYtCluster(5, 0, 0);
+        FakeYtCluster cluster = FakeYtCluster.healthy(5);
 
         assertThat(reload(cluster, IMMEDIATE_RETRIES)).isEqualTo(cluster.expectedIds());
-        assertThat(cluster.requestedStartRows()).containsExactly(0);
+        assertThat(cluster.requestedPaths()).containsExactly(FULL_PATH);
+    }
+
+    /**
+     * Guards against reintroducing a row-index resume: YT rejects those on sorted dynamic tables
+     * with "Row index selectors are not supported for sorted dynamic tables".
+     */
+    @Test
+    void readRequestsNeverCarryARowRange() throws Exception {
+        FakeYtCluster cluster = FakeYtCluster.failingOnOpen(10, 2);
+
+        reload(cluster, IMMEDIATE_RETRIES);
+
+        assertThat(cluster.requestedPaths()).isNotEmpty().allSatisfy(
+                requested -> assertThat(requested).isEqualTo(FULL_PATH));
+    }
+
+    /**
+     * An empty batch on a live reader is a client-side race, not a failure: the reader is reused,
+     * so retrying it cannot duplicate a row.
+     */
+    @Test
+    void emptyBatchOnALiveReaderIsRetried() throws Exception {
+        FakeYtCluster cluster = FakeYtCluster.returningEmptyBatches(10, 2);
+
+        assertThat(reload(cluster, IMMEDIATE_RETRIES)).isEqualTo(cluster.expectedIds());
+        assertThat(cluster.requestedPaths())
+                .as("the same reader is reused, so no second readTable is issued")
+                .hasSize(1);
+    }
+
+    /** Empty batches follow the same policy as any other retry, so the first load fails fast. */
+    @Test
+    void emptyBatchOnTheFirstLoadIsNotRetried() {
+        FakeYtCluster cluster = FakeYtCluster.returningEmptyBatches(10, 1);
+
+        assertThatThrownBy(() -> readAll(cluster, IMMEDIATE_RETRIES, 1))
+                .rootCause().hasMessageContaining("not at EOF");
+    }
+
+    @Test
+    void endlessEmptyBatchesFailInsteadOfSpinning() {
+        FakeYtCluster cluster = FakeYtCluster.returningEmptyBatches(10, Integer.MAX_VALUE);
+
+        assertThatThrownBy(() -> reload(cluster, IMMEDIATE_RETRIES))
+                .hasMessageContaining(FULL_PATH)
+                .rootCause().hasMessageContaining("not at EOF");
     }
 
     /**
@@ -96,10 +163,10 @@ class YtRowDataInputFormatRetryTest {
      */
     @Test
     void firstLoadDoesNotRetryEvenWhenRetriesAreConfigured() {
-        FakeYtCluster cluster = new FakeYtCluster(10, 4, 1);
+        FakeYtCluster cluster = FakeYtCluster.failingOnOpen(10, 1);
 
         assertThatThrownBy(() -> readAll(cluster, IMMEDIATE_RETRIES, 1))
-                .hasRootCauseMessage("transient YT failure at row 4");
+                .hasRootCauseMessage("transient YT failure while opening the reader");
     }
 
     /** Reads as a FULL cache reload, i.e. not the blocking first load. */
