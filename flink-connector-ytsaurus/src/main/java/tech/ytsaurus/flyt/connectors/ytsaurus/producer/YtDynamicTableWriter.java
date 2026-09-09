@@ -759,7 +759,10 @@ public class YtDynamicTableWriter implements Serializable {
                     TimeUnit.SECONDS);
             transactionDataBuffer = new ArrayList<>();
 
-            commitWithRetry();
+            if (!commitWithRetry()) {
+                // interrupted mid-backoff: leave the transaction and the uncommitted rows in place
+                return;
+            }
 
             final GUID currentTransactionId = currentTransaction.getId();
             currentTransaction = null;
@@ -784,13 +787,14 @@ public class YtDynamicTableWriter implements Serializable {
         lastCommitTimestamp.set(current);
     }
 
-    private void commitWithRetry() throws InterruptedException {
+    /** @return {@code false} if the commit was interrupted and must not be treated as done. */
+    private boolean commitWithRetry() {
         RetryStrategy backoffRetryStrategy = retryStrategy;
         while (true) {
             try {
                 currentTransaction.commit().join();
                 onCommitSuccess();
-                break;
+                return true;
             } catch (Exception e) {
                 log.error("Unable to commit transaction {} for table {}", currentTransaction.getId(), getPath(), e);
                 sumFailedRows.getAndAdd(rowsInTransaction.get());
@@ -800,6 +804,11 @@ public class YtDynamicTableWriter implements Serializable {
                     throw e;
                 }
                 backoffRetryStrategy = RetryUtils.awaitNextAttempt(backoffRetryStrategy);
+                if (backoffRetryStrategy == null) {
+                    log.warn("Commit interrupted for table {}, {} rows left uncommitted",
+                            getPath(), rowsInTransaction.get());
+                    return false;
+                }
 
                 currentTransaction = createTransaction();
                 log.info("Start retry transaction {} for table {}", currentTransaction.getId(), getPath());

@@ -192,7 +192,7 @@ public abstract class AbstractYtRowDataInputFormat
                         "Empty batch from %s at row %d while the reader is not at EOF",
                         path.getFullPath(), rowsRead));
             }
-            retry = awaitNextAttempt(retry);
+            retry = RetryUtils.awaitNextAttempt(retry);
             if (retry == null) {
                 return null;
             }
@@ -220,25 +220,11 @@ public abstract class AbstractYtRowDataInputFormat
                 }
                 LOG.warn("YT failure while opening reader for {}, retrying in {} ({} attempts left)",
                         path.getFullPath(), retry.getRetryDelay(), retry.getNumRemainingRetries(), e);
-                retry = awaitNextAttempt(retry);
+                retry = RetryUtils.awaitNextAttempt(retry);
                 if (retry == null) {
                     return;
                 }
             }
-        }
-    }
-
-    /**
-     * @return the strategy for the next attempt, or {@code null} if the thread was interrupted and
-     *     reading must stop cooperatively rather than fail the reload
-     */
-    @Nullable
-    private RetryStrategy awaitNextAttempt(RetryStrategy retry) {
-        try {
-            return RetryUtils.awaitNextAttempt(retry);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            return null;
         }
     }
 
