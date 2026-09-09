@@ -1,21 +1,14 @@
 package tech.ytsaurus.flyt.connectors.ytsaurus.producer.converters;
 
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 import org.apache.flink.formats.common.TimestampFormat;
-import org.apache.flink.table.data.GenericArrayData;
-import org.apache.flink.table.data.GenericMapData;
 import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.TimestampData;
-import org.apache.flink.table.data.binary.BinaryStringData;
 import org.apache.flink.table.types.logical.ArrayType;
 import org.apache.flink.table.types.logical.DateType;
 import org.apache.flink.table.types.logical.DayTimeIntervalType;
-import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.MapType;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.table.types.logical.TimestampType;
@@ -23,139 +16,638 @@ import org.apache.flink.table.types.logical.VarBinaryType;
 import org.apache.flink.table.types.logical.VarCharType;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
+import tech.ytsaurus.flyt.connectors.ytsaurus.SerializationUtils;
 import tech.ytsaurus.ysontree.YTree;
 import tech.ytsaurus.ysontree.YTreeNode;
 import tech.ytsaurus.ysontree.YTreeTextSerializer;
 
+import static tech.ytsaurus.flyt.connectors.ytsaurus.producer.converters.RowDataToYtTestUtil.arr;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.producer.converters.RowDataToYtTestUtil.convertSingleField;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.producer.converters.RowDataToYtTestUtil.fieldDeclarationToSchema;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.producer.converters.RowDataToYtTestUtil.mapData;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.producer.converters.RowDataToYtTestUtil.str;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.producer.converters.RowDataToYtTestUtil.ytDict;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.producer.converters.RowDataToYtTestUtil.ytList;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.producer.converters.RowDataToYtTestUtil.ytMap;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.producer.converters.RowDataToYtTestUtil.ytPair;
+
 public class RowDataToYtListConverterTest {
+
+    // ===== scalar / native =====
+
     @Test
-    void testFlinkYtTypesConversion() {
-        String schema = fieldDeclarationToSchema(
+    void nativeDate() {
+        Map<String, Object> result = convertSingleField(
+                "targetDate", new DateType(),
                 "{name='targetDate'; type='date';}",
+                /* start of the epoch */ 0);
+
+        // native date returns days since epoch as int
+        Assertions.assertEquals(0, result.get("targetDate"));
+    }
+
+    @Test
+    void optionalNativeDate() {
+        String schema = "{name='targetDate'; type_v3={type_name='optional'; item='date'};}";
+
+        Map<String, Object> result = convertSingleField(
+                "targetDate", new DateType(), schema, 1);
+        Map<String, Object> nullResult = convertSingleField(
+                "targetDate", new DateType(), schema, null);
+
+        Assertions.assertEquals(1, result.get("targetDate"));
+        Assertions.assertEquals(YTree.nullNode(), nullResult.get("targetDate"));
+    }
+
+    @Test
+    void nonOptionalNativeDateWritesNull() {
+        Map<String, Object> result = convertSingleField(
+                "targetDate", new DateType(),
+                "{name='targetDate'; type_v3='date';}",
+                null);
+
+        Assertions.assertEquals(YTree.nullNode(), result.get("targetDate"));
+    }
+
+    @Test
+    void requiredNativeDateWritesNull() {
+        Map<String, Object> result = convertSingleField(
+                "targetDate", new DateType(),
+                "{name='targetDate'; type='date'; required=%true;}",
+                null);
+
+        Assertions.assertEquals(YTree.nullNode(), result.get("targetDate"));
+    }
+
+    @Test
+    void optionalInsideOptionalFailsExplicitly() {
+        UnsupportedOperationException exception = Assertions.assertThrows(
+                UnsupportedOperationException.class,
+                () -> convertSingleField(
+                        "targetDate", new DateType(),
+                        "{name='targetDate'; type_v3={type_name='optional'; "
+                                + "item={type_name='optional'; item='date'}};}",
+                        1));
+
+        Assertions.assertTrue(exception.getMessage().contains("optional<optional<T>>"));
+    }
+
+    @Test
+    void optionalInsideOptionalInListFailsExplicitly() {
+        UnsupportedOperationException exception = Assertions.assertThrows(
+                UnsupportedOperationException.class,
+                () -> convertSingleField(
+                        "dates", new ArrayType(new DateType()),
+                        "{name='dates'; type_v3={type_name='list'; "
+                                + "item={type_name='optional'; "
+                                + "item={type_name='optional'; item='date'}}};}",
+                        arr(1)));
+
+        Assertions.assertTrue(exception.getMessage().contains("optional<optional<T>>"));
+    }
+
+    @Test
+    void nativeDatetime() {
+        Map<String, Object> result = convertSingleField(
+                "targetDatetime", new TimestampType(),
                 "{name='targetDatetime'; type='datetime';}",
+                TimestampData.fromEpochMillis(1000));
+
+        // native datetime returns epoch seconds
+        Assertions.assertEquals(1L, result.get("targetDatetime"));
+    }
+
+    @Test
+    void nativeTimestamp() {
+        Map<String, Object> result = convertSingleField(
+                "targetTimestamp", new TimestampType(),
                 "{name='targetTimestamp'; type='timestamp';}",
-                "{name='targetBytes'; type='yson';}",
+                TimestampData.fromEpochMillis(1000));
+
+        // native timestamp returns epoch microseconds
+        Assertions.assertEquals(1000 * 1000L, result.get("targetTimestamp"));
+    }
+
+    @Test
+    void interval() {
+        Map<String, Object> result = convertSingleField(
+                "targetInterval",
+                new DayTimeIntervalType(DayTimeIntervalType.DayTimeResolution.DAY_TO_SECOND),
                 "{name='targetInterval'; type='interval';}",
-                "{name='nested'; type='yson';}"
-        );
+                /* start of the epoch */ 0L);
 
-        LogicalType logicalType = new RowType(List.of(
-                new RowType.RowField("targetDate", new DateType()),
-                new RowType.RowField("targetDatetime", new TimestampType()),
-                new RowType.RowField("targetTimestamp", new TimestampType()),
-                new RowType.RowField("targetBytes", new VarBinaryType()),
-                new RowType.RowField("targetInterval",
-                        new DayTimeIntervalType(DayTimeIntervalType.DayTimeResolution.DAY_TO_SECOND)),
-                new RowType.RowField("nested",
-                        new RowType(List.of(new RowType.RowField("nestedTarget", new VarBinaryType())))
-                )
-        ));
+        Assertions.assertEquals(0L, result.get("targetInterval"));
+    }
 
+    // ===== yson bytes / nested row =====
+
+    @Test
+    void ysonBytes() {
         YTreeNode targetNode = YTree.mapBuilder().key("sample").value("test").buildMap();
 
-        GenericRowData nestedData = new GenericRowData(1);
-        nestedData.setField(/* nestedTarget */ 0, new byte[]{1, 0, 1});
+        Map<String, Object> result = convertSingleField(
+                "targetBytes", new VarBinaryType(),
+                "{name='targetBytes'; type='yson';}",
+                targetNode.toBinary());
 
-        GenericRowData rowData = new GenericRowData(6);
-        rowData.setField(/* targetDate */ 0, /* Start of the Epoch */ 0);
-        rowData.setField(/* targetDatetime */ 1, TimestampData.fromEpochMillis(1000));
-        rowData.setField(/* targetTimestamp */ 2, TimestampData.fromEpochMillis(1000));
-        rowData.setField(/* targetBytes */ 3, targetNode.toBinary());
-        rowData.setField(/* targetInterval */ 4, /* Start of the Epoch */ 0L);
-        rowData.setField(/* nested */ 5, nestedData);
-
-        Map<String, Object> result = convert(schema, logicalType, rowData);
-        // Right now we don't support nested native chrono conversions
-        // because there's no way to provide enough data to determine
-        // what fields to converse
-        Assertions.assertEquals(0, result.get("targetDate"));
-        Assertions.assertEquals(1L, result.get("targetDatetime"));
-        Assertions.assertEquals(1000 * 1000L, result.get("targetTimestamp"));
         Assertions.assertEquals(targetNode, result.get("targetBytes"));
-        Assertions.assertEquals(0L, result.get("targetInterval"));
+    }
+
+    @Test
+    void nestedRow() {
+        GenericRowData nestedData = new GenericRowData(1);
+        nestedData.setField(0, new byte[]{1, 0, 1});
+
+        Map<String, Object> result = convertSingleField(
+                "nested",
+                new RowType(List.of(new RowType.RowField("nestedTarget", new VarBinaryType()))),
+                "{name='nested'; type='yson';}",
+                nestedData);
+
         Assertions.assertEquals(
                 Map.of("nestedTarget", YTree.bytesNode(new byte[]{1, 0, 1})),
                 result.get("nested"));
     }
 
+    // ===== dict (list of [key, value] pairs) =====
 
     @Test
-    void testFlinkYtTypesConversionArrayWithNullableTypes() {
-        RowType rowType = new RowType(List.of(
-                new RowType.RowField("arrayWithNulls", new ArrayType(
-                        new VarCharType()
-                ))
-        ));
-        GenericRowData rowData = new GenericRowData(1);
-        GenericArrayData genericArrayData = new GenericArrayData(new BinaryStringData[]{
-                new BinaryStringData("abacaba"),
-                null,
-                new BinaryStringData("caba"),
-                null,
-                null
-        });
-        rowData.setField(/* arrayWithNulls */ 0, genericArrayData);
-
-        Map<String, Object> result = convert(
-                fieldDeclarationToSchema("{name='arrayWithNulls'; type='yson';}"),
-                rowType,
-                rowData);
+    void dict() {
+        Map<String, Object> result = convertSingleField(
+                "dictField",
+                new MapType(new VarCharType(), new VarCharType()),
+                "{name='dictField'; type_v3={type_name='dict'; key='string'; value='string'};}",
+                mapData("key1", str("value1")));
 
         Assertions.assertEquals(
-                YTree.listBuilder()
-                        .value("abacaba")
-                        .value(YTree.nullNode())
-                        .value("caba")
-                        .value(YTree.nullNode())
-                        .value(YTree.nullNode())
-                        .buildList(),
+                ytDict(ytPair("key1", "value1")),
+                result.get("dictField"));
+    }
+
+    @Test
+    void dictWithUtf8Keys() {
+        Map<String, Object> result = convertSingleField(
+                "dictField",
+                new MapType(new VarCharType(), new VarCharType()),
+                "{name='dictField'; type_v3={type_name='dict'; key='utf8'; value='string'};}",
+                mapData("key1", str("value1")));
+
+        Assertions.assertEquals(
+                ytDict(ytPair("key1", "value1")),
+                result.get("dictField"));
+    }
+
+    @Test
+    void optionalDict() {
+        String schema = "{name='optionalDict'; type_v3={type_name='optional'; "
+                + "item={type_name='dict'; key='string'; value='string'}};}";
+
+        Map<String, Object> result = convertSingleField(
+                "optionalDict",
+                new MapType(new VarCharType(), new VarCharType()),
+                schema,
+                mapData("key", str("value")));
+        Map<String, Object> nullResult = convertSingleField(
+                "optionalDict",
+                new MapType(new VarCharType(), new VarCharType()),
+                schema,
+                null);
+
+        Assertions.assertEquals(
+                ytDict(ytPair("key", "value")),
+                result.get("optionalDict"));
+        Assertions.assertEquals(YTree.nullNode(), nullResult.get("optionalDict"));
+    }
+
+    @Test
+    void dictWithNonStringKeyTypeFails() {
+        IllegalStateException exception = Assertions.assertThrows(
+                IllegalStateException.class,
+                () -> convertSingleField(
+                        "dictField",
+                        new MapType(new VarCharType(), new VarCharType()),
+                        "{name='dictField'; type_v3={type_name='dict'; key='int64'; value='string'};}",
+                        mapData("key", str("value"))));
+
+        Assertions.assertTrue(exception.getMessage().contains("Only YT dicts with string or utf8 keys are supported"));
+    }
+
+    @Test
+    void dictWithNativeDateValues() {
+        int epochDay = 1;
+        Map<String, Object> result = convertSingleField(
+                "dates",
+                new MapType(new VarCharType(), new DateType()),
+                "{name='dates'; type_v3={type_name='dict'; key='string'; value='date'};}",
+                mapData("tomorrow", epochDay));
+
+        YTreeNode expected = YTree.listBuilder()
+                .value(YTree.listBuilder()
+                        .value("tomorrow")
+                        .value(epochDay)
+                        .buildList())
+                .buildList();
+        Assertions.assertEquals(expected, result.get("dates"));
+    }
+
+    @Test
+    void dictWithOptionalNativeDateValues() {
+        Map<String, Object> result = convertSingleField(
+                "dates",
+                new MapType(new VarCharType(), new DateType()),
+                "{name='dates'; type_v3={type_name='dict'; key='string'; "
+                        + "value={type_name='optional'; item='date'}};}",
+                mapData("tomorrow", 1, "unknown", null));
+
+        Assertions.assertEquals(
+                ytDict(
+                        ytPair("tomorrow", YTree.integerNode(1)),
+                        ytPair("unknown", null)),
+                result.get("dates"));
+    }
+
+    @Test
+    void dictWithNonOptionalNativeDateValueWritesNull() {
+        Map<String, Object> result = convertSingleField(
+                "dates",
+                new MapType(new VarCharType(), new DateType()),
+                "{name='dates'; type_v3={type_name='dict'; key='string'; value='date'};}",
+                mapData("unknown", null));
+
+        Assertions.assertEquals(
+                ytDict(ytPair("unknown", null)),
+                result.get("dates"));
+    }
+
+    @Test
+    void dictOfArrays() {
+        Map<String, Object> result = convertSingleField(
+                "dictOfArrays",
+                new MapType(new VarCharType(), new ArrayType(new VarCharType())),
+                "{name='dictOfArrays'; type_v3={type_name='dict'; key='string'; "
+                        + "value={type_name='list'; item='string'}};}",
+                mapData("fruits", arr(str("apple"), str("banana"))));
+
+        Assertions.assertEquals(
+                ytDict(ytPair("fruits", ytList("apple", "banana"))),
+                result.get("dictOfArrays"));
+    }
+
+    @Test
+    void arrayOfDicts() {
+        Map<String, Object> result = convertSingleField(
+                "arrayOfDicts",
+                new ArrayType(new MapType(new VarCharType(), new VarCharType())),
+                "{name='arrayOfDicts'; type_v3={type_name='list'; "
+                        + "item={type_name='dict'; key='string'; value='string'}};}",
+                arr(mapData("k1", str("v1")), mapData("k2", str("v2"))));
+
+        Assertions.assertEquals(
+                ytList(
+                        ytDict(ytPair("k1", "v1")),
+                        ytDict(ytPair("k2", "v2"))),
+                result.get("arrayOfDicts"));
+    }
+
+    @Test
+    void dictOfDicts() {
+        Map<String, Object> result = convertSingleField(
+                "dictOfDicts",
+                new MapType(new VarCharType(),
+                        new MapType(new VarCharType(), new VarCharType())),
+                "{name='dictOfDicts'; type_v3={type_name='dict'; key='string'; "
+                        + "value={type_name='dict'; key='string'; value='string'}};}",
+                mapData("outerKey", mapData("innerKey", str("innerValue"))));
+
+        Assertions.assertEquals(
+                ytDict(ytPair("outerKey",
+                        ytDict(ytPair("innerKey", "innerValue")))),
+                result.get("dictOfDicts"));
+    }
+
+    @Test
+    void dictOfDictsOfDicts() {
+        Map<String, Object> result = convertSingleField(
+                "dictOfDictsOfDicts",
+                new MapType(new VarCharType(),
+                        new MapType(new VarCharType(),
+                                new MapType(new VarCharType(), new VarCharType()))),
+                "{name='dictOfDictsOfDicts'; type_v3={type_name='dict'; key='string'; "
+                        + "value={type_name='dict'; key='string'; "
+                        + "value={type_name='dict'; key='string'; value='string'}}};}",
+                mapData("outerKey",
+                        mapData("midKey",
+                                mapData("innerKey", str("innerValue")))));
+
+        Assertions.assertEquals(
+                ytDict(ytPair("outerKey",
+                        ytDict(ytPair("midKey",
+                                ytDict(ytPair("innerKey", "innerValue")))))),
+                result.get("dictOfDictsOfDicts"));
+    }
+
+    @Test
+    void dictOfArraysOfDicts() {
+        Map<String, Object> result = convertSingleField(
+                "dictOfArraysOfDicts",
+                new MapType(new VarCharType(),
+                        new ArrayType(new MapType(new VarCharType(), new VarCharType()))),
+                "{name='dictOfArraysOfDicts'; type_v3={type_name='dict'; key='string'; "
+                        + "value={type_name='list'; item={type_name='dict'; key='string'; value='string'}}};}",
+                mapData("ok", arr(mapData("ik", str("iv")))));
+
+        Assertions.assertEquals(
+                ytDict(ytPair("ok",
+                        ytList(ytDict(ytPair("ik", "iv"))))),
+                result.get("dictOfArraysOfDicts"));
+    }
+
+    @Test
+    void arrayOfDictsOfArrays() {
+        Map<String, Object> result = convertSingleField(
+                "arrayOfDictsOfArrays",
+                new ArrayType(new MapType(new VarCharType(), new ArrayType(new VarCharType()))),
+                "{name='arrayOfDictsOfArrays'; type_v3={type_name='list'; "
+                        + "item={type_name='dict'; key='string'; value={type_name='list'; item='string'}}};}",
+                arr(mapData("fruits", arr(str("apple"), str("banana")))));
+
+        Assertions.assertEquals(
+                ytList(ytDict(ytPair("fruits", ytList("apple", "banana")))),
+                result.get("arrayOfDictsOfArrays"));
+    }
+
+    @Test
+    void arrayOfArraysOfDicts() {
+        // array<array<dict<string, string>>>
+        Map<String, Object> result = convertSingleField(
+                "arrayOfArraysOfDicts",
+                new ArrayType(new ArrayType(
+                        new MapType(new VarCharType(), new VarCharType()))),
+                "{name='arrayOfArraysOfDicts'; type_v3={type_name='list'; "
+                        + "item={type_name='list'; "
+                        + "item={type_name='dict'; key='string'; value='string'}}};}",
+                arr(arr(mapData("k1", str("v1")), mapData("k2", str("v2")))));
+
+        // outer list -> inner list -> each element is a dict (list of pairs)
+        Assertions.assertEquals(
+                ytList(ytList(
+                        ytDict(ytPair("k1", "v1")),
+                        ytDict(ytPair("k2", "v2")))),
+                result.get("arrayOfArraysOfDicts"));
+    }
+
+    @Test
+    void dictOfDictsOfArrays() {
+        // dict<string, dict<string, array<string>>>
+        Map<String, Object> result = convertSingleField(
+                "dictOfDictsOfArrays",
+                new MapType(new VarCharType(),
+                        new MapType(new VarCharType(), new ArrayType(new VarCharType()))),
+                "{name='dictOfDictsOfArrays'; type_v3={type_name='dict'; key='string'; "
+                        + "value={type_name='dict'; key='string'; "
+                        + "value={type_name='list'; item='string'}}};}",
+                mapData("outerKey",
+                        mapData("innerKey", arr(str("apple"), str("banana")))));
+
+        // outer dict -> inner dict -> array value
+        Assertions.assertEquals(
+                ytDict(ytPair("outerKey",
+                        ytDict(ytPair("innerKey", ytList("apple", "banana"))))),
+                result.get("dictOfDictsOfArrays"));
+    }
+
+    @Test
+    void arrayOfDictsOfDicts() {
+        // array<dict<string, dict<string, string>>>
+        Map<String, Object> result = convertSingleField(
+                "arrayOfDictsOfDicts",
+                new ArrayType(new MapType(new VarCharType(),
+                        new MapType(new VarCharType(), new VarCharType()))),
+                "{name='arrayOfDictsOfDicts'; type_v3={type_name='list'; "
+                        + "item={type_name='dict'; key='string'; "
+                        + "value={type_name='dict'; key='string'; value='string'}}};}",
+                arr(mapData("outerKey", mapData("innerKey", str("innerValue")))));
+
+        // outer list -> each element is a dict (list of pairs) -> value is a nested dict
+        Assertions.assertEquals(
+                ytList(ytDict(ytPair("outerKey",
+                        ytDict(ytPair("innerKey", "innerValue"))))),
+                result.get("arrayOfDictsOfDicts"));
+    }
+
+    // ===== nullable collections =====
+
+    @Test
+    void optionalListWithOptionalNativeDateItems() {
+        String schema = "{name='dates'; type_v3={type_name='optional'; "
+                + "item={type_name='list'; item={type_name='optional'; item='date'}}};}";
+
+        Map<String, Object> result = convertSingleField(
+                "dates", new ArrayType(new DateType()), schema, arr(1, null));
+        Map<String, Object> nullResult = convertSingleField(
+                "dates", new ArrayType(new DateType()), schema, null);
+
+        Assertions.assertEquals(
+                ytList(YTree.integerNode(1), null),
+                result.get("dates"));
+        Assertions.assertEquals(YTree.nullNode(), nullResult.get("dates"));
+    }
+
+    @Test
+    void listWithNonOptionalNativeDateItemWritesNull() {
+        Map<String, Object> result = convertSingleField(
+                "dates", new ArrayType(new DateType()),
+                "{name='dates'; type_v3={type_name='list'; item='date'};}",
+                arr(1, null));
+
+        Assertions.assertEquals(
+                ytList(YTree.integerNode(1), null),
+                result.get("dates"));
+    }
+
+    @Test
+    void optionalsNestedAcrossDictAndList() {
+        Map<String, Object> result = convertSingleField(
+                "items",
+                new MapType(new VarCharType(),
+                        new ArrayType(new MapType(new VarCharType(), new DateType()))),
+                "{name='items'; type_v3={type_name='dict'; key='string'; "
+                        + "value={type_name='optional'; item={type_name='list'; "
+                        + "item={type_name='optional'; item={type_name='dict'; key='string'; "
+                        + "value={type_name='optional'; item='date'}}}}}};}",
+                mapData("dates", arr(mapData("known", 1, "unknown", null), null)));
+
+        Assertions.assertEquals(
+                ytDict(ytPair("dates", ytList(
+                        ytDict(
+                                ytPair("known", YTree.integerNode(1)),
+                                ytPair("unknown", null)),
+                        null))),
+                result.get("items"));
+    }
+
+    @Test
+    void arrayWithNullableTypes() {
+        Map<String, Object> result = convertSingleField(
+                "arrayWithNulls", new ArrayType(new VarCharType()),
+                "{name='arrayWithNulls'; type='yson';}",
+                arr(str("abacaba"), null, str("caba"), null, null));
+
+        Assertions.assertEquals(
+                ytList("abacaba", null, "caba", null, null),
                 result.get("arrayWithNulls"));
     }
 
     @Test
-    void testFlinkYtTypesConversionMapWithNullableTypes() {
-        RowType rowType = new RowType(List.of(
-                new RowType.RowField("mapWithNulls", new MapType(
-                        new VarCharType(),
-                        new VarCharType()
-                ))
-        ));
-        GenericRowData rowData = new GenericRowData(1);
-        Map<BinaryStringData, BinaryStringData> mapData = new HashMap<>();
-        mapData.put(new BinaryStringData("nullKey"), null);
-        mapData.put(new BinaryStringData("key"), new BinaryStringData("value"));
-        GenericMapData genericArrayData = new GenericMapData(mapData);
-        rowData.setField(/* mapWithNulls */ 0, genericArrayData);
-
-        Map<String, Object> result = convert(
-                fieldDeclarationToSchema("{name='mapWithNulls'; type='yson';}"),
-                rowType,
-                rowData);
+    void ysonArrayWithNonNullableItemWritesNull() {
+        Map<String, Object> result = convertSingleField(
+                "arrayWithNulls",
+                new ArrayType(new VarCharType(false, VarCharType.MAX_LENGTH)),
+                "{name='arrayWithNulls'; type='yson';}",
+                arr(str("value"), null));
 
         Assertions.assertEquals(
-                YTree.mapBuilder()
-                        .key("nullKey")
-                        .value(YTree.nullNode())
-                        .key("key")
-                        .value("value")
-                        .buildMap(),
+                ytList("value", null),
+                result.get("arrayWithNulls"));
+    }
+
+    @Test
+    void mapWithNullableTypes() {
+        Map<String, Object> result = convertSingleField(
+                "mapWithNulls", new MapType(new VarCharType(), new VarCharType()),
+                "{name='mapWithNulls'; type='yson';}",
+                mapData("nullKey", null, "key", str("value")));
+
+        Assertions.assertEquals(
+                ytMap("nullKey", null, "key", "value"),
                 result.get("mapWithNulls"));
     }
 
-    private Map<String, Object> convert(String ysonSchema, LogicalType rowType, GenericRowData rowData) {
-        var converter = new RowDataToYtListConverters(TimestampFormat.ISO_8601);
-        YTreeNode schemaNode = YTreeTextSerializer.deserialize(ysonSchema);
-        //noinspection unchecked
-        return (Map<String, Object>) converter
-                .createConverter(rowType, schemaNode)
-                .convert(null, rowData);
+    @Test
+    void ysonMapWithNonNullableValueWritesNull() {
+        Map<String, Object> result = convertSingleField(
+                "mapWithNulls",
+                new MapType(
+                        new VarCharType(),
+                        new VarCharType(false, VarCharType.MAX_LENGTH)),
+                "{name='mapWithNulls'; type='yson';}",
+                mapData("key", null));
+
+        Assertions.assertEquals(
+                ytMap("key", null),
+                result.get("mapWithNulls"));
     }
 
-    private String fieldDeclarationToSchema(String... fields) {
-        return "<\"strict\"=%true;\"unique_keys\"=%true;>[" +
-                Stream.of(fields)
-                        .map(field -> field.replace("'", "\""))
-                        .collect(Collectors.joining(";"))
-                + ";]";
+    @Test
+    void converterCreatedFromYtSchemaIsSerializable() throws Exception {
+        RowType rowType = new RowType(List.of(new RowType.RowField(
+                "dictField", new MapType(new VarCharType(), new VarCharType()))));
+        YTreeNode schemaNode = YTreeTextSerializer.deserialize(fieldDeclarationToSchema(
+                "{name='dictField'; type_v3={type_name='dict'; key='string'; value='string'};}"));
+        var converter = new RowDataToYtListConverters(TimestampFormat.ISO_8601)
+                .createConverter(rowType, schemaNode);
+
+        var restoredConverter = (RowDataToYtListConverters.RowDataToYtMapConverter)
+                SerializationUtils.deserialize(SerializationUtils.serialize(converter));
+        GenericRowData rowData = new GenericRowData(1);
+        rowData.setField(0, mapData("key", str("value")));
+
+        Assertions.assertEquals(
+                Map.of("dictField", ytDict(ytPair("key", "value"))),
+                restoredConverter.convert(null, rowData));
     }
+
+    // ===== yson map (not dict) =====
+
+    @Test
+    void ysonMap() {
+        Map<String, Object> result = convertSingleField(
+                "ysonMapField", new MapType(new VarCharType(), new VarCharType()),
+                "{name='ysonMapField'; type='yson';}",
+                mapData("ysonKey1", str("ysonValue1"), "ysonKey2", str("ysonValue2")));
+
+        // yson map (not dict): type='yson' triggers the else branch in createMapConverter
+        Assertions.assertEquals(
+                ytMap("ysonKey1", "ysonValue1", "ysonKey2", "ysonValue2"),
+                result.get("ysonMapField"));
+    }
+
+    @Test
+    void ysonMapOfArrays() {
+        Map<String, Object> result = convertSingleField(
+                "ysonMapOfArrays", new MapType(new VarCharType(), new ArrayType(new VarCharType())),
+                "{name='ysonMapOfArrays'; type='yson';}",
+                mapData("colors", arr(str("red"), str("green"))));
+
+        Assertions.assertEquals(
+                ytMap("colors", ytList("red", "green")),
+                result.get("ysonMapOfArrays"));
+    }
+
+    @Test
+    void ysonMapOfMaps() {
+        Map<String, Object> result = convertSingleField(
+                "ysonMapOfMaps",
+                new MapType(new VarCharType(), new MapType(new VarCharType(), new VarCharType())),
+                "{name='ysonMapOfMaps'; type='yson';}",
+                mapData("outer", mapData("nestedKey", str("nestedValue"))));
+
+        Assertions.assertEquals(
+                ytMap("outer", ytMap("nestedKey", "nestedValue")),
+                result.get("ysonMapOfMaps"));
+    }
+
+    @Test
+    void ysonMapOfMapsOfMaps() {
+        // yson map<string, map<string, map<string, string>>>
+        Map<String, Object> result = convertSingleField(
+                "ysonMapOfMapsOfMaps",
+                new MapType(new VarCharType(),
+                        new MapType(new VarCharType(),
+                                new MapType(new VarCharType(), new VarCharType()))),
+                "{name='ysonMapOfMapsOfMaps'; type='yson';}",
+                mapData("outer",
+                        mapData("mid",
+                                mapData("innerKey", str("innerValue")))));
+
+        Assertions.assertEquals(
+                ytMap("outer", ytMap("mid", ytMap("innerKey", "innerValue"))),
+                result.get("ysonMapOfMapsOfMaps"));
+    }
+
+    @Test
+    void ysonMapOfArraysOfMaps() {
+        // yson map<string, array<map<string, string>>>
+        Map<String, Object> result = convertSingleField(
+                "ysonMapOfArraysOfMaps",
+                new MapType(new VarCharType(),
+                        new ArrayType(new MapType(new VarCharType(), new VarCharType()))),
+                "{name='ysonMapOfArraysOfMaps'; type='yson';}",
+                mapData("outer", arr(
+                        mapData("k1", str("v1")),
+                        mapData("k2", str("v2")))));
+
+        Assertions.assertEquals(
+                ytMap("outer", ytList(
+                        ytMap("k1", "v1"),
+                        ytMap("k2", "v2"))),
+                result.get("ysonMapOfArraysOfMaps"));
+    }
+
+    @Test
+    void ysonMapOfMapsOfArrays() {
+        // yson map<string, map<string, array<string>>>
+        Map<String, Object> result = convertSingleField(
+                "ysonMapOfMapsOfArrays",
+                new MapType(new VarCharType(),
+                        new MapType(new VarCharType(), new ArrayType(new VarCharType()))),
+                "{name='ysonMapOfMapsOfArrays'; type='yson';}",
+                mapData("outer",
+                        mapData("colors", arr(str("red"), str("green")))));
+
+        Assertions.assertEquals(
+                ytMap("outer", ytMap("colors", ytList("red", "green"))),
+                result.get("ysonMapOfMapsOfArrays"));
+    }
+
 }

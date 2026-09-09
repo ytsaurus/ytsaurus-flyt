@@ -9,6 +9,7 @@ import java.time.ZoneOffset;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
 import lombok.extern.slf4j.Slf4j;
@@ -25,15 +26,14 @@ import org.apache.flink.table.types.logical.LogicalTypeRoot;
 import org.apache.flink.table.types.logical.MapType;
 import org.apache.flink.table.types.logical.RowType;
 import tech.ytsaurus.core.operations.YTreeBinarySerializer;
+import tech.ytsaurus.flyt.connectors.ytsaurus.utils.ChronoUtils;
+import tech.ytsaurus.flyt.connectors.ytsaurus.utils.ConverterUtils;
 import tech.ytsaurus.typeinfo.TypeName;
 import tech.ytsaurus.ysontree.YTree;
 import tech.ytsaurus.ysontree.YTreeBuilder;
 import tech.ytsaurus.ysontree.YTreeMapNode;
 import tech.ytsaurus.ysontree.YTreeNode;
 import tech.ytsaurus.ysontree.YTreeTextSerializer;
-
-import tech.ytsaurus.flyt.connectors.ytsaurus.utils.ChronoUtils;
-import tech.ytsaurus.flyt.connectors.ytsaurus.utils.ConverterUtils;
 
 import static java.time.format.DateTimeFormatter.ISO_LOCAL_DATE;
 import static org.apache.flink.formats.common.TimeFormats.ISO8601_TIMESTAMP_FORMAT;
@@ -52,6 +52,11 @@ public class RowDataToYtListConverters implements Serializable {
     private static final long serialVersionUID = 1L;
 
     private static final Set<String> EXPLICIT_YSON_TYPES = Set.of(TypeName.Yson.getWireName().toLowerCase(), "any");
+    private static final Set<String> SUPPORTED_DICT_KEY_TYPES =
+            Set.of(TypeName.String.getWireName(), TypeName.Utf8.getWireName());
+    private static final String TYPE_V3_NAME = "type_v3";
+    private static final String TYPE_NAME = "type_name";
+    private static final String ITEM_NAME = "item";
 
     private final TimestampFormat timestampFormat;
 
@@ -64,7 +69,8 @@ public class RowDataToYtListConverters implements Serializable {
     }
 
     public RowDataToYtListConverters.RowDataToYtMapConverter createConverter(LogicalType type, YTreeNode schemaNode) {
-        return wrapIntoNullableConverter(createNotNullConverter(type, schemaNode));
+        YTreeNode effectiveSchemaNode = normalizeFieldNode(schemaNode);
+        return wrapIntoNullableConverter(createNotNullConverter(type, effectiveSchemaNode));
     }
 
     private RowDataToYtMapConverter createNotNullConverter(LogicalType type, YTreeNode fieldNode) {
@@ -115,9 +121,9 @@ public class RowDataToYtListConverters implements Serializable {
                 }
                 return createDecimalConverter();
             case ARRAY:
-                return createArrayConverter((ArrayType) type);
+                return createArrayConverter((ArrayType) type, fieldNode);
             case MAP:
-                return createMapConverter((MapType) type);
+                return createMapConverter((MapType) type, fieldNode);
             case MULTISET:
                 throw new RuntimeException("Unsupported type: MULTISET");
             case ROW:
@@ -268,9 +274,10 @@ public class RowDataToYtListConverters implements Serializable {
         };
     }
 
-    private RowDataToYtMapConverter createArrayConverter(ArrayType arrayType) {
+    private RowDataToYtMapConverter createArrayConverter(ArrayType arrayType, YTreeNode fieldNode) {
         ArrayData.ElementGetter elementGetter = ArrayData.createElementGetter(arrayType.getElementType());
-        RowDataToYtMapConverter elementConvertor = createConverter(arrayType.getElementType(), null);
+        YTreeNode itemFieldNode = extractNestedFieldNode(fieldNode, ITEM_NAME);
+        RowDataToYtMapConverter elementConvertor = createConverter(arrayType.getElementType(), itemFieldNode);
         return (reuse, data) -> {
             YTreeBuilder builder = YTree.listBuilder();
             ArrayData arrayData = (ArrayData) data;
@@ -283,7 +290,12 @@ public class RowDataToYtListConverters implements Serializable {
         };
     }
 
-    private RowDataToYtMapConverter createMapConverter(MapType mapType) {
+    private RowDataToYtMapConverter createMapConverter(MapType mapType, YTreeNode fieldNode) {
+        boolean dictField = isDictField(fieldNode);
+        if (dictField) {
+            validateDictKeyType(fieldNode);
+        }
+
         LogicalType keyType = mapType.getKeyType();
         if (!keyType.is(LogicalTypeRoot.CHAR) && !keyType.is(LogicalTypeRoot.VARCHAR)) {
             throw new IllegalStateException(String.format(
@@ -292,9 +304,118 @@ public class RowDataToYtListConverters implements Serializable {
         }
 
         LogicalType valueType = mapType.getValueType();
-        RowDataToYtMapConverter valueConvertor = createConverter(valueType, null);
+        YTreeNode valueFieldNode = extractNestedFieldNode(fieldNode, "value");
+        RowDataToYtMapConverter valueConvertor = createConverter(valueType, valueFieldNode);
         ArrayData.ElementGetter valueGetter = ArrayData.createElementGetter(valueType);
+        if (dictField) {
+            log.info("Creating map converter as YT dict for field: {}", fieldNode);
+            return createMapAsYtDictConverter(valueConvertor, valueGetter);
+        } else {
+            log.info("Creating map converter as YSON map for field: {}", fieldNode);
+            return createYsonMapConverter(valueConvertor, valueGetter);
+        }
+    }
 
+    private boolean isDictField(YTreeNode fieldNode) {
+        return isType(extractTypeV3Node(fieldNode), TypeName.Dict.getWireName());
+    }
+
+    private void validateDictKeyType(YTreeNode fieldNode) {
+        YTreeNode dictTypeNode = extractTypeV3Node(fieldNode);
+        YTreeNode keyTypeNode = dictTypeNode.asMap().get("key");
+        if (keyTypeNode == null
+                || !keyTypeNode.isStringNode()
+                || !SUPPORTED_DICT_KEY_TYPES.contains(keyTypeNode.stringValue())) {
+            throw new IllegalStateException(String.format(
+                    "Only YT dicts with string or utf8 keys are supported. Got key type: %s in field: %s",
+                    keyTypeNode, fieldNode));
+        }
+    }
+
+    private YTreeNode extractTypeV3Node(YTreeNode fieldNode) {
+        return Optional.ofNullable(fieldNode)
+                .filter(YTreeNode::isMapNode)
+                .map(YTreeNode::asMap)
+                .map(map -> map.get(TYPE_V3_NAME))
+                .orElse(null);
+    }
+
+    private YTreeNode extractTypeNode(YTreeNode fieldNode) {
+        return Optional.ofNullable(fieldNode)
+                .filter(YTreeNode::isMapNode)
+                .map(YTreeNode::asMap)
+                .map(map -> map.get(SCHEMA_TYPE_NAME))
+                .orElse(null);
+    }
+
+    private YTreeNode normalizeFieldNode(YTreeNode fieldNode) {
+        YTreeNode typeNode = extractTypeV3Node(fieldNode);
+        if (typeNode == null) {
+            return fieldNode;
+        }
+        if (isType(typeNode, TypeName.Optional.getWireName())) {
+            YTreeNode itemTypeNode = typeNode.asMap().get(ITEM_NAME);
+            if (itemTypeNode == null) {
+                throw new IllegalStateException("YT optional type has no item in field: " + fieldNode);
+            }
+            if (isType(itemTypeNode, TypeName.Optional.getWireName())) {
+                throw new UnsupportedOperationException(
+                        "Nested YT optional<optional<T>> is not supported in field: " + fieldNode);
+            }
+            typeNode = itemTypeNode;
+        }
+        return createEffectiveFieldNode(typeNode);
+    }
+
+    private YTreeNode createEffectiveFieldNode(YTreeNode typeNode) {
+        if (typeNode.isStringNode()) {
+            return YTree.mapBuilder()
+                    .key(SCHEMA_TYPE_NAME).value(typeNode.stringValue())
+                    .buildMap();
+        }
+        if (typeNode.isMapNode()) {
+            return YTree.mapBuilder()
+                    .key(TYPE_V3_NAME).value(typeNode)
+                    .buildMap();
+        }
+        throw new IllegalStateException("Unsupported YT type_v3 node: " + typeNode);
+    }
+
+    private boolean isType(YTreeNode typeNode, String expectedTypeName) {
+        if (typeNode == null || !typeNode.isMapNode()) {
+            return false;
+        }
+        YTreeNode typeNameNode = typeNode.asMap().get(TYPE_NAME);
+        return typeNameNode != null
+                && typeNameNode.isStringNode()
+                && expectedTypeName.equals(typeNameNode.stringValue());
+    }
+
+    /**
+     * Extracts a nested type_v3 schema. The child type is preserved under type_v3 so that its
+     * optionality can be handled by the child converter.
+     *
+     * For example, given a fieldNode like:
+     * {name='dictOfDicts'; type_v3={type_name='dict'; key='string'; value={type_name='dict'; ...}}}
+     * calling extractNestedFieldNode(fieldNode, "value") returns the nested dict under type_v3.
+     */
+    private YTreeNode extractNestedFieldNode(YTreeNode fieldNode, String childKey) {
+        YTreeNode typeNode = extractTypeV3Node(fieldNode);
+        if (typeNode == null || !typeNode.isMapNode()) {
+            return null;
+        }
+
+        YTreeNode childTypeNode = typeNode.asMap().get(childKey);
+        if (childTypeNode == null) {
+            return null;
+        }
+        return YTree.mapBuilder()
+                .key(TYPE_V3_NAME).value(childTypeNode)
+                .buildMap();
+    }
+
+
+    private RowDataToYtListConverters.RowDataToYtMapConverter createYsonMapConverter(RowDataToYtMapConverter valueConvertor, ArrayData.ElementGetter valueGetter) {
         return (reuse, data) -> {
             YTreeBuilder builder = YTree.mapBuilder();
             MapData mapData = (MapData) data;
@@ -308,8 +429,30 @@ public class RowDataToYtListConverters implements Serializable {
 
                 builder.key(key).value(value);
             }
-
             return builder.buildMap();
+        };
+    }
+
+    private RowDataToYtMapConverter createMapAsYtDictConverter(RowDataToYtMapConverter valueConvertor, ArrayData.ElementGetter valueGetter) {
+        return (reuse, data) -> {
+            YTreeBuilder builder = YTree.listBuilder(); // dict in YT is a list of pairs
+            MapData mapData = (MapData) data;
+            ArrayData keys = mapData.keyArray();
+            ArrayData values = mapData.valueArray();
+
+            for (int i = 0; i < mapData.size(); i++) {
+                String key = keys.getString(i).toString();
+                Object rawValue = valueGetter.getElementOrNull(values, i);
+                Object value = valueConvertor.convert(null, rawValue);
+
+                // Each pair is a [key, value]
+                builder.value(YTree.listBuilder()
+                        .value(key)
+                        .value(value)
+                        .buildList());
+            }
+
+            return builder.buildList();
         };
     }
 
@@ -357,6 +500,10 @@ public class RowDataToYtListConverters implements Serializable {
     }
 
     private String getFieldTypeName(YTreeNode fieldNode) {
-        return fieldNode.asMap().get(SCHEMA_TYPE_NAME).stringValue();
+        YTreeNode typeNode = extractTypeNode(fieldNode);
+        if (typeNode == null || !typeNode.isStringNode()) {
+            return "";
+        }
+        return typeNode.stringValue();
     }
 }
