@@ -185,6 +185,19 @@ public class RowDataToYtListConverterTest {
     }
 
     @Test
+    void dictWithUtf8Keys() {
+        Map<String, Object> result = convertSingleField(
+                "dictField",
+                new MapType(new VarCharType(), new VarCharType()),
+                "{name='dictField'; type_v3={type_name='dict'; key='utf8'; value='string'};}",
+                mapData("key1", str("value1")));
+
+        Assertions.assertEquals(
+                ytDict(ytPair("key1", "value1")),
+                result.get("dictField"));
+    }
+
+    @Test
     void optionalDict() {
         String schema = "{name='optionalDict'; type_v3={type_name='optional'; "
                 + "item={type_name='dict'; key='string'; value='string'}};}";
@@ -216,7 +229,7 @@ public class RowDataToYtListConverterTest {
                         "{name='dictField'; type_v3={type_name='dict'; key='int64'; value='string'};}",
                         mapData("key", str("value"))));
 
-        Assertions.assertTrue(exception.getMessage().contains("Only YT dicts with string keys are supported"));
+        Assertions.assertTrue(exception.getMessage().contains("Only YT dicts with string or utf8 keys are supported"));
     }
 
     @Test

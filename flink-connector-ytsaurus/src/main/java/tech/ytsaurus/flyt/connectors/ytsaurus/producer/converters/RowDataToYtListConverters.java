@@ -52,6 +52,8 @@ public class RowDataToYtListConverters implements Serializable {
     private static final long serialVersionUID = 1L;
 
     private static final Set<String> EXPLICIT_YSON_TYPES = Set.of(TypeName.Yson.getWireName().toLowerCase(), "any");
+    private static final Set<String> SUPPORTED_DICT_KEY_TYPES =
+            Set.of(TypeName.String.getWireName(), TypeName.Utf8.getWireName());
     private static final String TYPE_V3_NAME = "type_v3";
     private static final String TYPE_NAME = "type_name";
     private static final String ITEM_NAME = "item";
@@ -323,9 +325,9 @@ public class RowDataToYtListConverters implements Serializable {
         YTreeNode keyTypeNode = dictTypeNode.asMap().get("key");
         if (keyTypeNode == null
                 || !keyTypeNode.isStringNode()
-                || !TypeName.String.getWireName().equals(keyTypeNode.stringValue())) {
+                || !SUPPORTED_DICT_KEY_TYPES.contains(keyTypeNode.stringValue())) {
             throw new IllegalStateException(String.format(
-                    "Only YT dicts with string keys are supported. Got key type: %s in field: %s",
+                    "Only YT dicts with string or utf8 keys are supported. Got key type: %s in field: %s",
                     keyTypeNode, fieldNode));
         }
     }
