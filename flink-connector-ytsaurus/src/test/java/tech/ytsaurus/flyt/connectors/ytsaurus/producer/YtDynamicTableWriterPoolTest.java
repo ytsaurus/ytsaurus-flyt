@@ -20,7 +20,6 @@ import org.apache.flink.metrics.groups.UnregisteredMetricsGroup;
 import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.TimestampData;
 import org.apache.flink.table.types.logical.BigIntType;
-import org.apache.flink.table.types.logical.IntType;
 import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.table.types.logical.TimestampType;
@@ -35,18 +34,16 @@ import org.mockito.Mockito;
 import org.mockito.stubbing.Answer;
 import tech.ytsaurus.client.ApiServiceTransaction;
 import tech.ytsaurus.client.YTsaurusClient;
+import tech.ytsaurus.client.request.AbstractModifyRowsRequest;
 import tech.ytsaurus.client.request.CreateNode;
-import tech.ytsaurus.client.request.ModifyRowsRequest;
 import tech.ytsaurus.client.request.MountTable;
 import tech.ytsaurus.client.request.StartTransaction;
+import tech.ytsaurus.client.rows.UnversionedRowsetDeserializer;
+import tech.ytsaurus.client.rows.WireProtocolReader;
+import tech.ytsaurus.client.rpc.RpcClientRequestBuilder;
 import tech.ytsaurus.core.GUID;
 import tech.ytsaurus.core.cypress.CypressNodeType;
 import tech.ytsaurus.core.tables.TableSchema;
-import tech.ytsaurus.flyt.locks.noop.NoopLocksProvider;
-import tech.ytsaurus.ysontree.YTree;
-import tech.ytsaurus.ysontree.YTreeNode;
-import tech.ytsaurus.ysontree.YTreeTextSerializer;
-
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.ComplexYtPath;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.ReshardStrategy;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.ReshardingConfig;
@@ -56,6 +53,12 @@ import tech.ytsaurus.flyt.connectors.ytsaurus.common.partition.PartitionScale;
 import tech.ytsaurus.flyt.connectors.ytsaurus.producer.converters.RowDataToYtListConverters;
 import tech.ytsaurus.flyt.connectors.ytsaurus.producer.converters.YtPartitioningInstantRowDataConverter;
 import tech.ytsaurus.flyt.connectors.ytsaurus.utils.PartitionScaleUtils;
+import tech.ytsaurus.flyt.locks.noop.NoopLocksProvider;
+import tech.ytsaurus.rpcproxy.TReqModifyRows;
+import tech.ytsaurus.ysontree.YTree;
+import tech.ytsaurus.ysontree.YTreeMapNode;
+import tech.ytsaurus.ysontree.YTreeNode;
+import tech.ytsaurus.ysontree.YTreeTextSerializer;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -96,7 +99,7 @@ public class YtDynamicTableWriterPoolTest {
         RowDataToYtListConverters ytConverter = new RowDataToYtListConverters(TimestampFormat.ISO_8601);
         return new YtDynamicTableWriterPool(
                 () -> mockedClient,
-                ytConverter.createConverter(logicalType, YTreeTextSerializer.deserialize(schema)),
+                ytConverter.createTableRowConverter((RowType) logicalType, YTreeTextSerializer.deserialize(schema)),
                 path,
                 schema,
                 null,
@@ -119,7 +122,7 @@ public class YtDynamicTableWriterPoolTest {
     void poolAcquireConnectionThenCheckPathSuccess() {
         setYtPathAvailable("home", "smth", "__tests__", "tests", "sample");
         mockMountAny();
-        try (var pool = makePool("//home/smth/__tests__/tests", "[]", new IntType())) {
+        try (var pool = makePool("//home/smth/__tests__/tests", "[]", new RowType(List.of()))) {
             var writer = pool.getOrAcquire(WriterClassifier.plain("sample"));
             assertEquals("//home/smth/__tests__/tests/sample", writer.toString().split(" ")[3]);
         }
@@ -128,7 +131,7 @@ public class YtDynamicTableWriterPoolTest {
     @Test
     void poolAcquireConnectionForbiddenPathSuccess() {
         setYtPathAvailable("__non_existent__");
-        try (var pool = makePool("//home/smth/__tests__/tests", "[]", new IntType())) {
+        try (var pool = makePool("//home/smth/__tests__/tests", "[]", new RowType(List.of()))) {
             pool.getOrAcquire(WriterClassifier.plain("sample"));
             fail("No exception was thrown acquiring writer for a forbidden path");
         } catch (RuntimeException e) {
@@ -154,16 +157,14 @@ public class YtDynamicTableWriterPoolTest {
         Mockito.when(mockedClient.startTransaction(any(StartTransaction.class)))
                 .thenReturn(CompletableFuture.completedFuture(transaction));
 
-        AtomicReference<List<ModifyRowsRequest>> rows = new AtomicReference<>(new ArrayList<>());
-        Mockito.when(transaction.modifyRows(any(ModifyRowsRequest.Builder.class)))
+        AtomicReference<List<AbstractModifyRowsRequest<?, ?>>> rows = new AtomicReference<>(new ArrayList<>());
+        Mockito.when(transaction.modifyRows(any(AbstractModifyRowsRequest.class)))
                 .thenAnswer((Answer<CompletableFuture<Void>>) invocation -> {
-                    ModifyRowsRequest.Builder requestBuilder = invocation.getArgument(0);
-                    ModifyRowsRequest request = requestBuilder.build();
+                    AbstractModifyRowsRequest<?, ?> request = invocation.getArgument(0);
                     rows.get().add(request);
 
-                    request.getRows().forEach(row ->
-                            assertEquals("2022-10-30T10:10:10",
-                                    row.toYTreeMap(tableSchema).getString("date")));
+                    decodeWireRows(request, tableSchema).forEach(row ->
+                            assertEquals("2022-10-30T10:10:10", row.getString("date")));
 
                     return CompletableFuture.completedFuture(null);
                 });
@@ -185,6 +186,25 @@ public class YtDynamicTableWriterPoolTest {
             }
             assertEquals(1, rows.get().size());
         }
+    }
+
+    /**
+     * The writer sends pre-serialized requests, so the rows are read back from the wire attachments.
+     */
+    @SuppressWarnings("unchecked")
+    private static List<YTreeMapNode> decodeWireRows(AbstractModifyRowsRequest<?, ?> request,
+                                                     TableSchema tableSchema) {
+        AtomicReference<List<byte[]>> attachments = new AtomicReference<>();
+        RpcClientRequestBuilder<TReqModifyRows.Builder, ?> rpcBuilder = Mockito.mock(RpcClientRequestBuilder.class);
+        Mockito.doAnswer(invocation -> {
+            attachments.set(invocation.getArgument(1));
+            return null;
+        }).when(rpcBuilder).setCompressedAttachments(any(), any());
+        request.serializeRowsetTo(rpcBuilder);
+        return new WireProtocolReader(attachments.get())
+                .readUnversionedRowset(new UnversionedRowsetDeserializer(tableSchema.toWrite()))
+                .getRowset()
+                .getYTreeRows();
     }
 
     @Test

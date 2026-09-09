@@ -15,6 +15,7 @@ import org.apache.flink.streaming.api.functions.sink.RichSinkFunction;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.types.DataType;
 import org.apache.flink.table.types.logical.LogicalType;
+import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.util.concurrent.RetryStrategy;
 import org.apache.flink.util.function.SerializableSupplier;
 import tech.ytsaurus.client.YTsaurusClient;
@@ -77,7 +78,7 @@ public class YtRowDataSinkFunction extends RichSinkFunction<RowData> implements 
             throw new IllegalArgumentException("YT path cannot be empty");
         }
         YTreeNode schemaNode = ConverterUtils.toWriteNode(YTreeTextSerializer.deserialize(ysonSchemaString));
-        this.ytConverters = ytConverters.createConverter(type.getLogicalType(), schemaNode);
+        this.ytConverters = ytConverters.createTableRowConverter((RowType) type.getLogicalType(), schemaNode);
         this.path = path;
         this.logicalType = type.getLogicalType();
         this.originalType = type;
