@@ -56,6 +56,7 @@ import tech.ytsaurus.flyt.connectors.ytsaurus.common.providers.reshard.ReshardPr
 import tech.ytsaurus.flyt.connectors.ytsaurus.producer.converters.RowDataToYtListConverters;
 import tech.ytsaurus.flyt.connectors.ytsaurus.utils.FutureUtils;
 import tech.ytsaurus.flyt.connectors.ytsaurus.utils.PartitionScaleUtils;
+import tech.ytsaurus.flyt.connectors.ytsaurus.utils.RetryUtils;
 import tech.ytsaurus.flyt.locks.api.LockMode;
 import tech.ytsaurus.flyt.locks.api.LocksProvider;
 import tech.ytsaurus.flyt.locks.api.utils.LocksProviderUtils;
@@ -785,7 +786,7 @@ public class YtDynamicTableWriter implements Serializable {
 
     private void commitWithRetry() throws InterruptedException {
         RetryStrategy backoffRetryStrategy = retryStrategy;
-        while (backoffRetryStrategy.getNumRemainingRetries() >= 0) {
+        while (true) {
             try {
                 currentTransaction.commit().join();
                 onCommitSuccess();
@@ -798,8 +799,7 @@ public class YtDynamicTableWriter implements Serializable {
                             currentTransaction.getId(), getPath(), e);
                     throw e;
                 }
-                backoffRetryStrategy = backoffRetryStrategy.getNextRetryStrategy();
-                Thread.sleep(backoffRetryStrategy.getRetryDelay().toMillis());
+                backoffRetryStrategy = RetryUtils.awaitNextAttempt(backoffRetryStrategy);
 
                 currentTransaction = createTransaction();
                 log.info("Start retry transaction {} for table {}", currentTransaction.getId(), getPath());

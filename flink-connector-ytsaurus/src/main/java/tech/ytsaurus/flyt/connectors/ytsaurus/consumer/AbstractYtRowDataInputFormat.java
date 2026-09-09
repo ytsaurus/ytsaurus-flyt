@@ -35,6 +35,7 @@ import tech.ytsaurus.flyt.connectors.ytsaurus.YtConnectorInfo;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.ComplexYtPath;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.credentials.CredentialsProvider;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.utils.project.info.ProjectInfoUtils;
+import tech.ytsaurus.flyt.connectors.ytsaurus.utils.RetryUtils;
 import tech.ytsaurus.flyt.connectors.ytsaurus.utils.YtUtils;
 import tech.ytsaurus.flyt.formats.yson.adapter.YTreeNodeDeserializationSchema;
 import tech.ytsaurus.ysontree.YTreeNode;
@@ -228,19 +229,17 @@ public abstract class AbstractYtRowDataInputFormat
     }
 
     /**
-     * Waits out the current delay and then advances the strategy.
-     *
-     * @return the strategy for the next attempt, or {@code null} if the thread was interrupted and reading must stop
+     * @return the strategy for the next attempt, or {@code null} if the thread was interrupted and
+     *     reading must stop cooperatively rather than fail the reload
      */
     @Nullable
     private RetryStrategy awaitNextAttempt(RetryStrategy retry) {
         try {
-            Thread.sleep(retry.getRetryDelay().toMillis());
+            return RetryUtils.awaitNextAttempt(retry);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return null;
         }
-        return retry.getNextRetryStrategy();
     }
 
     private void openReader() throws Exception {
