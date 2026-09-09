@@ -82,7 +82,8 @@ class YtDynamicTableWriterRetryTest {
         writer = openWriter(retries(5), transactions);
 
         writeRows(25);
-        Assertions.assertEquals(25, writer.retainedRowsForRetry());
+        // 20 rows were flushed in two batches; the last 5 still sit in the modification buffer.
+        Assertions.assertEquals(20, writer.retainedRowsForRetry());
 
         writer.snapshotState(1);
 
@@ -236,7 +237,7 @@ class YtDynamicTableWriterRetryTest {
             }
 
             @Override
-            public CompletableFuture<Void> modifyRows(AbstractModifyRowsRequest.Builder<?, ?> request) {
+            public CompletableFuture<Void> modifyRows(AbstractModifyRowsRequest<?, ?> request) {
                 batchSizes.add(request.getRowModificationTypes().size());
                 if (!modifyOutcomes.next()) {
                     CompletableFuture<Void> failed = new CompletableFuture<>();

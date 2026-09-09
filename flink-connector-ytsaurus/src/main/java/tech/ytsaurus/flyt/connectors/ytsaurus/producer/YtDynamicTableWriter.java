@@ -34,13 +34,16 @@ import org.apache.flink.runtime.metrics.groups.AbstractMetricGroup;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.util.concurrent.RetryStrategy;
 import tech.ytsaurus.client.ApiServiceTransaction;
+import tech.ytsaurus.client.DefaultSerializationResolver;
 import tech.ytsaurus.client.YTsaurusClient;
 import tech.ytsaurus.client.request.CreateNode;
 import tech.ytsaurus.client.request.ModifyRowsRequest;
 import tech.ytsaurus.client.request.MountTable;
+import tech.ytsaurus.client.request.PreparedModifyRowRequest;
 import tech.ytsaurus.client.request.ReshardTable;
 import tech.ytsaurus.client.request.StartTransaction;
 import tech.ytsaurus.client.request.TransactionType;
+import tech.ytsaurus.client.rpc.RpcCompression;
 import tech.ytsaurus.core.GUID;
 import tech.ytsaurus.core.common.YTsaurusError;
 import tech.ytsaurus.core.cypress.CypressNodeType;
@@ -94,6 +97,8 @@ public class YtDynamicTableWriter implements Serializable {
     public static final long WAIT_MOUNTING_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
     public static final int WAIT_MOUNTED_BACKOFF_MS = 1000;
 
+    private static final RpcCompression NO_RPC_COMPRESSION = new RpcCompression();
+
     private final RowDataToYtListConverters.RowDataToYtMapConverter ytConverter;
 
     private final ComplexYtPath path;
@@ -128,10 +133,9 @@ public class YtDynamicTableWriter implements Serializable {
 
     private transient List<CompletableFuture<Void>> transactionDataBuffer;
 
-    // Rows are Object[] in YT write-schema order: far cheaper than the per-row HashMap.
-    private transient List<Object[]> uncommittedRows;
-
-    private transient List<Object[]> unflushedRows;
+    // Flushed but uncommitted batches, already serialized to wire format: the cheapest form to hold
+    // for a commit retry, and re-sending them keeps the original modification-sized batching.
+    private transient List<PreparedModifyRowRequest> uncommittedModifications;
 
     private transient ApiServiceTransaction currentTransaction;
 
@@ -225,15 +229,7 @@ public class YtDynamicTableWriter implements Serializable {
             log.info("Lock for write acquired. {}", path.getFullPath());
 
             transactionDataBuffer = new ArrayList<>();
-            if (retainRowsForRetry) {
-                uncommittedRows =
-                        new ArrayList<>(ytWriterOptions.getRowsInTransactionLimit() +
-                                ytWriterOptions.getRowsInModificationLimit());
-                unflushedRows = new ArrayList<>(ytWriterOptions.getRowsInModificationLimit());
-            } else {
-                uncommittedRows = new ArrayList<>();
-                unflushedRows = new ArrayList<>();
-            }
+            uncommittedModifications = new ArrayList<>();
             error = new AtomicReference<>();
             lastTransactionCommit = new AtomicLong(System.currentTimeMillis());
             lastModificationFlush = new AtomicLong(System.currentTimeMillis());
@@ -431,11 +427,7 @@ public class YtDynamicTableWriter implements Serializable {
         }
         flushModificationLock.lock();
         try {
-            final Object[] row = createRow(record);
-            modificationBuffer.addInsert(Arrays.asList(row));
-            if (retainRowsForRetry) {
-                unflushedRows.add(row);
-            }
+            modificationBuffer.addInsert(Arrays.asList(createRow(record)));
             rowsInBuffer.incrementAndGet();
         } finally {
             flushModificationLock.unlock();
@@ -776,7 +768,7 @@ public class YtDynamicTableWriter implements Serializable {
             final GUID currentTransactionId = currentTransaction.getId();
             currentTransaction = null;
             lastTransactionCommit.set(System.currentTimeMillis());
-            uncommittedRows.clear();
+            uncommittedModifications.clear();
             int committedRows = rowsInTransaction.getAndSet(0);
             sumCommittedRows.getAndAdd(committedRows);
             lastCommittedTrackableField = lastNonCommittedTrackableField;
@@ -805,7 +797,7 @@ public class YtDynamicTableWriter implements Serializable {
                 if (resendRows) {
                     currentTransaction = createTransaction();
                     log.info("Start retry transaction {} for table {}", currentTransaction.getId(), getPath());
-                    resendUncommittedRows();
+                    resendUncommittedModifications();
                 }
                 currentTransaction.commit().join();
                 onCommitSuccess();
@@ -826,34 +818,29 @@ public class YtDynamicTableWriter implements Serializable {
         }
     }
 
-    // Re-sends in modification-sized batches, like the normal write path: one huge request is
+    // Re-sends the same modification-sized batches as the normal write path: one huge request is
     // more likely to fail again than the batches that already went through.
-    private void resendUncommittedRows() {
-        int batchLimit = ytWriterOptions.getRowsInModificationLimit();
-        List<CompletableFuture<Void>> batches = new ArrayList<>();
-        ModifyRowsRequest.Builder batch = createModifyRowRequestBuilder();
-        int rowsInBatch = 0;
-        for (Object[] row : uncommittedRows) {
-            batch.addInsert(Arrays.asList(row));
-            if (++rowsInBatch == batchLimit) {
-                batches.add(currentTransaction.modifyRows(batch));
-                batch = createModifyRowRequestBuilder();
-                rowsInBatch = 0;
-            }
-        }
-        if (rowsInBatch > 0) {
-            batches.add(currentTransaction.modifyRows(batch));
+    private void resendUncommittedModifications() {
+        List<CompletableFuture<Void>> modificationResults = new ArrayList<>(uncommittedModifications.size());
+        for (PreparedModifyRowRequest modification : uncommittedModifications) {
+            modificationResults.add(currentTransaction.modifyRows(modification));
         }
         log.info("Re-sent {} rows in {} batches to transaction {} for table {}",
-                uncommittedRows.size(), batches.size(), currentTransaction.getId(), getPath());
-        FutureUtils.allOf(batches)
+                rowsInTransaction.get(), modificationResults.size(), currentTransaction.getId(), getPath());
+        FutureUtils.allOf(modificationResults)
                 .orTimeout(ytWriterOptions.getTransactionTimeout().getSeconds(), TimeUnit.SECONDS)
                 .join();
     }
 
+    // Serializes the pending batch once; the same bytes are sent now and re-sent on commit retry.
+    // The codec must match the client's: connector clients are built without RPC compression.
+    private PreparedModifyRowRequest prepareModification() {
+        return modificationBuffer.build().prepare(NO_RPC_COMPRESSION, DefaultSerializationResolver.getInstance());
+    }
+
     @VisibleForTesting
     int retainedRowsForRetry() {
-        return uncommittedRows.size() + unflushedRows.size();
+        return uncommittedModifications.stream().mapToInt(m -> m.getRowModificationTypes().size()).sum();
     }
 
     /**
@@ -872,13 +859,13 @@ public class YtDynamicTableWriter implements Serializable {
                     currentTransaction = createTransaction();
                     log.info("Start transaction {} for table {}", currentTransaction.getId(), getPath());
                 }
-                CompletableFuture<Void> future = currentTransaction.modifyRows(modificationBuffer);
+                PreparedModifyRowRequest modification = prepareModification();
+                CompletableFuture<Void> future = currentTransaction.modifyRows(modification);
                 transactionDataBuffer.add(future);
                 lastModificationFlush.set(System.currentTimeMillis());
                 rowsInTransaction.updateAndGet(v -> v + modificationSize());
                 if (retainRowsForRetry) {
-                    uncommittedRows.addAll(unflushedRows);
-                    unflushedRows.clear();
+                    uncommittedModifications.add(modification);
                 }
                 resetModificationBuffer();
             }
