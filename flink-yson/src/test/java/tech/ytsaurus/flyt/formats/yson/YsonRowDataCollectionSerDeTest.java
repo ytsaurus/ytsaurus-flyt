@@ -76,12 +76,12 @@ public class YsonRowDataCollectionSerDeTest {
     }
 
     @Test
-    public void deserializeArrayWithNullItemFailsForNonNullableElementType() {
-        Assertions.assertThatThrownBy(() -> deserializeVal(ARRAY(INT().notNull()),
-                        YTree.builder().beginList().value(1).entity().buildList()))
-                .hasRootCauseInstanceOf(YsonToRowDataConverters.YsonParseException.class)
-                .rootCause()
-                .hasMessageContaining("Null value is not supported for non-nullable type");
+    public void deserializeArrayWithNullItemForNonNullableElementType() {
+        RowData row = deserializeVal(ARRAY(INT().notNull()),
+                YTree.builder().beginList().value(1).entity().buildList());
+
+        Assertions.assertThat(row.getArray(0).getInt(0)).isEqualTo(1);
+        Assertions.assertThat(row.getArray(0).isNullAt(1)).isTrue();
     }
 
     @Test

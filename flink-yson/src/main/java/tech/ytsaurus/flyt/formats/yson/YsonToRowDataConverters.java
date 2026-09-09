@@ -70,7 +70,7 @@ public class YsonToRowDataConverters implements Serializable {
     }
 
     public YsonToRowDataConverter createConverter(LogicalType type) {
-        return wrapIntoNullableConverter(createNotNullConverter(type), type);
+        return wrapIntoNullableConverter(createNotNullConverter(type));
     }
 
     private YsonToRowDataConverter createNotNullConverter(LogicalType type) {
@@ -130,9 +130,7 @@ public class YsonToRowDataConverters implements Serializable {
     }
 
     private Boolean convertToBoolean(YTreeNode yTreeNode) {
-        if (yTreeNode.isEntityNode()) {
-            return null;
-        } else if (yTreeNode.isBooleanNode()) {
+        if (yTreeNode.isBooleanNode()) {
             return yTreeNode.boolValue();
         } else {
             return Boolean.parseBoolean(yTreeNode.stringValue().trim());
@@ -230,9 +228,7 @@ public class YsonToRowDataConverters implements Serializable {
     }
 
     private StringData convertToString(YTreeNode yTreeNode) {
-        if (yTreeNode.isEntityNode()) {
-            return null;
-        } else if (yTreeNode.isMapNode() || yTreeNode.isListNode()) {
+        if (yTreeNode.isMapNode() || yTreeNode.isListNode()) {
             return StringData.fromString(YTreeTextSerializer.serialize(yTreeNode));
         } else if (yTreeNode.isIntegerNode()) {
             return StringData.fromString(String.valueOf(yTreeNode.intValue()));
@@ -336,7 +332,6 @@ public class YsonToRowDataConverters implements Serializable {
         };
     }
 
-
     public YsonToRowDataConverter createRowConverter(RowType rowType) {
         final YsonToRowDataConverter[] fieldConverters =
                 rowType.getFields().stream()
@@ -375,15 +370,10 @@ public class YsonToRowDataConverters implements Serializable {
         return fieldConverter.convert(field);
     }
 
-    private YsonToRowDataConverter wrapIntoNullableConverter(
-            YsonToRowDataConverter converter, LogicalType type) {
+    private YsonToRowDataConverter wrapIntoNullableConverter(YsonToRowDataConverter converter) {
         return yTreeNode -> {
             if (yTreeNode == null || yTreeNode.isEntityNode()) {
-                if (type.isNullable()) {
-                    return null;
-                }
-                throw new YsonParseException(
-                        "Null value is not supported for non-nullable type: " + type.asSummaryString());
+                return null;
             }
             try {
                 return converter.convert(yTreeNode);

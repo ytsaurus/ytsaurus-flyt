@@ -47,18 +47,14 @@ public class YsonRowDataErrorHandlingTest {
     }
 
     @Test
-    public void entityFieldFailsForNonNullableType() {
+    public void entityFieldIsNullForNonNullableType() throws Exception {
         YTreeNode yson = YTree.builder().beginMap().key("val").entity().buildMap();
         RowType schema = (RowType) ROW(FIELD("val", INT().notNull())).getLogicalType();
 
         YsonRowDataDeserializationSchema deserializer =
                 createDeserializer(schema, false, false, TimestampFormat.SQL);
 
-        Assertions.assertThatThrownBy(() -> deserializer.deserialize(toYsonBytes(yson)))
-                .isInstanceOf(IOException.class)
-                .hasRootCauseInstanceOf(YsonToRowDataConverters.YsonParseException.class)
-                .rootCause()
-                .hasMessageContaining("Null value is not supported for non-nullable type");
+        Assertions.assertThat(deserializer.deserialize(toYsonBytes(yson)).isNullAt(0)).isTrue();
     }
 
     @Test
@@ -137,7 +133,7 @@ public class YsonRowDataErrorHandlingTest {
     }
 
     @Test
-    public void deserializeDictWithNullValueShouldFailForNonNullableValueType() {
+    public void deserializeDictWithNullValueForNonNullableValueType() throws Exception {
         YTreeNode yson = YTree.builder().beginMap()
                 .key("val").value(
                         YTree.builder().beginList()
@@ -147,12 +143,9 @@ public class YsonRowDataErrorHandlingTest {
 
         RowType schema = (RowType) ROW(FIELD("val", MAP(STRING(), INT().notNull()))).getLogicalType();
 
-        Assertions.assertThatThrownBy(
-                        () -> createDeserializer(schema).deserialize(toYsonBytes(yson)))
-                .isInstanceOf(IOException.class)
-                .hasRootCauseInstanceOf(YsonToRowDataConverters.YsonParseException.class)
-                .rootCause()
-                .hasMessageContaining("Null value is not supported for non-nullable type");
+        var row = createDeserializer(schema).deserialize(toYsonBytes(yson));
+
+        Assertions.assertThat(row.getMap(0).valueArray().isNullAt(0)).isTrue();
     }
 
     @Test
