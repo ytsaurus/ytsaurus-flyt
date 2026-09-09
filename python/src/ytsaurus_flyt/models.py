@@ -43,12 +43,16 @@ class ClusterParams:
     data_size_per_job: str
     disk_request_space: str = "10G"
     disk_request_medium_name: str = "default"
+    off_heap_size: Optional[str] = None
 
     def data_size_per_job_bytes(self) -> int:
         return parse_memory(self.data_size_per_job)
 
     def max_heap_size_bytes(self) -> int:
         return parse_memory(self.max_heap_size)
+
+    def off_heap_size_bytes(self) -> Optional[int]:
+        return parse_memory(self.off_heap_size) if self.off_heap_size else None
 
     def disk_request_space_bytes(self) -> int:
         return parse_memory(self.disk_request_space)

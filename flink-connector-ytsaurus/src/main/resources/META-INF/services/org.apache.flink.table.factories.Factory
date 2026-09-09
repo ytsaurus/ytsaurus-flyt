@@ -1,1 +1,2 @@
 tech.ytsaurus.flyt.connectors.ytsaurus.YTsaurusDynamicTableFactory
+tech.ytsaurus.flyt.connectors.ytsaurus.YTsaurusQueueDynamicTableFactory

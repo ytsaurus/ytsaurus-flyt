@@ -112,6 +112,10 @@ public final class YtUtils {
         return makeYtClient(path.getClusterName(), credentialsConfig.getUsername(), credentialsConfig.getToken());
     }
 
+    public static YTsaurusClient makeYtClient(String proxy, OAuthCredentialsConfig credentialsConfig) {
+        return makeYtClient(proxy, credentialsConfig.getUsername(), credentialsConfig.getToken());
+    }
+
     public static YTsaurusClient.ClientBuilder<? extends YTsaurusClient, ?> makeYtClientBuilder(
             ComplexYtPath path,
             OAuthCredentialsConfig credentialsConfig) {

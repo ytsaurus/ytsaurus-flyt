@@ -1,5 +1,5 @@
 group = "tech.ytsaurus.flyt.connectors.ytsaurus"
-version = "1.10.5"
+version = "1.11.1"
 
 plugins {
     id("com.peterabeles.gversion") version "1.10.3"
@@ -21,6 +21,7 @@ dependencies {
     implementation(project(":flink-yson-fast-adapter"))
     implementation("jakarta.annotation:jakarta.annotation-api:1.3.5")
 
+    compileOnly("org.apache.flink:flink-connector-base:1.20.1")
     compileOnly("org.apache.flink:flink-core:1.20.1")
     compileOnly("org.apache.flink:flink-runtime:1.20.1")
     compileOnly("org.apache.flink:flink-streaming-java:1.20.1")
@@ -32,11 +33,11 @@ dependencies {
     compileOnly("org.projectlombok:lombok:1.18.20")
     annotationProcessor("org.projectlombok:lombok:1.18.20")
 
+    testImplementation(project(":flink-yson"))
 
-    testImplementation(project(":locks-api"))
-    testImplementation(project(":locks-noop"))
-
+    testImplementation("org.apache.flink:flink-connector-base:1.20.1")
     testImplementation("org.apache.flink:flink-core:1.20.1")
+    testImplementation("org.apache.flink:flink-connector-test-utils:1.20.1")
     testImplementation("org.apache.flink:flink-format-common:1.20.1")
     testImplementation("org.apache.flink:flink-table-common:1.20.1")
     testImplementation("org.apache.flink:flink-table-runtime:1.20.1")
@@ -49,7 +50,6 @@ dependencies {
     testImplementation("org.assertj:assertj-core:3.23.1")
     testCompileOnly("org.projectlombok:lombok:1.18.20")
     testAnnotationProcessor("org.projectlombok:lombok:1.18.20")
-    testImplementation(project(":locks-noop"))
 }
 
 sourceSets {
