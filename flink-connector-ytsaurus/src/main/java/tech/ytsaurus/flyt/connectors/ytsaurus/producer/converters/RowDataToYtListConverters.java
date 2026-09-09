@@ -68,12 +68,7 @@ public class RowDataToYtListConverters implements Serializable {
 
     public RowDataToYtListConverters.RowDataToYtMapConverter createConverter(LogicalType type, YTreeNode schemaNode) {
         YTreeNode effectiveSchemaNode = normalizeFieldNode(schemaNode);
-        boolean nullable = isNullable(type, schemaNode);
-        return wrapIntoNullableConverter(
-                createNotNullConverter(type, effectiveSchemaNode),
-                nullable,
-                type,
-                schemaNode);
+        return wrapIntoNullableConverter(createNotNullConverter(type, effectiveSchemaNode));
     }
 
     private RowDataToYtMapConverter createNotNullConverter(LogicalType type, YTreeNode fieldNode) {
@@ -370,18 +365,6 @@ public class RowDataToYtListConverters implements Serializable {
         return createEffectiveFieldNode(typeNode);
     }
 
-    private boolean isNullable(LogicalType flinkType, YTreeNode fieldNode) {
-        YTreeNode typeV3Node = extractTypeV3Node(fieldNode);
-        if (typeV3Node != null) {
-            return isType(typeV3Node, TypeName.Optional.getWireName());
-        }
-        if (extractTypeNode(fieldNode) != null) {
-            YTreeNode requiredNode = fieldNode.asMap().get("required");
-            return requiredNode == null || !requiredNode.boolValue();
-        }
-        return flinkType.isNullable();
-    }
-
     private YTreeNode createEffectiveFieldNode(YTreeNode typeNode) {
         if (typeNode.isStringNode()) {
             return YTree.mapBuilder()
@@ -472,17 +455,9 @@ public class RowDataToYtListConverters implements Serializable {
     }
 
     private RowDataToYtListConverters.RowDataToYtMapConverter wrapIntoNullableConverter(
-            RowDataToYtListConverters.RowDataToYtMapConverter converter,
-            boolean nullable,
-            LogicalType flinkType,
-            YTreeNode fieldNode) {
+            RowDataToYtListConverters.RowDataToYtMapConverter converter) {
         return (reuse, object) -> {
             if (object == null) {
-                if (!nullable) {
-                    throw new IllegalArgumentException(String.format(
-                            "Null value is not supported for non-nullable type. Flink type: %s, YT field: %s",
-                            flinkType.asSummaryString(), fieldNode));
-                }
                 return YTree.nullNode();
             }
 

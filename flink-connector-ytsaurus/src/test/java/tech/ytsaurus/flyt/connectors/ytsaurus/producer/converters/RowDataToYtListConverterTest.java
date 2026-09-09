@@ -3,6 +3,7 @@ package tech.ytsaurus.flyt.connectors.ytsaurus.producer.converters;
 import java.util.List;
 import java.util.Map;
 
+import org.apache.flink.formats.common.TimestampFormat;
 import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.TimestampData;
 import org.apache.flink.table.types.logical.ArrayType;
@@ -15,11 +16,14 @@ import org.apache.flink.table.types.logical.VarBinaryType;
 import org.apache.flink.table.types.logical.VarCharType;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
+import tech.ytsaurus.flyt.connectors.ytsaurus.SerializationUtils;
 import tech.ytsaurus.ysontree.YTree;
 import tech.ytsaurus.ysontree.YTreeNode;
+import tech.ytsaurus.ysontree.YTreeTextSerializer;
 
 import static tech.ytsaurus.flyt.connectors.ytsaurus.producer.converters.RowDataToYtTestUtil.arr;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.producer.converters.RowDataToYtTestUtil.convertSingleField;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.producer.converters.RowDataToYtTestUtil.fieldDeclarationToSchema;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.producer.converters.RowDataToYtTestUtil.mapData;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.producer.converters.RowDataToYtTestUtil.str;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.producer.converters.RowDataToYtTestUtil.ytDict;
@@ -56,29 +60,23 @@ public class RowDataToYtListConverterTest {
     }
 
     @Test
-    void nonOptionalNativeDateRejectsNull() {
-        RuntimeException exception = Assertions.assertThrows(
-                RuntimeException.class,
-                () -> convertSingleField(
-                        "targetDate", new DateType(),
-                        "{name='targetDate'; type_v3='date';}",
-                        null));
+    void nonOptionalNativeDateWritesNull() {
+        Map<String, Object> result = convertSingleField(
+                "targetDate", new DateType(),
+                "{name='targetDate'; type_v3='date';}",
+                null);
 
-        Assertions.assertInstanceOf(IllegalArgumentException.class, exception.getCause());
-        Assertions.assertTrue(exception.getCause().getMessage().contains("non-nullable type"));
+        Assertions.assertEquals(YTree.nullNode(), result.get("targetDate"));
     }
 
     @Test
-    void requiredNativeDateRejectsNull() {
-        RuntimeException exception = Assertions.assertThrows(
-                RuntimeException.class,
-                () -> convertSingleField(
-                        "targetDate", new DateType(),
-                        "{name='targetDate'; type='date'; required=%true;}",
-                        null));
+    void requiredNativeDateWritesNull() {
+        Map<String, Object> result = convertSingleField(
+                "targetDate", new DateType(),
+                "{name='targetDate'; type='date'; required=%true;}",
+                null);
 
-        Assertions.assertInstanceOf(IllegalArgumentException.class, exception.getCause());
-        Assertions.assertTrue(exception.getCause().getMessage().contains("non-nullable type"));
+        Assertions.assertEquals(YTree.nullNode(), result.get("targetDate"));
     }
 
     @Test
@@ -256,17 +254,16 @@ public class RowDataToYtListConverterTest {
     }
 
     @Test
-    void dictWithNonOptionalNativeDateValueRejectsNull() {
-        RuntimeException exception = Assertions.assertThrows(
-                RuntimeException.class,
-                () -> convertSingleField(
-                        "dates",
-                        new MapType(new VarCharType(), new DateType()),
-                        "{name='dates'; type_v3={type_name='dict'; key='string'; value='date'};}",
-                        mapData("unknown", null)));
+    void dictWithNonOptionalNativeDateValueWritesNull() {
+        Map<String, Object> result = convertSingleField(
+                "dates",
+                new MapType(new VarCharType(), new DateType()),
+                "{name='dates'; type_v3={type_name='dict'; key='string'; value='date'};}",
+                mapData("unknown", null));
 
-        Assertions.assertInstanceOf(IllegalArgumentException.class, exception.getCause());
-        Assertions.assertTrue(exception.getCause().getMessage().contains("non-nullable type"));
+        Assertions.assertEquals(
+                ytDict(ytPair("unknown", null)),
+                result.get("dates"));
     }
 
     @Test
@@ -444,16 +441,15 @@ public class RowDataToYtListConverterTest {
     }
 
     @Test
-    void listWithNonOptionalNativeDateItemRejectsNull() {
-        RuntimeException exception = Assertions.assertThrows(
-                RuntimeException.class,
-                () -> convertSingleField(
-                        "dates", new ArrayType(new DateType()),
-                        "{name='dates'; type_v3={type_name='list'; item='date'};}",
-                        arr(1, null)));
+    void listWithNonOptionalNativeDateItemWritesNull() {
+        Map<String, Object> result = convertSingleField(
+                "dates", new ArrayType(new DateType()),
+                "{name='dates'; type_v3={type_name='list'; item='date'};}",
+                arr(1, null));
 
-        Assertions.assertInstanceOf(IllegalArgumentException.class, exception.getCause());
-        Assertions.assertTrue(exception.getCause().getMessage().contains("non-nullable type"));
+        Assertions.assertEquals(
+                ytList(YTree.integerNode(1), null),
+                result.get("dates"));
     }
 
     @Test
@@ -490,17 +486,16 @@ public class RowDataToYtListConverterTest {
     }
 
     @Test
-    void ysonArrayWithNonNullableItemRejectsNull() {
-        RuntimeException exception = Assertions.assertThrows(
-                RuntimeException.class,
-                () -> convertSingleField(
-                        "arrayWithNulls",
-                        new ArrayType(new VarCharType(false, VarCharType.MAX_LENGTH)),
-                        "{name='arrayWithNulls'; type='yson';}",
-                        arr(str("value"), null)));
+    void ysonArrayWithNonNullableItemWritesNull() {
+        Map<String, Object> result = convertSingleField(
+                "arrayWithNulls",
+                new ArrayType(new VarCharType(false, VarCharType.MAX_LENGTH)),
+                "{name='arrayWithNulls'; type='yson';}",
+                arr(str("value"), null));
 
-        Assertions.assertInstanceOf(IllegalArgumentException.class, exception.getCause());
-        Assertions.assertTrue(exception.getCause().getMessage().contains("non-nullable type"));
+        Assertions.assertEquals(
+                ytList("value", null),
+                result.get("arrayWithNulls"));
     }
 
     @Test
@@ -516,19 +511,37 @@ public class RowDataToYtListConverterTest {
     }
 
     @Test
-    void ysonMapWithNonNullableValueRejectsNull() {
-        RuntimeException exception = Assertions.assertThrows(
-                RuntimeException.class,
-                () -> convertSingleField(
-                        "mapWithNulls",
-                        new MapType(
-                                new VarCharType(),
-                                new VarCharType(false, VarCharType.MAX_LENGTH)),
-                        "{name='mapWithNulls'; type='yson';}",
-                        mapData("key", null)));
+    void ysonMapWithNonNullableValueWritesNull() {
+        Map<String, Object> result = convertSingleField(
+                "mapWithNulls",
+                new MapType(
+                        new VarCharType(),
+                        new VarCharType(false, VarCharType.MAX_LENGTH)),
+                "{name='mapWithNulls'; type='yson';}",
+                mapData("key", null));
 
-        Assertions.assertInstanceOf(IllegalArgumentException.class, exception.getCause());
-        Assertions.assertTrue(exception.getCause().getMessage().contains("non-nullable type"));
+        Assertions.assertEquals(
+                ytMap("key", null),
+                result.get("mapWithNulls"));
+    }
+
+    @Test
+    void converterCreatedFromYtSchemaIsSerializable() throws Exception {
+        RowType rowType = new RowType(List.of(new RowType.RowField(
+                "dictField", new MapType(new VarCharType(), new VarCharType()))));
+        YTreeNode schemaNode = YTreeTextSerializer.deserialize(fieldDeclarationToSchema(
+                "{name='dictField'; type_v3={type_name='dict'; key='string'; value='string'};}"));
+        var converter = new RowDataToYtListConverters(TimestampFormat.ISO_8601)
+                .createConverter(rowType, schemaNode);
+
+        var restoredConverter = (RowDataToYtListConverters.RowDataToYtMapConverter)
+                SerializationUtils.deserialize(SerializationUtils.serialize(converter));
+        GenericRowData rowData = new GenericRowData(1);
+        rowData.setField(0, mapData("key", str("value")));
+
+        Assertions.assertEquals(
+                Map.of("dictField", ytDict(ytPair("key", "value"))),
+                restoredConverter.convert(null, rowData));
     }
 
     // ===== yson map (not dict) =====
