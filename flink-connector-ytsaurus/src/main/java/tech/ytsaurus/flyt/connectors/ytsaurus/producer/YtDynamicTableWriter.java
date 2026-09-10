@@ -93,6 +93,8 @@ public class YtDynamicTableWriter implements Serializable {
     public static final long WAIT_MOUNTING_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
     public static final int WAIT_MOUNTED_BACKOFF_MS = 1000;
 
+    private static final Duration CLOSE_STEP_TIMEOUT = Duration.ofSeconds(10);
+
     private final RowDataToYtListConverters.RowDataToYtMapConverter ytConverter;
 
     private final ComplexYtPath path;
@@ -128,7 +130,8 @@ public class YtDynamicTableWriter implements Serializable {
 
     private transient List<Map<String, ? extends Serializable>> unflushedRows;
 
-    private transient ApiServiceTransaction currentTransaction;
+    // Written under commitTransactionLock, but close() reads it from another thread without the lock.
+    private transient volatile ApiServiceTransaction currentTransaction;
 
     private transient ModifyRowsRequest.Builder modificationBuffer;
 
@@ -287,51 +290,31 @@ public class YtDynamicTableWriter implements Serializable {
     private List<Exception> closeAsyncTasks() {
         log.info("Close async tasks: {}", path.getFullPath());
         List<Exception> errors = new ArrayList<>();
-
-        if (transactionCommitter != null) {
-            try {
-                transactionCommitter.shutdown();
-                boolean terminated = transactionCommitter
-                        .awaitTermination(ytWriterOptions.getTransactionTimeout().toMillis(), TimeUnit.MILLISECONDS);
-                if (!terminated) {
-                    log.warn("Failed to terminate committer for writer {}", path.getFullPath());
-                    transactionCommitter.shutdownNow();
-                } else {
-                    log.info("Transaction commiter closed successfully for writer {}", path.getFullPath());
-                }
-            } catch (InterruptedException e) {
-                log.error("Writer {} closure interrupted", path.getFullPath(), e);
-                transactionCommitter.shutdownNow();
-                Thread.currentThread().interrupt();
-                errors.add(e);
-            } catch (Exception e) {
-                log.error("Error closing transactionCommitter tasks: {}.", path.getFullPath(), e);
-                errors.add(e);
-            }
-        }
-
-        if (modificationFlusher != null) {
-            try {
-                modificationFlusher.shutdown();
-                boolean terminated = modificationFlusher
-                        .awaitTermination(ytWriterOptions.getTransactionTimeout().toMillis(), TimeUnit.MILLISECONDS);
-                if (!terminated) {
-                    log.warn("Failed to terminate flusher for writer {}", path.getFullPath());
-                    modificationFlusher.shutdownNow();
-                } else {
-                    log.info("Modification flusher closed successfully for writer {}", path.getFullPath());
-                }
-            } catch (InterruptedException e) {
-                log.error("Writer {} closure interrupted", path.getFullPath(), e);
-                modificationFlusher.shutdownNow();
-                Thread.currentThread().interrupt();
-                errors.add(e);
-            } catch (Exception e) {
-                log.error("Error closing modificationFlusher tasks: {}.", path.getFullPath(), e);
-                errors.add(e);
-            }
-        }
+        shutdownExecutor(transactionCommitter, "transaction committer", errors);
+        shutdownExecutor(modificationFlusher, "modification flusher", errors);
         return errors;
+    }
+
+    private void shutdownExecutor(@Nullable ScheduledExecutorService executor, String name, List<Exception> errors) {
+        if (executor == null) {
+            return;
+        }
+        try {
+            // Interrupt rather than drain: a pending flush or commit is not worth waiting for on close.
+            executor.shutdownNow();
+            if (executor.awaitTermination(CLOSE_STEP_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)) {
+                log.info("Stopped {} for writer {}", name, path.getFullPath());
+            } else {
+                log.warn("{} for writer {} did not stop within {}", name, path.getFullPath(), CLOSE_STEP_TIMEOUT);
+            }
+        } catch (InterruptedException e) {
+            log.warn("Interrupted while stopping {} for writer {}", name, path.getFullPath());
+            Thread.currentThread().interrupt();
+            errors.add(e);
+        } catch (Exception e) {
+            log.error("Error stopping {} for writer {}", name, path.getFullPath(), e);
+            errors.add(e);
+        }
     }
 
     private List<Exception> closeResources() {
@@ -437,33 +420,31 @@ public class YtDynamicTableWriter implements Serializable {
 
     public void close() {
         log.info("Begin closing writer {}", path.getFullPath());
-        List<Exception> errors = new ArrayList<>();
+        closeAsyncTasks();
+        abortCurrentTransaction();
+        closeResources();
+        log.info("Writer {} closed", path.getFullPath());
+    }
 
-        List<Exception> errorsAsync = closeAsyncTasks();
-
+    // Frees the YT transaction and its row locks right away instead of leaving them to expire server-side.
+    private void abortCurrentTransaction() {
+        ApiServiceTransaction transaction = currentTransaction;
+        if (transaction == null) {
+            return;
+        }
+        currentTransaction = null;
+        int droppedRows = rowsInTransaction.get() + rowsInBuffer.get();
         try {
-            flushData();
-            log.info("Data flushed successfully for writer {}", path.getFullPath());
+            CompletableFuture<Void> abort = transaction.abort();
+            if (abort != null) {
+                abort.get(CLOSE_STEP_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+            }
+            log.info("Aborted transaction {} with {} uncommitted rows for table {}",
+                    transaction.getId(), droppedRows, path.getFullPath());
         } catch (Exception e) {
-            log.error("Error flushing data. {}", path.getFullPath(), e);
-            errors.add(e);
+            log.warn("Unable to abort transaction {} with {} uncommitted rows for table {}; it will expire on its own",
+                    transaction.getId(), droppedRows, path.getFullPath(), e);
         }
-
-        List<Exception> errorsResources = closeResources();
-
-        errors.addAll(errorsAsync);
-        errors.addAll(errorsResources);
-        if (!errors.isEmpty()) {
-            Exception root = errors.get(0);
-            errors.stream()
-                    .skip(1)
-                    .forEach(root::addSuppressed);
-
-            log.error("Error closing yt writer: {}", path.getFullPath());
-            throw new RuntimeException(root);
-        }
-
-        log.info("Writer {} closed successfully", path.getFullPath());
     }
 
     private void clearMetrics() {
