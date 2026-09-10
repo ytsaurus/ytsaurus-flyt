@@ -56,7 +56,6 @@ import tech.ytsaurus.flyt.connectors.ytsaurus.common.providers.reshard.ReshardPr
 import tech.ytsaurus.flyt.connectors.ytsaurus.producer.converters.RowDataToYtListConverters;
 import tech.ytsaurus.flyt.connectors.ytsaurus.utils.FutureUtils;
 import tech.ytsaurus.flyt.connectors.ytsaurus.utils.PartitionScaleUtils;
-import tech.ytsaurus.flyt.connectors.ytsaurus.utils.RetryUtils;
 import tech.ytsaurus.flyt.locks.api.LockMode;
 import tech.ytsaurus.flyt.locks.api.LocksProvider;
 import tech.ytsaurus.flyt.locks.api.utils.LocksProviderUtils;
@@ -759,10 +758,7 @@ public class YtDynamicTableWriter implements Serializable {
                     TimeUnit.SECONDS);
             transactionDataBuffer = new ArrayList<>();
 
-            if (!commitWithRetry()) {
-                // interrupted mid-backoff: leave the transaction and the uncommitted rows in place
-                return;
-            }
+            commitWithRetry();
 
             final GUID currentTransactionId = currentTransaction.getId();
             currentTransaction = null;
@@ -787,14 +783,13 @@ public class YtDynamicTableWriter implements Serializable {
         lastCommitTimestamp.set(current);
     }
 
-    /** @return {@code false} if the commit was interrupted and must not be treated as done. */
-    private boolean commitWithRetry() {
+    private void commitWithRetry() throws InterruptedException {
         RetryStrategy backoffRetryStrategy = retryStrategy;
-        while (true) {
+        while (backoffRetryStrategy.getNumRemainingRetries() >= 0) {
             try {
                 currentTransaction.commit().join();
                 onCommitSuccess();
-                return true;
+                break;
             } catch (Exception e) {
                 log.error("Unable to commit transaction {} for table {}", currentTransaction.getId(), getPath(), e);
                 sumFailedRows.getAndAdd(rowsInTransaction.get());
@@ -803,12 +798,8 @@ public class YtDynamicTableWriter implements Serializable {
                             currentTransaction.getId(), getPath(), e);
                     throw e;
                 }
-                backoffRetryStrategy = RetryUtils.awaitNextAttempt(backoffRetryStrategy);
-                if (backoffRetryStrategy == null) {
-                    log.warn("Commit interrupted for table {}, {} rows left uncommitted",
-                            getPath(), rowsInTransaction.get());
-                    return false;
-                }
+                backoffRetryStrategy = backoffRetryStrategy.getNextRetryStrategy();
+                Thread.sleep(backoffRetryStrategy.getRetryDelay().toMillis());
 
                 currentTransaction = createTransaction();
                 log.info("Start retry transaction {} for table {}", currentTransaction.getId(), getPath());
