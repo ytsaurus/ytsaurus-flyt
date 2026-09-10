@@ -79,7 +79,6 @@ public class FormatTestUtils {
                 return null;
             }
 
-            @Override
             public Optional<int[][]> getTargetColumns() {
                 return Optional.empty();
             }

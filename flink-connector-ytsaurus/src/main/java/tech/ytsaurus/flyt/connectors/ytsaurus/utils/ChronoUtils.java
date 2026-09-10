@@ -7,8 +7,8 @@ import java.time.format.DateTimeFormatter;
 import lombok.experimental.UtilityClass;
 import org.apache.flink.table.data.TimestampData;
 
-import static org.apache.flink.shaded.guava31.com.google.common.math.LongMath.checkedAdd;
-import static org.apache.flink.shaded.guava31.com.google.common.math.LongMath.checkedMultiply;
+import static org.apache.flink.shaded.guava33.com.google.common.math.LongMath.checkedAdd;
+import static org.apache.flink.shaded.guava33.com.google.common.math.LongMath.checkedMultiply;
 
 @UtilityClass
 public class ChronoUtils {

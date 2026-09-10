@@ -4,12 +4,9 @@ import java.time.Duration;
 import java.time.temporal.ChronoUnit;
 
 import lombok.experimental.UtilityClass;
-import org.apache.flink.configuration.Configuration;
 import org.apache.flink.formats.common.TimestampFormat;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.datastream.DataStreamSink;
-import org.apache.flink.streaming.api.functions.sink.RichSinkFunction;
-import org.apache.flink.table.connector.sink.SinkFunctionProvider;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.types.DataType;
 import org.apache.flink.util.concurrent.ExponentialBackoffRetryStrategy;
@@ -152,53 +149,32 @@ public final class YtProducers {
                                                             ReshardingConfig reshardingConfig,
                                                             YtTableAttributes tableAttributes,
                                                             YtWriterOptions ytWriterOptions) {
-        if (reshardingConfig == null) {
-            reshardingConfig = ReshardingConfig.none();
-        }
-        var rowDataSinkFunction = (RichSinkFunction<RowData>)
-                ((SinkFunctionProvider) YtDynamicTableSink.builder()
-                        .type(dataType)
-                        .ytConverters(new RowDataToYtListConverters(format))
-                        .path(ComplexYtPath.builder()
-                                .clusterName(clientConfig.getProxy())
-                                .basePath(path)
-                                .build())
-                        .retryStrategy(() -> new ExponentialBackoffRetryStrategy(
-                                5,
-                                Duration.of(10, ChronoUnit.SECONDS),
-                                Duration.of(2, ChronoUnit.MINUTES)))
-                        .ysonSchemaString(ysonSchema)
-                        .credentialsProvider(
-                                new ManualCredentialsProvider(clientConfig.getUser(), clientConfig.getToken()))
-                        .partitionConfig(partitionConfig)
-                        .reshardingConfig(reshardingConfig)
-                        .tableAttributes(tableAttributes)
-                        .ytWriterOptions(ytWriterOptions)
-                        .build()
-                        .getSinkRuntimeProvider(null))
-                        .createSinkFunction();
+        ReshardingConfig effectiveResharding = reshardingConfig == null
+                ? ReshardingConfig.none()
+                : reshardingConfig;
+        YtSink<T> sink = new YtSink<>(
+                dataType,
+                new RowDataToYtListConverters(format),
+                converter,
+                null,
+                ComplexYtPath.builder()
+                        .clusterName(clientConfig.getProxy())
+                        .basePath(path)
+                        .build(),
+                ysonSchema,
+                partitionConfig,
+                new ManualCredentialsProvider(clientConfig.getUser(), clientConfig.getToken()),
+                false,
+                tableAttributes,
+                () -> new ExponentialBackoffRetryStrategy(
+                        5,
+                        Duration.of(10, ChronoUnit.SECONDS),
+                        Duration.of(2, ChronoUnit.MINUTES)),
+                effectiveResharding,
+                ytWriterOptions,
+                null);
 
-        var sink = new RichSinkFunction<T>() {
-            @Override
-            public void open(Configuration parameters) throws Exception {
-                super.open(parameters);
-
-                rowDataSinkFunction.setRuntimeContext(getRuntimeContext());
-                rowDataSinkFunction.open(parameters);
-            }
-
-            @Override
-            public void invoke(T value, Context context) throws Exception {
-                rowDataSinkFunction.invoke(converter.apply(value), context);
-            }
-
-            @Override
-            public void close() throws Exception {
-                rowDataSinkFunction.close();
-            }
-        };
-
-        return dataStream.addSink(sink)
+        return dataStream.sinkTo(sink)
                 .uid(String.format(YT_SINK_UID_TEMPLATE, clientConfig.getProxy(), path))
                 .name(String.format(YT_SINK_NAME_TEMPLATE, clientConfig.getProxy(), path));
     }

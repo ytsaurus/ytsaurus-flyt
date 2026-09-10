@@ -14,6 +14,11 @@ import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.config.YtQueueTrimm
 @UtilityClass
 public class YtQueueConnectorOptions {
 
+    public static final ConfigOption<Integer> SCAN_PARALLELISM =
+            ConfigOptions.key("scan.parallelism")
+                    .intType()
+                    .noDefaultValue();
+
     public static final ConfigOption<YtQueueStartupMode> STARTUP_MODE =
             ConfigOptions.key("scan.startup.mode")
                     .enumType(YtQueueStartupMode.class)

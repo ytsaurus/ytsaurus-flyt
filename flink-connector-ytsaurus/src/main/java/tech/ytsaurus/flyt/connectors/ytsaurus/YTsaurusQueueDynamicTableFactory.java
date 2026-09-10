@@ -35,6 +35,7 @@ import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOpti
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.MAX_ROW_COUNT;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.PARTITION_DISCOVERY_INTERVAL;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.POLL_BACKOFF;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.SCAN_PARALLELISM;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.SPECIFIC_OFFSETS;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.STARTUP_MODE;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.TRIMMED_OFFSET_POLICY;
@@ -70,7 +71,7 @@ public class YTsaurusQueueDynamicTableFactory implements DynamicTableSourceFacto
                 .trimmedOffsetPolicy(options.get(TRIMMED_OFFSET_POLICY))
                 .readerOptions(readerOptions)
                 .partitionDiscoveryInterval(options.get(PARTITION_DISCOVERY_INTERVAL))
-                .parallelism(options.getOptional(FactoryUtil.SOURCE_PARALLELISM).orElse(null))
+                .parallelism(options.getOptional(SCAN_PARALLELISM).orElse(null))
                 .build();
     }
 
@@ -98,7 +99,7 @@ public class YTsaurusQueueDynamicTableFactory implements DynamicTableSourceFacto
                 ASYNC_WORKER_COUNT,
                 ASYNC_BUFFER_CAPACITY,
                 PARTITION_DISCOVERY_INTERVAL,
-                FactoryUtil.SOURCE_PARALLELISM);
+                SCAN_PARALLELISM);
     }
 
     static void validateRequiredOptions(ReadableConfig options) {
@@ -106,7 +107,7 @@ public class YTsaurusQueueDynamicTableFactory implements DynamicTableSourceFacto
         validateNonBlank(options.get(PATH), "path");
         options.getOptional(CREDENTIALS_SOURCE)
                 .ifPresent(credentialsSource -> validateNonBlank(credentialsSource, "credentials-source"));
-        options.getOptional(FactoryUtil.SOURCE_PARALLELISM).ifPresent(parallelism -> {
+        options.getOptional(SCAN_PARALLELISM).ifPresent(parallelism -> {
             if (parallelism <= 0) {
                 throw new ValidationException("'scan.parallelism' must be greater than zero");
             }

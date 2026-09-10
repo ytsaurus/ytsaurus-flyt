@@ -14,6 +14,7 @@ import tech.ytsaurus.flyt.connectors.ytsaurus.common.ComplexYtPath;
 import tech.ytsaurus.flyt.connectors.ytsaurus.utils.YtConfigUtils;
 
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.CLUSTER_PICK_STRATEGY;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.CLUSTER_PICK_STRATEGY_DEPRECATED_KEY;
 
 public abstract class SimpleClusterPickStrategy implements ClusterPickStrategy {
     protected static final String PERIOD_OPTION_NAME = "period";
@@ -78,7 +79,7 @@ public abstract class SimpleClusterPickStrategy implements ClusterPickStrategy {
         }
         String suffix = option.key().substring(CLUSTER_PICK_STRATEGY.key().length());
         List<String> deprecatedKeys = new ArrayList<>();
-        CLUSTER_PICK_STRATEGY.deprecatedKeys().forEach(base -> deprecatedKeys.add(base + suffix));
+        deprecatedKeys.add(CLUSTER_PICK_STRATEGY_DEPRECATED_KEY + suffix);
         return deprecatedKeys.isEmpty() ? option : option.withDeprecatedKeys(deprecatedKeys.toArray(new String[0]));
     }
 

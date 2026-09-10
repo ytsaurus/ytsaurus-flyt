@@ -12,7 +12,6 @@ import org.apache.flink.table.connector.ChangelogMode;
 import org.apache.flink.table.connector.format.DecodingFormat;
 import org.apache.flink.table.connector.source.DynamicTableSource;
 import org.apache.flink.table.connector.source.ScanTableSource;
-import org.apache.flink.table.connector.source.SourceProvider;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.types.DataType;
 
@@ -71,7 +70,7 @@ public class YtQueueDynamicTableSource implements ScanTableSource {
                 .readerOptions(readerOptions)
                 .discoveryInterval(partitionDiscoveryInterval)
                 .build();
-        return SourceProvider.of(source, parallelism);
+        return new YtQueueSourceProvider(source, parallelism);
     }
 
     @Override

@@ -72,6 +72,7 @@ import tech.ytsaurus.flyt.connectors.ytsaurus.utils.YtConfigUtils;
 
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.PROXY;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.CLUSTER_PICK_STRATEGY;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.CLUSTER_PICK_STRATEGY_DEPRECATED_KEY;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.COMMIT_TRANSACTION_PERIOD;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.CREDENTIALS_SOURCE;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.EAGER_INITIALIZATION;
@@ -304,7 +305,7 @@ public class YTsaurusDynamicTableFactory implements DynamicTableSinkFactory, Dyn
         List<String> excludedPrefixes = new ArrayList<>();
         excludedPrefixes.add(LOCKS_OPTIONS_PREFIX);
         excludedPrefixes.add(CLUSTER_PICK_STRATEGY.key());
-        CLUSTER_PICK_STRATEGY.deprecatedKeys().forEach(excludedPrefixes::add);
+        excludedPrefixes.add(CLUSTER_PICK_STRATEGY_DEPRECATED_KEY);
         return excludedPrefixes;
     }
 
@@ -519,4 +520,3 @@ public class YTsaurusDynamicTableFactory implements DynamicTableSinkFactory, Dyn
                 .build();
     }
 }
-

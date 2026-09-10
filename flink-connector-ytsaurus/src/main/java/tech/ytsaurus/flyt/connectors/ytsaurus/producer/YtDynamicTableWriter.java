@@ -150,7 +150,7 @@ public class YtDynamicTableWriter implements Serializable {
 
     private transient AtomicReference<Throwable> error;
 
-    private transient RuntimeContext context;
+    private transient MetricGroup metricGroup;
 
     private transient MetricGroup ytMetricGroup;
 
@@ -187,13 +187,42 @@ public class YtDynamicTableWriter implements Serializable {
                                 YtWriterOptions ytWriterOptions,
                                 LocksProvider locksProvider,
                                 DataMetricsWriterDelegate dataMetrics) {
+        this(ytConverter,
+                ytInfo,
+                trackableField,
+                writerClassifier,
+                retryStrategy,
+                locksRetryStrategy,
+                context.getMetricGroup(),
+                metricsSuppliers,
+                tableAttributes,
+                reshardProvider,
+                ytWriterOptions,
+                locksProvider,
+                dataMetrics);
+    }
+
+    @SuppressWarnings("checkstyle:ParameterNumber")
+    public YtDynamicTableWriter(RowDataToYtListConverters.RowDataToYtMapConverter ytConverter,
+                                WriterYtInfo ytInfo,
+                                TrackableField trackableField,
+                                WriterClassifier writerClassifier,
+                                RetryStrategy retryStrategy,
+                                RetryStrategy locksRetryStrategy,
+                                MetricGroup metricGroup,
+                                MetricsSupplier metricsSuppliers,
+                                YtTableAttributes tableAttributes,
+                                @Nullable ReshardProvider reshardProvider,
+                                YtWriterOptions ytWriterOptions,
+                                LocksProvider locksProvider,
+                                DataMetricsWriterDelegate dataMetrics) {
         this.ytConverter = ytConverter;
         this.path = ytInfo.getPath();
         this.ysonSchemaString = ytInfo.getYsonSchemaString();
         this.client = ytInfo.getClient();
         this.trackableField = trackableField;
         this.writerClassifier = writerClassifier;
-        this.context = context;
+        this.metricGroup = metricGroup;
         this.metricsSupplier = metricsSuppliers;
         this.tableAttributes = tableAttributes;
         this.retryStrategy = retryStrategy;
@@ -367,7 +396,7 @@ public class YtDynamicTableWriter implements Serializable {
     }
 
     private void addMetrics() {
-        ytMetricGroup = context.getMetricGroup()
+        ytMetricGroup = metricGroup
                 .addGroup(path.getClusterName())
                 .addGroup(path.getFullPath());
 

@@ -4,7 +4,7 @@ This project provides Apache Flink format support for [YSON (Yet anOther Seriali
 
 ## Supported Flink Versions
 
-The format officially supports Apache Flink version `1.20.X`, but compatibility with other versions is not excluded.
+This release line targets Apache Flink `2.3.X`.
 
 ## Installation
 

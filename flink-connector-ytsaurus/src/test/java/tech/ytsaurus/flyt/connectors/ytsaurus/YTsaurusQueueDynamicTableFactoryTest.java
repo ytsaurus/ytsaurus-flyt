@@ -15,6 +15,7 @@ import org.apache.flink.table.catalog.ObjectIdentifier;
 import org.apache.flink.table.catalog.ResolvedCatalogTable;
 import org.apache.flink.table.catalog.ResolvedSchema;
 import org.apache.flink.table.connector.source.DynamicTableSource;
+import org.apache.flink.table.factories.DynamicTableFactory;
 import org.apache.flink.table.factories.DynamicTableSourceFactory;
 import org.apache.flink.table.factories.FactoryUtil;
 import org.junit.jupiter.api.Test;
@@ -30,6 +31,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.CREDENTIALS_SOURCE;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.PARTITION_DISCOVERY_INTERVAL;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.SCAN_PARALLELISM;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.SPECIFIC_OFFSETS;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.STARTUP_MODE;
 
@@ -182,7 +184,7 @@ class YTsaurusQueueDynamicTableFactoryTest {
                 () -> YTsaurusQueueDynamicTableFactory.validateRequiredOptions(options));
 
         options.setString("path", "//tmp/queue");
-        options.set(FactoryUtil.SOURCE_PARALLELISM, 0);
+        options.set(SCAN_PARALLELISM, 0);
         assertThrows(
                 ValidationException.class,
                 () -> YTsaurusQueueDynamicTableFactory.validateRequiredOptions(options));
@@ -190,20 +192,56 @@ class YTsaurusQueueDynamicTableFactoryTest {
 
     private static DynamicTableSource createSource(Map<String, String> options) {
         Schema schema = Schema.newBuilder().column("payload", DataTypes.STRING()).build();
-        CatalogTable catalogTable = CatalogTable.newBuilder()
-                .schema(schema)
-                .options(options)
-                .build();
+        CatalogTable catalogTable = createCatalogTable(schema, options);
         ResolvedCatalogTable resolvedTable = new ResolvedCatalogTable(
                 catalogTable,
                 ResolvedSchema.of(Column.physical("payload", DataTypes.STRING())));
-        return FactoryUtil.createTableSource(
-                null,
-                ObjectIdentifier.of("catalog", "database", "queue"),
-                resolvedTable,
-                new Configuration(),
-                YTsaurusQueueDynamicTableFactoryTest.class.getClassLoader(),
-                false);
+        DynamicTableFactory.Context context = new DynamicTableFactory.Context() {
+            @Override
+            public ObjectIdentifier getObjectIdentifier() {
+                return ObjectIdentifier.of("catalog", "database", "queue");
+            }
+
+            @Override
+            public ResolvedCatalogTable getCatalogTable() {
+                return resolvedTable;
+            }
+
+            @Override
+            public Configuration getConfiguration() {
+                return new Configuration();
+            }
+
+            @Override
+            public ClassLoader getClassLoader() {
+                return YTsaurusQueueDynamicTableFactoryTest.class.getClassLoader();
+            }
+
+            @Override
+            public boolean isTemporary() {
+                return false;
+            }
+        };
+        return new YTsaurusQueueDynamicTableFactory().createDynamicTableSource(context);
+    }
+
+    private static CatalogTable createCatalogTable(Schema schema, Map<String, String> options) {
+        try {
+            Object builder = CatalogTable.class.getMethod("newBuilder").invoke(null);
+            builder.getClass().getMethod("schema", Schema.class).invoke(builder, schema);
+            builder.getClass().getMethod("options", Map.class).invoke(builder, options);
+            return (CatalogTable) builder.getClass().getMethod("build").invoke(builder);
+        } catch (NoSuchMethodException e) {
+            try {
+                return (CatalogTable) CatalogTable.class
+                        .getMethod("of", Schema.class, String.class, List.class, Map.class)
+                        .invoke(null, schema, null, List.of(), options);
+            } catch (ReflectiveOperationException legacyFailure) {
+                throw new IllegalStateException("Cannot create Flink 1.x CatalogTable", legacyFailure);
+            }
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException("Cannot create CatalogTable", e);
+        }
     }
 
     private static Map<String, String> validSqlOptions() {
