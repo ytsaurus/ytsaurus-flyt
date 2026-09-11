@@ -58,12 +58,10 @@ public abstract class AbstractYtRowDataInputFormat
     protected transient boolean hasNext;
     protected transient Queue<YTreeNode> readBuffer;
     protected transient long rowsRead;
-    /** Counts FULL cache loads; lives on the instance createInputSplits() is called on. */
-    private transient int loadNumber;
-    private transient boolean failFast;
     protected transient Function<YTreeNode, RowData> deserializeFunction;
 
     protected ComplexYtPath path;
+    private int loadNumber;
 
     protected AbstractYtRowDataInputFormat(
             String ysonSchemaString,
@@ -98,12 +96,8 @@ public abstract class AbstractYtRowDataInputFormat
         LOG.info("Yson schema: {}", ysonSchemaString);
         LOG.info("Row Data Type: {}", rowDataTypeInfo);
 
-        failFast = ((YtInputSplit) inputSplit).isFailFast();
-
-        // open(split) may be called once per split on the same instance, start at 0 for each split
         rowsRead = 0;
         openReaderWithRetry();
-        // table reader could be null in case of interruption
         hasNext = tableReader != null && tableReader.canRead();
 
         ProjectInfoUtils.registerProjectInFlinkMetrics(YtConnectorInfo.MAVEN_NAME,
@@ -122,8 +116,6 @@ public abstract class AbstractYtRowDataInputFormat
         try {
             row = pollRow();
         } catch (InterruptedException e) {
-            // cooperative cancellation: stop quietly so close() is not held up and the reload is
-            // reported as interrupted rather than failed
             Thread.currentThread().interrupt();
             LOG.info("Interrupted while reading {} after {} rows, stopping.",
                     path.getFullPath(), rowsRead);
@@ -199,9 +191,6 @@ public abstract class AbstractYtRowDataInputFormat
         }
     }
 
-    /**
-     * Opens the reader, retrying transient YT failures with backoff.
-     */
     private void openReaderWithRetry() {
         RetryStrategy retry = newRetryStrategy();
         while (true) {
@@ -289,30 +278,12 @@ public abstract class AbstractYtRowDataInputFormat
     @Override
     public InputSplit[] createInputSplits(int minNumSplits) {
         loadNumber++;
-        return new YtInputSplit[]{new YtInputSplit(0, 1, loadNumber == 1)};
+        return new GenericInputSplit[]{new GenericInputSplit(0, 1)};
     }
 
-    /**
-     * The first load of a FULL cache should fail-fast, subsequent reload should be retried.
-     */
     private RetryStrategy newRetryStrategy() {
-        return failFast ? new FixedRetryStrategy(0, Duration.ZERO) : retryStrategy.get();
-    }
-
-    /** Carries to the reader whether it serves the blocking first load of a FULL cache. */
-    public static final class YtInputSplit extends GenericInputSplit {
-        private static final long serialVersionUID = 1L;
-
-        private final boolean failFast;
-
-        YtInputSplit(int partitionNumber, int totalNumberOfPartitions, boolean failFast) {
-            super(partitionNumber, totalNumberOfPartitions);
-            this.failFast = failFast;
-        }
-
-        boolean isFailFast() {
-            return failFast;
-        }
+        // the first load of a FULL cache should fail-fast, subsequent reload should be retried.
+        return loadNumber == 1 ? new FixedRetryStrategy(0, Duration.ZERO) : retryStrategy.get();
     }
 
     @Override
