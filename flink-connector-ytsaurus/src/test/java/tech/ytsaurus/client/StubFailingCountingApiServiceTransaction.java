@@ -23,6 +23,7 @@ public class StubFailingCountingApiServiceTransaction extends ApiServiceTransact
     private final Consumer<Long> committedRowsHook;
     private final Consumer<StubFailingCountingApiServiceTransaction> preCommitHook;
     private final Runnable postCommitHook;
+    private volatile boolean aborted;
 
     @SneakyThrows
     public StubFailingCountingApiServiceTransaction(Random random,
@@ -56,6 +57,16 @@ public class StubFailingCountingApiServiceTransaction extends ApiServiceTransact
                     ((tech.ytsaurus.client.request.ModifyRowsRequest) request.build()).getRowModificationTypes().size();
             rowCount.addAndGet(rowSizes);
         });
+    }
+
+    @Override
+    public CompletableFuture<Void> abort() {
+        aborted = true;
+        return CompletableFuture.completedFuture(null);
+    }
+
+    public boolean isAborted() {
+        return aborted;
     }
 
     @Override
