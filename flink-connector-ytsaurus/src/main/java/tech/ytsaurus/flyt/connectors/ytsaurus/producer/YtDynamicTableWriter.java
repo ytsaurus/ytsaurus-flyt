@@ -782,7 +782,7 @@ public class YtDynamicTableWriter implements Serializable {
 
     private void commitWithRetry() throws InterruptedException {
         RetryStrategy backoffRetryStrategy = retryStrategy;
-        while (backoffRetryStrategy.getNumRemainingRetries() >= 0) {
+        while (true) {
             try {
                 currentTransaction.commit().join();
                 onCommitSuccess();
@@ -795,8 +795,8 @@ public class YtDynamicTableWriter implements Serializable {
                             currentTransaction.getId(), getPath(), e);
                     throw e;
                 }
-                backoffRetryStrategy = backoffRetryStrategy.getNextRetryStrategy();
                 Thread.sleep(backoffRetryStrategy.getRetryDelay().toMillis());
+                backoffRetryStrategy = backoffRetryStrategy.getNextRetryStrategy();
 
                 currentTransaction = createTransaction();
                 log.info("Start retry transaction {} for table {}", currentTransaction.getId(), getPath());
