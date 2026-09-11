@@ -460,13 +460,16 @@ public class YtDynamicTableWriter implements Serializable {
         log.info("Successful commit state {} for table {}", checkpointId, path.getFullPath());
     }
 
+    @SneakyThrows
     private void flushData() {
         checkError();
         flushModificationLock.lock();
         commitTransactionLock.lock();
         try {
             flushModification();
-            commitTransaction();
+            if (!commitTransaction()) {
+                throw new InterruptedException("Commit interrupted for table " + getPath());
+            }
         } finally {
             commitTransactionLock.unlock();
             flushModificationLock.unlock();
@@ -731,15 +734,26 @@ public class YtDynamicTableWriter implements Serializable {
         ).join();
     }
 
+    /**
+     * Commits the current transaction, retrying on failure.
+     *
+     * @return {@code false} if the thread was interrupted, {@code true} on success.
+     */
     @SneakyThrows
-    private void commitTransaction() {
+    private boolean commitTransaction() {
         checkError();
         if (currentTransaction != null && rowsInTransaction.get() != 0) {
-            FutureUtils.allOf(transactionDataBuffer).get(ytWriterOptions.getTransactionTimeout().getSeconds(),
-                    TimeUnit.SECONDS);
+            try {
+                FutureUtils.allOf(transactionDataBuffer)
+                        .get(ytWriterOptions.getTransactionTimeout().getSeconds(), TimeUnit.SECONDS);
+                commitWithRetry();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                log.warn("Commit interrupted for table {}, {} rows left uncommitted",
+                        getPath(), rowsInTransaction.get());
+                return false;
+            }
             transactionDataBuffer = new ArrayList<>();
-
-            commitWithRetry();
 
             final GUID currentTransactionId = currentTransaction.getId();
             currentTransaction = null;
@@ -759,9 +773,11 @@ public class YtDynamicTableWriter implements Serializable {
         long current = System.currentTimeMillis();
         if (lastCommitTimestamp.get() == VALUE_METRIC_CLOSED) {
             log.error("Preventing reset of last commit timestamp: was=-1, now={} (we're closed)", current);
-            return;
+        } else {
+            lastCommitTimestamp.set(current);
         }
-        lastCommitTimestamp.set(current);
+
+        return true;
     }
 
     private void commitWithRetry() throws InterruptedException {
