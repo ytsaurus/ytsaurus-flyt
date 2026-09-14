@@ -44,10 +44,7 @@ import org.apache.flink.util.concurrent.FixedRetryStrategy;
 import org.apache.flink.util.concurrent.RetryStrategy;
 import org.apache.flink.util.function.SerializableSupplier;
 import tech.ytsaurus.core.tables.TableSchema;
-import tech.ytsaurus.flyt.locks.api.LockConfigOptions;
-import tech.ytsaurus.ysontree.YTreeNode;
-import tech.ytsaurus.ysontree.YTreeTextSerializer;
-
+import tech.ytsaurus.flyt.connectors.datametrics.DataMetricsConfig;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.ComplexYtPath;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.ReshardStrategy;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.ReshardingConfig;
@@ -61,7 +58,6 @@ import tech.ytsaurus.flyt.connectors.ytsaurus.common.partition.PartitionScale;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.utils.RowTypeUtils;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.utils.TableFactoryPropertyHelper;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.YtDynamicTableSource;
-import tech.ytsaurus.flyt.connectors.datametrics.DataMetricsConfig;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.cluster.ClusterPickStrategy;
 import tech.ytsaurus.flyt.connectors.ytsaurus.producer.YtDynamicTableSink;
 import tech.ytsaurus.flyt.connectors.ytsaurus.producer.YtWriterOptions;
@@ -69,8 +65,10 @@ import tech.ytsaurus.flyt.connectors.ytsaurus.producer.converters.RowDataToYtLis
 import tech.ytsaurus.flyt.connectors.ytsaurus.producer.converters.TrackableFieldDataConverter;
 import tech.ytsaurus.flyt.connectors.ytsaurus.producer.converters.YtPartitioningInstantRowDataConverter;
 import tech.ytsaurus.flyt.connectors.ytsaurus.utils.YtConfigUtils;
+import tech.ytsaurus.flyt.locks.api.LockConfigOptions;
+import tech.ytsaurus.ysontree.YTreeNode;
+import tech.ytsaurus.ysontree.YTreeTextSerializer;
 
-import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.PROXY;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.CLUSTER_PICK_STRATEGY;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.COMMIT_TRANSACTION_PERIOD;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.CREDENTIALS_SOURCE;
@@ -90,6 +88,7 @@ import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.P
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.PATH;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.PATH_MAP;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.PRIMARY_MEDIUM;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.PROXY;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.PROXY_ROLE;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.RESHARD_LAST_PARTITIONS_COUNT;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.RESHARD_STRATEGY;
@@ -229,6 +228,7 @@ public class YTsaurusDynamicTableFactory implements DynamicTableSinkFactory, Dyn
                 .partitionConfig(partitionConfig)
                 .asyncLookup(options.get(LOOKUP_ASYNC))
                 .lookupMethod(options.get(LOOKUP_METHOD))
+                .retryStrategy(getRetryStrategy(options))
                 .options(options)
                 .build();
     }
@@ -474,7 +474,7 @@ public class YTsaurusDynamicTableFactory implements DynamicTableSinkFactory, Dyn
 
                     @Override
                     public LookupFunction createLookupFunction() {
-                        return (LookupFunction) lookupFunction;
+                        return null;
                     }
                 };
             }
@@ -483,7 +483,8 @@ public class YTsaurusDynamicTableFactory implements DynamicTableSinkFactory, Dyn
     }
 
     private SerializableSupplier<RetryStrategy> getRetryStrategy(ReadableConfig options) {
-        tech.ytsaurus.flyt.connectors.ytsaurus.common.RetryStrategy retryStrategy = options.get(RETRY_STRATEGY);
+        tech.ytsaurus.flyt.connectors.ytsaurus.common.RetryStrategy retryStrategy =
+                options.get(RETRY_STRATEGY);
         switch (retryStrategy) {
             case EXPONENTIAL:
                 return () -> new ExponentialBackoffRetryStrategy(
