@@ -62,7 +62,6 @@ import tech.ytsaurus.flyt.connectors.ytsaurus.test.TestYtClient;
 import tech.ytsaurus.flyt.connectors.ytsaurus.test.YtClientPool;
 import tech.ytsaurus.flyt.connectors.ytsaurus.test.component.BasicEmulatingNodeComponent;
 import tech.ytsaurus.flyt.connectors.ytsaurus.test.component.StubFailingCountingTransactionComponent;
-import tech.ytsaurus.flyt.connectors.ytsaurus.utils.TemporalCache;
 
 @Slf4j
 // Enable logging if in need to investigate.
@@ -154,15 +153,11 @@ public class YtDynamicTableWriterPoolClientTest {
         CountDownLatch foreverTransactionBegan = new CountDownLatch(1);
         CountDownLatch cacheCleanupFinished = new CountDownLatch(1);
         AtomicReference<String> failMessage = new AtomicReference<>();
+        AtomicLong cacheTime = new AtomicLong();
+        Duration cacheTtl = Duration.ofSeconds(1);
+        int rowsCount = ytWriterOptions.getRowsInTransactionLimit() + 1;
 
-        var defaultCache = YtDynamicTableWriterPool.makeDefaultCache();
-        var cache = Mockito.spy(defaultCache.toBuilder()
-                .ttl(Duration.ZERO, defaultCache.getExpirationCondition())
-                .cleanupPeriod(Integer.MAX_VALUE, TimeUnit.DAYS)
-                .removalListener(entry -> failMessage.set(
-                        entry.getKey() + " must not have been evicted from the cache! " +
-                                "This is a data loss"))
-                .build());
+        var cache = Mockito.spy(new YtDynamicTableWriterCache(cacheTtl, cacheTime::get));
         var client = new TestYtClient<>(
                 new BasicEmulatingNodeComponent(),
                 new StubFailingCountingTransactionComponent(
@@ -192,25 +187,29 @@ public class YtDynamicTableWriterPoolClientTest {
                     log.debug("Cache cleanup began");
                     // this must not evict current writer (even though its expired)
                     // because it holds an uncommitted transaction
-                    cache.cleanup();
+                    cacheTime.addAndGet(cacheTtl.toNanos());
+                    cache.cleanupExpired();
+                    if (cache.getSize() != 1) {
+                        failMessage.set("Writer must not have been evicted from the cache! This is a data loss");
+                    }
                     log.debug("Cache cleanup finished");
                     cacheCleanupFinished.countDown();
                 } catch (InterruptedException e) {
                     throw new RuntimeException(e);
                 }
             });
-            for (int i = 0; i < ytWriterOptions.getRowsInTransactionLimit(); i++) {
+            for (int i = 0; i < rowsCount; i++) {
                 GenericRowData genericRowData = new GenericRowData(2);
                 genericRowData.setField(0, (long) i);
                 genericRowData.setField(1, TimestampData.fromInstant(OffsetDateTime.now().toInstant()));
-                pool.getOrAcquire(longCommit).write(genericRowData);
+                pool.write(longCommit, genericRowData);
             }
         }
 
         Assertions.assertNull(failMessage.get());
-        Mockito.verify(cache, Mockito.times(1)).cleanup();
+        Mockito.verify(cache, Mockito.times(1)).cleanupExpired();
         Assertions.assertEquals(
-                ytWriterOptions.getRowsInTransactionLimit(),
+                rowsCount,
                 client.transactions().getCommittedRows());
     }
 
@@ -234,7 +233,7 @@ public class YtDynamicTableWriterPoolClientTest {
         AtomicLong total = new AtomicLong(0);
         try (var pool = makePool(clientPool)) {
             data.forEach(pair -> {
-                pool.getOrAcquire(pair.getKey()).write(pair.getValue());
+                pool.write(pair.getKey(), pair.getValue());
                 total.getAndIncrement();
             });
         }
@@ -402,6 +401,6 @@ public class YtDynamicTableWriterPoolClientTest {
         String schema;
         LogicalType logicalType;
         YtClientPool<?> clientPool;
-        TemporalCache<String, YtDynamicTableWriter> customCache;
+        YtDynamicTableWriterCache customCache;
     }
 }
