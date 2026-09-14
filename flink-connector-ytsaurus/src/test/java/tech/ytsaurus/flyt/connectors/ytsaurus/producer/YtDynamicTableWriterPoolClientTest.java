@@ -333,7 +333,7 @@ public class YtDynamicTableWriterPoolClientTest {
         return new YtDynamicTableWriterPool(
                 settings.getCustomCache(),
                 settings.getClientPool()::produce,
-                ytConverter.createConverter(settings.getLogicalType(),
+                ytConverter.createTableRowConverter((RowType) settings.getLogicalType(),
                         YTreeTextSerializer.deserialize(settings.getSchema())),
                 ComplexYtPath.builder().basePath("//home/ytsaurus/flink").tableName("tests").build(),
                 settings.getSchema(),

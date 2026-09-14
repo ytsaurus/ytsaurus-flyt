@@ -67,6 +67,51 @@ public class RowDataToYtListConverters implements Serializable {
         return wrapIntoNullableConverter(createNotNullConverter(type, schemaNode));
     }
 
+    /**
+     * Converter for a whole table row: produces an {@code Object[]} positioned by the YT write schema
+     * (expression columns dropped, order preserved), which is what {@code ModifyRowsRequest} expects
+     * for positional inserts. Columns absent in the Flink row are left null. Nested rows still
+     * convert to maps, see {@link #createConverter}.
+     */
+    public RowDataToYtMapConverter createTableRowConverter(RowType rowType, YTreeNode schemaNode) {
+        if (schemaNode == null || !schemaNode.isListNode()) {
+            throw new IllegalArgumentException("YT schema is required to order table row columns");
+        }
+        YTreeNode writeSchema = ConverterUtils.toWriteNode(schemaNode);
+        Map<String, Integer> columnPositions = new HashMap<>();
+        for (YTreeNode columnNode : writeSchema.asList()) {
+            columnPositions.put(columnNode.mapNode().getString("name"), columnPositions.size());
+        }
+
+        final String[] fieldNames = getFieldNames(rowType);
+        final LogicalType[] fieldTypes = getFieldTypes(rowType);
+        final RowDataToYtMapConverter[] fieldConverters =
+                getFieldConverters(fieldNames, fieldTypes, writeSchema, rowType);
+        final int fieldCount = rowType.getFieldCount();
+        final int columnCount = columnPositions.size();
+        final int[] fieldToColumn = new int[fieldCount];
+        final RowData.FieldGetter[] fieldGetters = new RowData.FieldGetter[fieldCount];
+        for (int i = 0; i < fieldCount; i++) {
+            fieldToColumn[i] = columnPositions.get(fieldNames[i]);
+            fieldGetters[i] = RowData.createFieldGetter(fieldTypes[i], i);
+        }
+
+        return (reuse, data) -> {
+            Object[] res = new Object[columnCount];
+            RowData row = (RowData) data;
+            for (int i = 0; i < fieldCount; i++) {
+                Object field = fieldGetters[i].getFieldOrNull(row);
+                try {
+                    res[fieldToColumn[i]] = fieldConverters[i].convert(null, field);
+                } catch (Throwable t) {
+                    throw new RuntimeException(
+                            String.format("Fail to serialize at field (%s) with value: %s", fieldNames[i], field), t);
+                }
+            }
+            return res;
+        };
+    }
+
     private RowDataToYtMapConverter createNotNullConverter(LogicalType type, YTreeNode fieldNode) {
         boolean nativeType = ConverterUtils.isOfNativeType(fieldNode);
         switch (type.getTypeRoot()) {

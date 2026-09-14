@@ -1,5 +1,9 @@
 package tech.ytsaurus.flyt.connectors.ytsaurus.producer.converters;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -13,6 +17,7 @@ import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.TimestampData;
 import org.apache.flink.table.data.binary.BinaryStringData;
 import org.apache.flink.table.types.logical.ArrayType;
+import org.apache.flink.table.types.logical.BigIntType;
 import org.apache.flink.table.types.logical.DateType;
 import org.apache.flink.table.types.logical.DayTimeIntervalType;
 import org.apache.flink.table.types.logical.LogicalType;
@@ -140,6 +145,108 @@ public class RowDataToYtListConverterTest {
                         .value("value")
                         .buildMap(),
                 result.get("mapWithNulls"));
+    }
+
+    @Test
+    void tableRowConverter_ordersColumnsByWriteSchemaAndSkipsExpressionColumns() {
+        // Flink row lists the fields in a different order than the YT schema.
+        RowType rowType = new RowType(List.of(
+                new RowType.RowField("name", new VarCharType()),
+                new RowType.RowField("id", new BigIntType())
+        ));
+        GenericRowData rowData = new GenericRowData(2);
+        rowData.setField(0, new BinaryStringData("alice"));
+        rowData.setField(1, 42L);
+
+        Object[] result = convertTableRow(
+                fieldDeclarationToSchema(
+                        "{name='hash'; type='uint64'; sort_order='ascending'; expression='farm_hash(id)';}",
+                        "{name='id'; type='int64'; sort_order='ascending';}",
+                        "{name='name'; type='string';}"),
+                rowType,
+                rowData);
+
+        Assertions.assertArrayEquals(new Object[]{42L, "alice"}, result);
+    }
+
+    @Test
+    void tableRowConverter_leavesSchemaColumnsMissingInRowNull() {
+        RowType rowType = new RowType(List.of(new RowType.RowField("id", new BigIntType())));
+        GenericRowData rowData = new GenericRowData(1);
+        rowData.setField(0, 7L);
+
+        Object[] result = convertTableRow(
+                fieldDeclarationToSchema(
+                        "{name='id'; type='int64'; sort_order='ascending';}",
+                        "{name='extra'; type='string';}"),
+                rowType,
+                rowData);
+
+        Assertions.assertArrayEquals(new Object[]{7L, null}, result);
+    }
+
+    @Test
+    void tableRowConverter_convertsNullFieldToYtNull() {
+        RowType rowType = new RowType(List.of(
+                new RowType.RowField("id", new BigIntType()),
+                new RowType.RowField("name", new VarCharType())
+        ));
+        GenericRowData rowData = new GenericRowData(2);
+        rowData.setField(0, 1L);
+        rowData.setField(1, null);
+
+        Object[] result = convertTableRow(
+                fieldDeclarationToSchema(
+                        "{name='id'; type='int64'; sort_order='ascending';}",
+                        "{name='name'; type='string';}"),
+                rowType,
+                rowData);
+
+        Assertions.assertArrayEquals(new Object[]{1L, YTree.nullNode()}, result);
+    }
+
+    @Test
+    void tableRowConverter_rejectsRowFieldAbsentInSchema() {
+        RowType rowType = new RowType(List.of(new RowType.RowField("unknown", new BigIntType())));
+        var converter = new RowDataToYtListConverters(TimestampFormat.ISO_8601);
+        YTreeNode schemaNode = YTreeTextSerializer.deserialize(
+                fieldDeclarationToSchema("{name='id'; type='int64'; sort_order='ascending';}"));
+
+        Assertions.assertThrows(IllegalStateException.class,
+                () -> converter.createTableRowConverter(rowType, schemaNode));
+    }
+
+    @Test
+    void tableRowConverter_survivesJavaSerialization() throws Exception {
+        RowType rowType = new RowType(List.of(
+                new RowType.RowField("name", new VarCharType()),
+                new RowType.RowField("id", new BigIntType())
+        ));
+        var converter = new RowDataToYtListConverters(TimestampFormat.ISO_8601).createTableRowConverter(
+                rowType,
+                YTreeTextSerializer.deserialize(fieldDeclarationToSchema(
+                        "{name='id'; type='int64'; sort_order='ascending';}",
+                        "{name='name'; type='string';}")));
+
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        try (ObjectOutputStream out = new ObjectOutputStream(bytes)) {
+            out.writeObject(converter);
+        }
+        RowDataToYtListConverters.RowDataToYtMapConverter restored;
+        try (ObjectInputStream in = new ObjectInputStream(new ByteArrayInputStream(bytes.toByteArray()))) {
+            restored = (RowDataToYtListConverters.RowDataToYtMapConverter) in.readObject();
+        }
+
+        GenericRowData rowData = new GenericRowData(2);
+        rowData.setField(0, new BinaryStringData("bob"));
+        rowData.setField(1, 3L);
+        Assertions.assertArrayEquals(new Object[]{3L, "bob"}, (Object[]) restored.convert(null, rowData));
+    }
+
+    private Object[] convertTableRow(String ysonSchema, RowType rowType, GenericRowData rowData) {
+        var converter = new RowDataToYtListConverters(TimestampFormat.ISO_8601);
+        YTreeNode schemaNode = YTreeTextSerializer.deserialize(ysonSchema);
+        return (Object[]) converter.createTableRowConverter(rowType, schemaNode).convert(null, rowData);
     }
 
     private Map<String, Object> convert(String ysonSchema, LogicalType rowType, GenericRowData rowData) {
