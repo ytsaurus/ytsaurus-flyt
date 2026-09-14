@@ -2,9 +2,33 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
+from pathlib import Path
 from typing import List, Sequence
+
+
+def flyt_cache_dir(*sub: str) -> str:
+    """Persistent build cache (``FLYT_CACHE_DIR`` or ``~/.cache/flyt``); mounted into build
+    containers to reuse wheel/uv downloads across ``flyt build layer`` runs."""
+    base = os.environ.get("FLYT_CACHE_DIR", "").strip()
+    root = Path(base).expanduser() if base else Path.home() / ".cache" / "flyt"
+    d = root.joinpath(*sub)
+    d.mkdir(parents=True, exist_ok=True)
+    return str(d)
+
+
+def cache_owner_run_args() -> List[str]:
+    """``run`` flags so a build container can write the host-mounted pip/uv cache.
+
+    pip silently disables caching on a dir it doesn't own; rootless podman / Docker Desktop mounts
+    are owned by a non-root uid (1000 in the podman machine on Windows). Running as that uid makes
+    pip's check a plain writability check; ``HOME=/tmp`` gives the passwd-less uid a writable home.
+    """
+    uid = os.getuid() if hasattr(os, "getuid") else 1000
+    gid = os.getgid() if hasattr(os, "getgid") else 1000
+    return ["--user", f"{uid}:{gid}", "-e", "HOME=/tmp"]
 
 
 def get_container_runtime_command() -> List[str]:

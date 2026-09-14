@@ -1,8 +1,8 @@
-"""Tests for ytsaurus_flyt.models."""
+"""Tests for ytsaurus_flyt.config.models."""
 
 import pytest
 
-from ytsaurus_flyt.models import (
+from ytsaurus_flyt.config.models import (
     ClusterParams,
     ClusterPreset,
     JobmanagerParams,
