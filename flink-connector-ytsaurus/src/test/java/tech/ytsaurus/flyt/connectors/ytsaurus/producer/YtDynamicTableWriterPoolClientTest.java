@@ -205,6 +205,7 @@ public class YtDynamicTableWriterPoolClientTest {
                 genericRowData.setField(1, TimestampData.fromInstant(OffsetDateTime.now().toInstant()));
                 pool.getOrAcquire(longCommit).write(genericRowData);
             }
+            pool.finish();
         }
 
         Assertions.assertNull(failMessage.get());
@@ -237,6 +238,7 @@ public class YtDynamicTableWriterPoolClientTest {
                 pool.getOrAcquire(pair.getKey()).write(pair.getValue());
                 total.getAndIncrement();
             });
+            pool.finish();
         }
         Assertions.assertEquals(total.get(), clientPool.getCommittedRows());
         return total.get();
