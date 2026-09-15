@@ -130,9 +130,7 @@ public class YsonToRowDataConverters implements Serializable {
     }
 
     private Boolean convertToBoolean(YTreeNode yTreeNode) {
-        if (yTreeNode.isEntityNode()) {
-            return null;
-        } else if (yTreeNode.isBooleanNode()) {
+        if (yTreeNode.isBooleanNode()) {
             return yTreeNode.boolValue();
         } else {
             return Boolean.parseBoolean(yTreeNode.stringValue().trim());
@@ -230,9 +228,7 @@ public class YsonToRowDataConverters implements Serializable {
     }
 
     private StringData convertToString(YTreeNode yTreeNode) {
-        if (yTreeNode.isEntityNode()) {
-            return null;
-        } else if (yTreeNode.isMapNode() || yTreeNode.isListNode()) {
+        if (yTreeNode.isMapNode() || yTreeNode.isListNode()) {
             return StringData.fromString(YTreeTextSerializer.serialize(yTreeNode));
         } else if (yTreeNode.isIntegerNode()) {
             return StringData.fromString(String.valueOf(yTreeNode.intValue()));
@@ -298,13 +294,39 @@ public class YsonToRowDataConverters implements Serializable {
         final YsonToRowDataConverter valueConverter = createConverter(valueType);
 
         return yTreeNode -> {
-            Iterator<Map.Entry<String, YTreeNode>> fields = yTreeNode.asMap().entrySet().iterator();
             Map<Object, Object> result = new HashMap<>();
-            while (fields.hasNext()) {
-                Map.Entry<String, YTreeNode> entry = fields.next();
-                Object key = keyConverter.convert(YTree.stringNode(entry.getKey()));
-                Object value = valueConverter.convert(entry.getValue());
-                result.put(key, value);
+
+            if (yTreeNode.isMapNode()) {
+                // YSON map: {key=value, ...}
+                Iterator<Map.Entry<String, YTreeNode>> fields = yTreeNode.asMap().entrySet().iterator();
+                while (fields.hasNext()) {
+                    Map.Entry<String, YTreeNode> entry = fields.next();
+                    Object key = keyConverter.convert(YTree.stringNode(entry.getKey()));
+                    Object value = valueConverter.convert(entry.getValue());
+                    result.put(key, value);
+                }
+            } else if (yTreeNode.isListNode()) {
+                // YT dict: [[key, value], ...]
+                YTreeListNode listNode = yTreeNode.listNode();
+                for (int i = 0; i < listNode.size(); i++) {
+                    YTreeNode node = listNode.get(i);
+                    if (node.isListNode() && node.listNode().size() == 2) {
+                        YTreeListNode pairNode = node.listNode();
+                        Object key = keyConverter.convert(pairNode.get(0));
+                        Object value = valueConverter.convert(pairNode.get(1));
+                        result.put(key, value);
+                    } else {
+                        throw new YsonParseException(
+                                "Malformed YT dict entry at index " + i + ": expected a list node with exactly 2 " +
+                                        "elements (key-value pair), but got: " + node
+                        );
+                    }
+                }
+            } else {
+                throw new YsonParseException(
+                        "Unsupported node type for map conversion: expected map node or list node, but got: "
+                                + yTreeNode.getClass().getSimpleName()
+                );
             }
             return new GenericMapData(result);
         };
@@ -338,20 +360,19 @@ public class YsonToRowDataConverters implements Serializable {
 
     private Object convertField(
             YsonToRowDataConverter fieldConverter, String fieldName, YTreeNode field) {
-        if (field == null || field.isEntityNode()) {
+        if (field == null) {
             if (failOnMissingField) {
                 throw new YsonParseException("Could not find field with name '" + fieldName + "'.");
             } else {
                 return null;
             }
-        } else {
-            return fieldConverter.convert(field);
         }
+        return fieldConverter.convert(field);
     }
 
     private YsonToRowDataConverter wrapIntoNullableConverter(YsonToRowDataConverter converter) {
         return yTreeNode -> {
-            if (yTreeNode == null) {
+            if (yTreeNode == null || yTreeNode.isEntityNode()) {
                 return null;
             }
             try {
@@ -365,7 +386,7 @@ public class YsonToRowDataConverters implements Serializable {
         };
     }
 
-    private static final class YsonParseException extends RuntimeException {
+    static final class YsonParseException extends RuntimeException {
         private static final long serialVersionUID = 1L;
 
         YsonParseException(String message) {
