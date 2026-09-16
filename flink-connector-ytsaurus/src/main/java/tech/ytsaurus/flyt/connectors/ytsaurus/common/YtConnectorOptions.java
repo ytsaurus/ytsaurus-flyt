@@ -10,7 +10,6 @@ import org.apache.flink.configuration.ConfigOptions;
 import org.apache.flink.formats.common.TimestampFormat;
 import org.apache.flink.table.types.logical.LogicalTypeRoot;
 import tech.ytsaurus.client.request.Atomicity;
-
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.partition.PartitionScale;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.cluster.FirstAvailableClusterPickStrategy;
 import tech.ytsaurus.flyt.connectors.ytsaurus.producer.MountMode;
@@ -135,7 +134,10 @@ public class YtConnectorOptions {
     public static final ConfigOption<RetryStrategy> RETRY_STRATEGY = ConfigOptions.key("retry-strategy")
             .enumType(RetryStrategy.class)
             .defaultValue(RetryStrategy.EXPONENTIAL)
-            .withDeprecatedKeys("retryStrategy");
+            .withDeprecatedKeys("retryStrategy")
+            .withDescription("Applies to writes and lookup 'FULL' cache reloads, where a failure "
+                    + "permanently disables the shared cache. Table scans never retry: a failed "
+                    + "scan only fails the task and Flink re-reads on restart.");
 
     public static final ConfigOption<String> TABLET_CELL_BUNDLE = ConfigOptions.key("tablet-cell-bundle")
             .stringType()

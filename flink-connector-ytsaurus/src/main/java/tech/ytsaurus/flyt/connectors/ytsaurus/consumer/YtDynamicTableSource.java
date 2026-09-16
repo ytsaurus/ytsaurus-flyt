@@ -1,5 +1,6 @@
 package tech.ytsaurus.flyt.connectors.ytsaurus.consumer;
 
+import java.time.Duration;
 import java.util.Map;
 import java.util.Objects;
 import java.util.stream.Collectors;
@@ -30,7 +31,10 @@ import org.apache.flink.table.runtime.connector.source.ScanRuntimeProviderContex
 import org.apache.flink.table.types.DataType;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.util.Preconditions;
+import org.apache.flink.util.concurrent.FixedRetryStrategy;
+import org.apache.flink.util.concurrent.RetryStrategy;
 import org.apache.flink.util.function.SerializableFunction;
+import org.apache.flink.util.function.SerializableSupplier;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.ComplexYtPath;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.LookupMethod;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.cache.LookupCacheBuilder;
@@ -46,6 +50,10 @@ public class YtDynamicTableSource
         LookupTableSource,
         SupportsProjectionPushDown,
         SupportsLimitPushDown {
+
+    /** A failed scan only fails the task and Flink re-reads the table on restart. */
+    private static final SerializableSupplier<RetryStrategy> NO_RETRY =
+            () -> new FixedRetryStrategy(0, Duration.ZERO);
 
     private final DataType type;
 
@@ -77,6 +85,8 @@ public class YtDynamicTableSource
     private LookupMethod lookupMethod;
 
     private ReadableConfig options;
+
+    private SerializableSupplier<RetryStrategy> retryStrategy;
 
     @Override
     public LookupRuntimeProvider getLookupRuntimeProvider(LookupContext context) {
@@ -151,7 +161,10 @@ public class YtDynamicTableSource
                 return LookupFunctionProvider.of(lookupFunction);
             } else if (cacheType == LookupOptions.LookupCacheType.FULL) {
                 log.info("Enable FULL lookup cache for table {}", compilePathName());
-                return cacheBuilder.apply(lookupFunction, getScanRuntimeProvider(ScanRuntimeProviderContext.INSTANCE));
+                // Unlike a plain scan, a failed reload permanently disables the shared
+                // LookupFullCache, so transient YT errors must be retried here.
+                return cacheBuilder.apply(lookupFunction,
+                        createInputFormatProvider(ScanRuntimeProviderContext.INSTANCE, retryStrategy));
             } else if (cacheType == LookupOptions.LookupCacheType.PARTIAL) {
                 log.info("Enable PARTIAL lookup cache for table {}", compilePathName());
                 return cacheBuilder.apply(lookupFunction, null);
@@ -176,6 +189,7 @@ public class YtDynamicTableSource
                 .asyncLookup(asyncLookup)
                 .lookupMethod(lookupMethod)
                 .options(options)
+                .retryStrategy(retryStrategy)
                 .clusterPickStrategy(clusterPickStrategy)
                 .build();
     }
@@ -202,6 +216,13 @@ public class YtDynamicTableSource
 
     @Override
     public ScanRuntimeProvider getScanRuntimeProvider(ScanContext context) {
+        // A failed scan just fails the task and Flink re-reads the table on restart,
+        // so it does not need connector-level retries.
+        return createInputFormatProvider(context, NO_RETRY);
+    }
+
+    private ScanRuntimeProvider createInputFormatProvider(
+            ScanContext context, SerializableSupplier<RetryStrategy> retries) {
         Preconditions.checkNotNull(
                 converter, "Value decoding format must not be null.");
         final DeserializationSchema<RowData> deserializer =
@@ -210,14 +231,15 @@ public class YtDynamicTableSource
                 context.createTypeInformation(physicalRowDataType);
         log.info("Limit = {}", limit);
         if (pathMap.size() == 1) {
-            return getSingleClusterInputFormatProvider(deserializer, typeInfo);
+            return getSingleClusterInputFormatProvider(deserializer, typeInfo, retries);
         } else {
-            return getMultiClusterInputFormatProvider(deserializer, typeInfo);
+            return getMultiClusterInputFormatProvider(deserializer, typeInfo, retries);
         }
     }
 
     private @NonNull InputFormatProvider getSingleClusterInputFormatProvider(
-            DeserializationSchema<RowData> deserializer, TypeInformation<RowData> typeInfo) {
+            DeserializationSchema<RowData> deserializer, TypeInformation<RowData> typeInfo,
+            SerializableSupplier<RetryStrategy> retries) {
         ComplexYtPath path = pathMap.values().iterator().next();
         fillTableName(path);
         return InputFormatProvider.of(
@@ -228,6 +250,7 @@ public class YtDynamicTableSource
                         .limit(limit)
                         .deserializer(deserializer)
                         .rowDataTypeInfo(typeInfo)
+                        .retryStrategy(retries)
                         .build()
         );
     }
@@ -241,7 +264,8 @@ public class YtDynamicTableSource
     }
 
     private @NonNull InputFormatProvider getMultiClusterInputFormatProvider(
-            DeserializationSchema<RowData> deserializer, TypeInformation<RowData> typeInfo) {
+            DeserializationSchema<RowData> deserializer, TypeInformation<RowData> typeInfo,
+            SerializableSupplier<RetryStrategy> retries) {
         Preconditions.checkNotNull(
                 clusterPickStrategy,
                 "Strategy must be present when given multiple paths"
@@ -266,6 +290,7 @@ public class YtDynamicTableSource
                         .limit(limit)
                         .deserializer(deserializer)
                         .rowDataTypeInfo(typeInfo)
+                        .retryStrategy(retries)
                         .build()
         );
     }

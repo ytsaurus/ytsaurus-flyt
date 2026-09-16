@@ -28,4 +28,4 @@ jobs:
           distribution: 'liberica'
 
       - name: Build with Gradle
-        run: ./gradlew shadowJar
+        run: ./gradlew check shadowJar
