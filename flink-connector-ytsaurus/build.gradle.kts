@@ -17,9 +17,8 @@ dependencies {
     implementation(project(":locks-api"))
     implementation(project(":locks-noop"))
     api(project(":flink-connector-data-metrics"))
+    // Flink 2.3 provides a compatible LZ4 implementation via at.yawk.lz4.
     api("tech.ytsaurus:ytsaurus-client:1.2.12") {
-        // Flink 2.3 uses the maintained at.yawk.lz4 fork. Both implementations
-        // expose the org.lz4 capability, so Gradle rejects them together.
         exclude(group = "org.lz4", module = "lz4-java")
     }
     implementation(project(":flink-yson-fast-adapter"))

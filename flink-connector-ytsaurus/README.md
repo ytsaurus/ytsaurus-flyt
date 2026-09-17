@@ -42,7 +42,7 @@ The Apache Flink YTsaurus Connector enables seamless integration between Apache 
 ## Supported Flink Versions
 
 This release line targets Apache Flink `2.3.X` and Java 17. Use the previous
-connector release for Flink 1.x clusters.
+connector release line for Apache Flink `1.20.X` clusters.
 
 ## Installation
 
