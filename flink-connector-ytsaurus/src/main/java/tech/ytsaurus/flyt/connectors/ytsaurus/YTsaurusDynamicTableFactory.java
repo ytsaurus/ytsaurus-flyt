@@ -305,12 +305,18 @@ public class YTsaurusDynamicTableFactory implements DynamicTableSinkFactory, Dyn
         List<String> excludedPrefixes = new ArrayList<>();
         excludedPrefixes.add(LOCKS_OPTIONS_PREFIX);
         excludedPrefixes.add(CLUSTER_PICK_STRATEGY.key());
-        for (FallbackKey fallbackKey : CLUSTER_PICK_STRATEGY.fallbackKeys()) {
+        deprecatedKeys(CLUSTER_PICK_STRATEGY).forEach(excludedPrefixes::add);
+        return excludedPrefixes;
+    }
+
+    private static List<String> deprecatedKeys(ConfigOption<?> option) {
+        List<String> deprecatedKeys = new ArrayList<>();
+        for (FallbackKey fallbackKey : option.fallbackKeys()) {
             if (fallbackKey.isDeprecated()) {
-                excludedPrefixes.add(fallbackKey.getKey());
+                deprecatedKeys.add(fallbackKey.getKey());
             }
         }
-        return excludedPrefixes;
+        return deprecatedKeys;
     }
 
     protected CredentialsProvider getAndValidateCredentialsProvider(Configuration options) {
@@ -525,4 +531,3 @@ public class YTsaurusDynamicTableFactory implements DynamicTableSinkFactory, Dyn
                 .build();
     }
 }
-
