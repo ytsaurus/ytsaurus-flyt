@@ -6,6 +6,8 @@ import org.apache.flink.api.common.serialization.DeserializationSchema;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.table.data.RowData;
+import org.apache.flink.util.concurrent.RetryStrategy;
+import org.apache.flink.util.function.SerializableSupplier;
 
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.ComplexYtPath;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.credentials.CredentialsProvider;
@@ -23,9 +25,10 @@ public class YtRowDataInputFormat extends AbstractYtRowDataInputFormat {
             long limit,
             DeserializationSchema<RowData> deserializer,
             TypeInformation<RowData> rowDataTypeInfo,
-            CredentialsProvider credentialsProvider) {
+            CredentialsProvider credentialsProvider,
+            SerializableSupplier<RetryStrategy> retryStrategy) {
 
-        super(ysonSchemaString, limit, deserializer, rowDataTypeInfo, credentialsProvider);
+        super(ysonSchemaString, limit, deserializer, rowDataTypeInfo, credentialsProvider, retryStrategy);
         this.path = path;
     }
 
