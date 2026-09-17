@@ -197,10 +197,11 @@ class YTsaurusQueueDynamicTableFactoryTest {
         ResolvedCatalogTable resolvedTable = new ResolvedCatalogTable(
                 catalogTable,
                 ResolvedSchema.of(Column.physical("payload", DataTypes.STRING())));
-        return FactoryUtil.createTableSource(
+        return FactoryUtil.createDynamicTableSource(
                 null,
                 ObjectIdentifier.of("catalog", "database", "queue"),
                 resolvedTable,
+                Map.of(),
                 new Configuration(),
                 YTsaurusQueueDynamicTableFactoryTest.class.getClassLoader(),
                 false);

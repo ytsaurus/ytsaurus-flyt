@@ -7,11 +7,11 @@ import javax.annotation.Nullable;
 import org.apache.flink.util.Preconditions;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.flink.configuration.Configuration;
+import org.apache.flink.api.common.functions.OpenContext;
 import org.apache.flink.runtime.state.FunctionInitializationContext;
 import org.apache.flink.runtime.state.FunctionSnapshotContext;
 import org.apache.flink.streaming.api.checkpoint.CheckpointedFunction;
-import org.apache.flink.streaming.api.functions.sink.RichSinkFunction;
+import org.apache.flink.streaming.api.functions.sink.legacy.RichSinkFunction;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.types.DataType;
 import org.apache.flink.table.types.logical.LogicalType;
@@ -144,8 +144,8 @@ public class YtRowDataSinkFunction extends RichSinkFunction<RowData> implements 
     }
 
     @Override
-    public void open(Configuration parameters) throws Exception {
-        super.open(parameters);
+    public void open(OpenContext openContext) throws Exception {
+        super.open(openContext);
 
         LocksProvider locksProvider = LocksProviderChooser.chooseAndConfigureLocksProvider(
                 ytWriterOptions.getLocksConfig().getLocksProviderName(),

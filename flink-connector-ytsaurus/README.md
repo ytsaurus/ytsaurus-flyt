@@ -41,7 +41,8 @@ The Apache Flink YTsaurus Connector enables seamless integration between Apache 
 
 ## Supported Flink Versions
 
-The connector officially supports Apache Flink version `1.20.X`, but compatibility with other, earlier versions is not excluded.
+This release line targets Apache Flink `2.3.X` and Java 17. Use the previous
+connector release line for Apache Flink `1.20.X` clusters.
 
 ## Installation
 
@@ -51,7 +52,7 @@ Maven
 <dependency>
     <groupId>tech.ytsaurus.flyt.connectors.ytsaurus</groupId>
     <artifactId>flink-connector-ytsaurus</artifactId>
-    <version>1.10.0</version>
+    <version>2.0.0</version>
     <classifier>all</classifier>
 </dependency>
 ```
@@ -59,7 +60,7 @@ Maven
 Gradle
 
 ```kotlin
-implementation("tech.ytsaurus.flyt.connectors.ytsaurus:flink-connector-ytsaurus:1.10.0:all")
+implementation("tech.ytsaurus.flyt.connectors.ytsaurus:flink-connector-ytsaurus:2.0.0:all")
 ```
 
 ## Building from Source
@@ -68,7 +69,7 @@ implementation("tech.ytsaurus.flyt.connectors.ytsaurus:flink-connector-ytsaurus:
 
 - Git
 - Gradle 8.x (we recommend 8.14.3)
-- Java 11
+- Java 17
 
 ### Build Steps
 
