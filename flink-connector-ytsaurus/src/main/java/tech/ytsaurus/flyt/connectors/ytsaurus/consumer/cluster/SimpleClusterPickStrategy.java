@@ -8,7 +8,6 @@ import java.util.Map;
 
 import org.apache.flink.configuration.ConfigOption;
 import org.apache.flink.configuration.ConfigOptions;
-import org.apache.flink.configuration.FallbackKey;
 import org.apache.flink.configuration.ReadableConfig;
 
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.ComplexYtPath;
@@ -79,21 +78,11 @@ public abstract class SimpleClusterPickStrategy implements ClusterPickStrategy {
         }
         String suffix = option.key().substring(CLUSTER_PICK_STRATEGY.key().length());
         List<String> optionDeprecatedKeys = new ArrayList<>();
-        deprecatedKeys(CLUSTER_PICK_STRATEGY)
+        YtConfigUtils.deprecatedKeys(CLUSTER_PICK_STRATEGY)
                 .forEach(key -> optionDeprecatedKeys.add(key + suffix));
         return optionDeprecatedKeys.isEmpty()
                 ? option
                 : option.withDeprecatedKeys(optionDeprecatedKeys.toArray(new String[0]));
-    }
-
-    private static List<String> deprecatedKeys(ConfigOption<?> option) {
-        List<String> deprecatedKeys = new ArrayList<>();
-        for (FallbackKey fallbackKey : option.fallbackKeys()) {
-            if (fallbackKey.isDeprecated()) {
-                deprecatedKeys.add(fallbackKey.getKey());
-            }
-        }
-        return deprecatedKeys;
     }
 
     protected void checkOpen() {

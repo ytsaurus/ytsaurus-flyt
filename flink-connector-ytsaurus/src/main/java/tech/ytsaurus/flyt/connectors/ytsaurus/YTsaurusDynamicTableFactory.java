@@ -13,7 +13,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.flink.api.common.serialization.DeserializationSchema;
 import org.apache.flink.configuration.ConfigOption;
 import org.apache.flink.configuration.Configuration;
-import org.apache.flink.configuration.FallbackKey;
 import org.apache.flink.configuration.ReadableConfig;
 import org.apache.flink.table.api.ValidationException;
 import org.apache.flink.table.catalog.Column;
@@ -305,18 +304,8 @@ public class YTsaurusDynamicTableFactory implements DynamicTableSinkFactory, Dyn
         List<String> excludedPrefixes = new ArrayList<>();
         excludedPrefixes.add(LOCKS_OPTIONS_PREFIX);
         excludedPrefixes.add(CLUSTER_PICK_STRATEGY.key());
-        deprecatedKeys(CLUSTER_PICK_STRATEGY).forEach(excludedPrefixes::add);
+        YtConfigUtils.deprecatedKeys(CLUSTER_PICK_STRATEGY).forEach(excludedPrefixes::add);
         return excludedPrefixes;
-    }
-
-    private static List<String> deprecatedKeys(ConfigOption<?> option) {
-        List<String> deprecatedKeys = new ArrayList<>();
-        for (FallbackKey fallbackKey : option.fallbackKeys()) {
-            if (fallbackKey.isDeprecated()) {
-                deprecatedKeys.add(fallbackKey.getKey());
-            }
-        }
-        return deprecatedKeys;
     }
 
     protected CredentialsProvider getAndValidateCredentialsProvider(Configuration options) {
