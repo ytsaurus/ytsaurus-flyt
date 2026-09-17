@@ -20,7 +20,6 @@ import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.E
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.PARTITION_KEY;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.PATH;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.PATH_MAP;
-import static tech.ytsaurus.flyt.connectors.ytsaurus.common.constants.YtConsts.YT_PATH_SEP;
 
 @UtilityClass
 public class YtConfigUtils {
@@ -49,22 +48,12 @@ public class YtConfigUtils {
                                                 String clusterName,
                                                 boolean partitioned,
                                                 ReadableConfig options) {
-        ComplexYtPath.ComplexYtPathBuilder pathBuilder = ComplexYtPath.builder()
+        return ComplexYtPath.builder()
                 .basePath(path)
                 .clusterName(clusterName)
                 .isPartitioned(partitioned)
-                .enableDynamicStoreRead(options.get(ENABLE_DYNAMIC_STORE_READ));
-
-        if (!partitioned) {
-            int tableNameSeparator = path.lastIndexOf(YT_PATH_SEP);
-            checkArgument(tableNameSeparator >= 0 && tableNameSeparator < path.length() - 1,
-                    "Non-partitioned YT path must contain a table name: %s", path);
-            pathBuilder
-                    .basePath(path.substring(0, tableNameSeparator))
-                    .tableName(path.substring(tableNameSeparator + 1));
-        }
-
-        return pathBuilder.build();
+                .enableDynamicStoreRead(options.get(ENABLE_DYNAMIC_STORE_READ))
+                .build();
     }
 
     public static CredentialsProvider getAndValidateCredentialsProvider(ReadableConfig options) {

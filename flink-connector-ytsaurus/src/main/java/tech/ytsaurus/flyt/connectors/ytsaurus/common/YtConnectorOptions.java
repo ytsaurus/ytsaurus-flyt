@@ -167,12 +167,10 @@ public class YtConnectorOptions {
             .defaultValue(LookupMethod.LOOKUP)
             .withDeprecatedKeys("lookupMethod");
 
-    public static final String CLUSTER_PICK_STRATEGY_DEPRECATED_KEY = "clusterPickStrategy";
-
     public static final ConfigOption<String> CLUSTER_PICK_STRATEGY = ConfigOptions.key("cluster-pick-strategy")
             .stringType()
             .defaultValue(FirstAvailableClusterPickStrategy.NAME)
-            .withDeprecatedKeys(CLUSTER_PICK_STRATEGY_DEPRECATED_KEY);
+            .withDeprecatedKeys("clusterPickStrategy");
 
     public static final ConfigOption<Duration> COMMIT_TRANSACTION_PERIOD = ConfigOptions.key("commit-transaction-period")
             .durationType()

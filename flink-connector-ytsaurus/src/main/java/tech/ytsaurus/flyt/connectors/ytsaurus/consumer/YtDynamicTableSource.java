@@ -90,6 +90,11 @@ public class YtDynamicTableSource
             keyTypes[i] = DataType.getFieldDataTypes(physicalRowDataType).get(innerKeyArr[0]);
         }
         final RowType rowType = (RowType) physicalRowDataType.getLogicalType();
+        for (ComplexYtPath path : pathMap.values()) {
+            if (!path.isPartitioned()) {
+                path.setTableName(path.getBaseTableName());
+            }
+        }
         Preconditions.checkNotNull(
                 converter, "Value decoding format must not be null.");
         final CredentialsProvider finalCredentialsProvider = credentialsProvider;
@@ -214,6 +219,7 @@ public class YtDynamicTableSource
     private @NonNull InputFormatProvider getSingleClusterInputFormatProvider(
             DeserializationSchema<RowData> deserializer, TypeInformation<RowData> typeInfo) {
         ComplexYtPath path = pathMap.values().iterator().next();
+        fillTableName(path);
         return InputFormatProvider.of(
                 YtRowDataInputFormat.builder()
                         .path(path)
@@ -226,12 +232,24 @@ public class YtDynamicTableSource
         );
     }
 
+    private void fillTableName(ComplexYtPath path) {
+        if (path.isPartitioned()) {
+            log.warn("Ignore partition error for scan table");
+        } else {
+            path.setTableName(path.getBaseTableName());
+        }
+    }
+
     private @NonNull InputFormatProvider getMultiClusterInputFormatProvider(
             DeserializationSchema<RowData> deserializer, TypeInformation<RowData> typeInfo) {
         Preconditions.checkNotNull(
                 clusterPickStrategy,
                 "Strategy must be present when given multiple paths"
         );
+
+        for (ComplexYtPath path : pathMap.values()) {
+            fillTableName(path);
+        }
 
         clusterPickStrategy.open(options);
 

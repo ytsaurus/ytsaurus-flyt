@@ -19,7 +19,6 @@ import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.api.common.functions.RuntimeContext;
-import org.apache.flink.metrics.MetricGroup;
 import org.apache.flink.table.types.DataType;
 import org.apache.flink.util.concurrent.ExponentialBackoffRetryStrategy;
 import org.apache.flink.util.concurrent.RetryStrategy;
@@ -62,7 +61,7 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
     private final TrackableField trackableField;
     private final RowDataToYtListConverters.RowDataToYtMapConverter ytConverter;
 
-    private final MetricGroup metricGroup;
+    private final RuntimeContext context;
 
     private final YtTableAttributes tableAttributes;
 
@@ -92,37 +91,6 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
                                     LocksProvider locksProvider,
                                     DataType dataType,
                                     @Nullable DataMetricsConfig dataMetricsConfig) {
-        this(cache,
-                clientSupplier,
-                ytConverter,
-                path,
-                ysonSchemaString,
-                trackableField,
-                retryStrategy,
-                context.getMetricGroup(),
-                tableAttributes,
-                reshardingConfig,
-                ytWriterOptions,
-                locksProvider,
-                dataType,
-                dataMetricsConfig);
-    }
-
-    @SuppressWarnings("checkstyle:ParameterNumber")
-    public YtDynamicTableWriterPool(@Nullable TemporalCache<String, YtDynamicTableWriter> cache,
-                                    Supplier<YTsaurusClient> clientSupplier,
-                                    RowDataToYtListConverters.RowDataToYtMapConverter ytConverter,
-                                    ComplexYtPath path,
-                                    String ysonSchemaString,
-                                    TrackableField trackableField,
-                                    RetryStrategy retryStrategy,
-                                    MetricGroup metricGroup,
-                                    YtTableAttributes tableAttributes,
-                                    ReshardingConfig reshardingConfig,
-                                    YtWriterOptions ytWriterOptions,
-                                    LocksProvider locksProvider,
-                                    DataType dataType,
-                                    @Nullable DataMetricsConfig dataMetricsConfig) {
         if (cache == null) {
             cache = makeDefaultCache();
         }
@@ -132,7 +100,7 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
         this.path = path;
         this.trackableField = trackableField;
         this.ytConverter = ytConverter;
-        this.metricGroup = metricGroup;
+        this.context = context;
         this.metricsSuppliers = new HashMap<>();
         this.tableAttributes = tableAttributes;
         this.retryStrategy = retryStrategy;
@@ -142,7 +110,7 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
 
         // Create and initialize delegate once for the whole pool
         this.dataMetrics = DataMetricsWriterDelegate.create(dataMetricsConfig, dataType);
-        this.dataMetrics.open(metricGroup);
+        this.dataMetrics.open(context);
 
         cache.schedule();
     }
@@ -290,7 +258,7 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
                 writerClassifier,
                 retryStrategy,
                 locksRetryStrategy,
-                metricGroup,
+                context,
                 metricsSupplier,
                 tableAttributes,
                 resolveReshardProvider(writerClassifier.getPartitionConfig()),
