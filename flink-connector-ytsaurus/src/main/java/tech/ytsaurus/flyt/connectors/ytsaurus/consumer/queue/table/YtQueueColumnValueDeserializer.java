@@ -5,6 +5,8 @@ import java.util.Objects;
 import javax.annotation.Nullable;
 
 import org.apache.flink.api.common.serialization.DeserializationSchema;
+import org.apache.flink.api.connector.source.SourceReaderContext;
+import org.apache.flink.metrics.Counter;
 import tech.ytsaurus.client.rows.UnversionedRow;
 import tech.ytsaurus.client.rows.UnversionedValue;
 import tech.ytsaurus.core.tables.ColumnValueType;
@@ -29,6 +31,8 @@ public class YtQueueColumnValueDeserializer<T> extends YtQueueDeserializationSch
 
     private transient YtValueCodecs valueCodecs;
 
+    private transient Counter numNullPayloads;
+
     public YtQueueColumnValueDeserializer(DeserializationSchema<T> deserializationSchema) {
         this(deserializationSchema, DEFAULT_VALUE_COLUMN, null);
     }
@@ -52,6 +56,12 @@ public class YtQueueColumnValueDeserializer<T> extends YtQueueDeserializationSch
     }
 
     @Override
+    public void open(SourceReaderContext context) throws Exception {
+        super.open(context);
+        numNullPayloads = context.metricGroup().counter("numNullPayloads");
+    }
+
+    @Override
     @Nullable
     public T deserialize(UnversionedRow row, TableSchema schema) throws Exception {
         int valueIndex = columnIndex(schema, valueColumn);
@@ -68,6 +78,7 @@ public class YtQueueColumnValueDeserializer<T> extends YtQueueDeserializationSch
         }
 
         if (value == null) {
+            numNullPayloads.inc();
             return null;
         }
         if (codecIndex < 0) {

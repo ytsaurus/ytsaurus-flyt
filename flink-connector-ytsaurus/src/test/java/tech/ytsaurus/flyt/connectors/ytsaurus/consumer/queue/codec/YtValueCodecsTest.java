@@ -9,8 +9,6 @@ import com.github.luben.zstd.Zstd;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
-import tech.ytsaurus.client.rpc.Codec;
-import tech.ytsaurus.client.rpc.Compression;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -44,17 +42,9 @@ class YtValueCodecsTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"lz4", "lz4_high_compression", "zlib_1", "zlib_6", "zlib_9"})
-    void decompressesCodecsSupportedByTheYtsaurusClient(String codecName) {
-        byte[] compressed = rpcCodec(codecName).compress(PAYLOAD);
-
-        assertThat(codecs.forName(codecName).decompress(compressed)).isEqualTo(PAYLOAD);
-    }
-
-    @ParameterizedTest
     @ValueSource(strings = {
             "brotli_3", "snappy", "quick_lz", "zstd_0", "zstd_06", "zstd_22", "zlib_0", "zlib_01",
-            "zlib_10", "zstd_x"
+            "zlib_10", "zstd_x", "lz4", "lz4_high_compression", "zlib_1", "zlib_6", "zlib_9"
     })
     void rejectsUnsupportedCodecs(String codecName) {
         assertThatThrownBy(() -> codecs.forName(codecName))
@@ -66,13 +56,13 @@ class YtValueCodecsTest {
     @Test
     void reusesResolvedCodecInstances() {
         assertThat(codecs.forName("zstd_6")).isSameAs(codecs.forName("zstd_6"));
-        assertThat(codecs.forName("lz4")).isSameAs(codecs.forName("LZ4"));
+        assertThat(codecs.forName("zstd_6")).isSameAs(codecs.forName(" ZSTD_6 "));
     }
 
     @Test
     void doesNotShareCacheBetweenResolvers() {
-        assertThat(codecs.forName("lz4"))
-                .isNotSameAs(new YtValueCodecs().forName("lz4"));
+        assertThat(codecs.forName("zstd_6"))
+                .isNotSameAs(new YtValueCodecs().forName("zstd_6"));
     }
 
     @Test
@@ -82,11 +72,13 @@ class YtValueCodecsTest {
                 .hasMessageContaining("size header");
     }
 
-    @Test
-    void rejectsZstdValueWithMismatchedSizeHeader() {
+    @ParameterizedTest
+    @ValueSource(ints = {-1, 1})
+    void rejectsZstdValueWithMismatchedSizeHeader(int sizeDifference) {
         byte[] compressed = compressZstd(PAYLOAD, 6);
         byte[] corrupted = compressed.clone();
-        ByteBuffer.wrap(corrupted, 0, Long.BYTES).order(ByteOrder.LITTLE_ENDIAN).putLong(PAYLOAD.length - 1L);
+        ByteBuffer.wrap(corrupted, 0, Long.BYTES).order(ByteOrder.LITTLE_ENDIAN)
+                .putLong(PAYLOAD.length + (long) sizeDifference);
 
         assertThatThrownBy(() -> codecs.forName("zstd_6").decompress(corrupted))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -102,15 +94,13 @@ class YtValueCodecsTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
-    private static Codec rpcCodec(String codecName) {
-        switch (codecName) {
-            case "lz4":
-                return Codec.codecFor(Compression.Lz4);
-            case "lz4_high_compression":
-                return Codec.codecFor(Compression.Lz4HighCompression);
-            default:
-                return Codec.codecFor(Compression.valueOf("Zlib_" + codecName.substring("zlib_".length())));
-        }
+    @Test
+    void rejectsZstdValueWithTrailingGarbage() {
+        byte[] compressed = compressZstd(PAYLOAD, 6);
+        byte[] corrupted = Arrays.copyOf(compressed, compressed.length + 1);
+
+        assertThatThrownBy(() -> codecs.forName("zstd_6").decompress(corrupted))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     /**

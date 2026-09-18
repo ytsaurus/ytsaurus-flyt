@@ -730,9 +730,9 @@ CREATE TABLE queue_events (
 
 `COLUMN` treats the record as a payload stored in one column, which is common for queues that keep an already serialized message in `value` and, optionally, the name of the YTsaurus compression codec in `codec`. The Flink DDL then describes the payload rather than the queue row, and the payload bytes are passed to the configured format as is, so any insert-only format is accepted.
 
-The payload column is `scan.value-column` and defaults to `value`. The codec column is `scan.codec-column` and has no default: without it the payload is read as is, which is what an uncompressed queue needs. Set it to decompress the payload with the codec named in that column. Supported codecs are `none`, `zstd_1`..`zstd_21`, `lz4`, `lz4_high_compression` and `zlib_1`..`zlib_9`; any other codec fails the job with an explicit error.
+The payload column is `scan.value-column` and defaults to `value`. The codec column is `scan.codec-column` and has no default: without it the payload is read as is, which is what an uncompressed queue needs. Set it to decompress the payload with the codec named in that column. Supported codecs are `none` and `zstd_1`..`zstd_21`; any other codec fails the job with an explicit error.
 
-Both configured columns must exist in the queue schema and must be string-like, otherwise the job fails: a missing column is a configuration error rather than an uncompressed payload. A null codec value means that this particular row is not compressed, and a row whose payload column is null is skipped.
+Both configured columns must exist in the queue schema and must be string-like, otherwise the job fails: a missing column is a configuration error rather than an uncompressed payload. A null codec value means that this particular row is not compressed, and a row whose payload column is null is skipped. The source reader's `numNullPayloads` counter tracks rows skipped because the payload is null or absent from the row; null results returned by the configured format are not included.
 
 ```sql
 CREATE TABLE queue_events (

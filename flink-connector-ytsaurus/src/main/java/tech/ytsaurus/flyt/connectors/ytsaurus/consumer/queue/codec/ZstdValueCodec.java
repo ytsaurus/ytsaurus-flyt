@@ -1,24 +1,21 @@
 package tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.codec;
 
-import java.io.ByteArrayInputStream;
-import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
-import com.github.luben.zstd.ZstdInputStream;
+import com.github.luben.zstd.Zstd;
+import com.github.luben.zstd.ZstdException;
 
 /**
  * Decompresses values written by the YTsaurus {@code zstd_*} codec: an eight byte little endian
  * uncompressed size followed by the zstd stream itself.
  */
 final class ZstdValueCodec implements YtValueCodec {
-    static final ZstdValueCodec INSTANCE = new ZstdValueCodec();
-
     private static final int HEADER_SIZE = Long.BYTES;
 
     private static final long MAX_UNCOMPRESSED_SIZE = Integer.MAX_VALUE - 8L;
 
-    private ZstdValueCodec() {
+    ZstdValueCodec() {
     }
 
     @Override
@@ -35,16 +32,19 @@ final class ZstdValueCodec implements YtValueCodec {
         }
 
         byte[] uncompressed = new byte[(int) uncompressedSize];
-        try (ZstdInputStream input = new ZstdInputStream(
-                new ByteArrayInputStream(compressed, HEADER_SIZE, compressed.length - HEADER_SIZE))) {
-            int read = input.readNBytes(uncompressed, 0, uncompressed.length);
-            if (read != uncompressed.length || input.read() != -1) {
-                throw new IllegalArgumentException(String.format(
-                        "zstd value declares %d uncompressed bytes but the stream contains a different amount",
-                        uncompressedSize));
-            }
-        } catch (IOException e) {
-            throw new IllegalArgumentException("Failed to decompress zstd value", e);
+        long decompressedSize;
+        try {
+            decompressedSize = Zstd.decompressByteArray(
+                    uncompressed, 0, uncompressed.length,
+                    compressed, HEADER_SIZE, compressed.length - HEADER_SIZE);
+        } catch (ZstdException e) {
+            throw new IllegalArgumentException(
+                    "Failed to decompress zstd value into " + uncompressedSize + " uncompressed bytes", e);
+        }
+        if (decompressedSize != uncompressedSize) {
+            throw new IllegalArgumentException(String.format(
+                    "zstd value declares %d uncompressed bytes but the stream contains %d",
+                    uncompressedSize, decompressedSize));
         }
         return uncompressed;
     }

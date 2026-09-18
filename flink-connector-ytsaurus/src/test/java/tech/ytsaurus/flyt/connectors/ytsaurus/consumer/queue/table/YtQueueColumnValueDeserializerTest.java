@@ -8,6 +8,8 @@ import java.util.List;
 import com.github.luben.zstd.Zstd;
 import org.apache.flink.api.common.serialization.DeserializationSchema;
 import org.apache.flink.api.connector.source.SourceReaderContext;
+import org.apache.flink.metrics.Counter;
+import org.apache.flink.metrics.SimpleCounter;
 import org.apache.flink.metrics.groups.SourceReaderMetricGroup;
 import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.RowData;
@@ -91,15 +93,37 @@ class YtQueueColumnValueDeserializerTest {
     }
 
     @Test
-    void skipsRowWithNullValue() throws Exception {
+    void countsRowsSkippedBecauseThePayloadIsNullOrAbsent() throws Exception {
         RecordingDeserializationSchema format = new RecordingDeserializationSchema();
+        YtQueueColumnValueDeserializer<RowData> deserializer =
+                new YtQueueColumnValueDeserializer<>(format, "value", "codec");
+        Counter counter = openWithNullPayloadCounter(deserializer);
         UnversionedRow row = row(
                 value(0, ColumnValueType.NULL, null),
                 value(1, ColumnValueType.STRING, "zstd_6".getBytes(StandardCharsets.UTF_8)));
 
-        assertThat(new YtQueueColumnValueDeserializer<>(format, "value", "codec").deserialize(row, SCHEMA))
+        assertThat(deserializer.deserialize(row, SCHEMA)).isNull();
+        assertThat(counter.getCount()).isEqualTo(1);
+        assertThat(deserializer.deserialize(row(value(1, ColumnValueType.STRING, new byte[0])), SCHEMA))
                 .isNull();
         assertThat(format.lastMessage).isNull();
+        assertThat(counter.getCount()).isEqualTo(2);
+
+        assertThat(deserializer.deserialize(row(value(0, ColumnValueType.STRING, PAYLOAD)), SCHEMA))
+                .isNotNull();
+        assertThat(counter.getCount()).isEqualTo(2);
+    }
+
+    @Test
+    void doesNotCountNullFormatResultsAsNullPayloads() throws Exception {
+        @SuppressWarnings("unchecked")
+        DeserializationSchema<RowData> format = mock(DeserializationSchema.class);
+        YtQueueColumnValueDeserializer<RowData> deserializer = new YtQueueColumnValueDeserializer<>(format);
+        Counter counter = openWithNullPayloadCounter(deserializer);
+
+        assertThat(deserializer.deserialize(row(value(0, ColumnValueType.STRING, PAYLOAD)), SCHEMA))
+                .isNull();
+        assertThat(counter.getCount()).isZero();
     }
 
     @Test
@@ -181,8 +205,20 @@ class YtQueueColumnValueDeserializerTest {
         ArgumentCaptor<DeserializationSchema.InitializationContext> initializationContext =
                 ArgumentCaptor.forClass(DeserializationSchema.InitializationContext.class);
         verify(format).open(initializationContext.capture());
+        verify(metricGroup).counter("numNullPayloads");
         assertThat(initializationContext.getValue().getMetricGroup()).isSameAs(metricGroup);
         assertThat(initializationContext.getValue().getUserCodeClassLoader()).isSameAs(classLoader);
+    }
+
+    private static Counter openWithNullPayloadCounter(YtQueueColumnValueDeserializer<RowData> deserializer)
+            throws Exception {
+        SourceReaderContext context = mock(SourceReaderContext.class);
+        SourceReaderMetricGroup metricGroup = mock(SourceReaderMetricGroup.class);
+        Counter counter = new SimpleCounter();
+        when(context.metricGroup()).thenReturn(metricGroup);
+        when(metricGroup.counter("numNullPayloads")).thenReturn(counter);
+        deserializer.open(context);
+        return counter;
     }
 
     private static UnversionedRow row(UnversionedValue... values) {

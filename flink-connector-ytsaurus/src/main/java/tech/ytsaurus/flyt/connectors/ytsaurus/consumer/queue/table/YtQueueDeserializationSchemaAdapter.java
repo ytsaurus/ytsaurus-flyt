@@ -23,7 +23,7 @@ abstract class YtQueueDeserializationSchemaAdapter<T> implements YtQueueRecordDe
     }
 
     @Override
-    public final void open(SourceReaderContext context) throws Exception {
+    public void open(SourceReaderContext context) throws Exception {
         Objects.requireNonNull(context, "context");
         deserializationSchema.open(new DeserializationSchema.InitializationContext() {
             @Override

@@ -75,6 +75,8 @@ tasks.compileJava {
 tasks.shadowJar {
     mergeServiceFiles()
     relocate("com.google.protobuf", "tech.ytsaurus.flyt.connectors.ytsaurus.shaded.com.google.protobuf")
+    // User protobuf jars can also contain NYT.Extension. Isolate the connector's generated classes
+    // together with protobuf to avoid mixing shaded and unshaded descriptor types.
     relocate("NYT", "tech.ytsaurus.flyt.connectors.ytsaurus.shaded.NYT")
 }
 

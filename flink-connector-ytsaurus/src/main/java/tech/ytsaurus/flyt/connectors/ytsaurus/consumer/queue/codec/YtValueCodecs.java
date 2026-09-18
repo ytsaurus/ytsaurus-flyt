@@ -6,26 +6,14 @@ import java.util.Map;
 
 import javax.annotation.Nullable;
 
-import tech.ytsaurus.client.rpc.Codec;
-import tech.ytsaurus.client.rpc.Compression;
-
 public final class YtValueCodecs {
     public static final String NONE = "none";
 
-    static final String SUPPORTED_CODECS =
-            "none, zstd_1..zstd_21, lz4, lz4_high_compression, zlib_1..zlib_9";
+    static final String SUPPORTED_CODECS = "none, zstd_1..zstd_21";
 
     private static final String ZSTD_PREFIX = "zstd_";
 
-    private static final String ZLIB_PREFIX = "zlib_";
-
-    private static final String LZ4 = "lz4";
-
-    private static final String LZ4_HIGH_COMPRESSION = "lz4_high_compression";
-
     private static final int MAX_ZSTD_LEVEL = 21;
-
-    private static final int MAX_ZLIB_LEVEL = 9;
 
     private static final YtValueCodec IDENTITY = compressed -> compressed;
 
@@ -55,26 +43,11 @@ public final class YtValueCodecs {
         if (NONE.equals(codecName)) {
             return IDENTITY;
         }
-        if (LZ4.equals(codecName)) {
-            return rpcCodec(Compression.Lz4);
-        }
-        if (LZ4_HIGH_COMPRESSION.equals(codecName)) {
-            return rpcCodec(Compression.Lz4HighCompression);
-        }
         if (codecName.startsWith(ZSTD_PREFIX)) {
             parseLevel(codecName, ZSTD_PREFIX, MAX_ZSTD_LEVEL);
-            return ZstdValueCodec.INSTANCE;
-        }
-        if (codecName.startsWith(ZLIB_PREFIX)) {
-            int level = parseLevel(codecName, ZLIB_PREFIX, MAX_ZLIB_LEVEL);
-            return rpcCodec(Compression.valueOf("Zlib_" + level));
+            return new ZstdValueCodec();
         }
         throw new IllegalArgumentException(unsupported(codecName));
-    }
-
-    private static YtValueCodec rpcCodec(Compression compression) {
-        Codec codec = Codec.codecFor(compression);
-        return codec::decompress;
     }
 
     private static int parseLevel(String codecName, String prefix, int maxLevel) {
