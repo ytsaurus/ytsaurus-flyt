@@ -5,6 +5,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.api.Schema;
@@ -15,23 +16,36 @@ import org.apache.flink.table.catalog.ObjectIdentifier;
 import org.apache.flink.table.catalog.ResolvedCatalogTable;
 import org.apache.flink.table.catalog.ResolvedSchema;
 import org.apache.flink.table.connector.source.DynamicTableSource;
+import org.apache.flink.table.connector.source.ScanTableSource;
+import org.apache.flink.table.connector.source.SourceProvider;
+import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.factories.DynamicTableSourceFactory;
 import org.apache.flink.table.factories.FactoryUtil;
+import org.apache.flink.table.types.DataType;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 
+import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.config.YtQueueReadMode;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.config.YtQueueStartupMode;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.config.YtQueueTrimmedOffsetPolicy;
+import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.table.YtQueueColumnValueDeserializer;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.table.YtQueueDynamicTableSource;
+import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.table.YtQueueRowDataDeserializer;
 import tech.ytsaurus.flyt.formats.yson.YsonFormatFactory;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.mock;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.CREDENTIALS_SOURCE;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.PARTITION_DISCOVERY_INTERVAL;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.SPECIFIC_OFFSETS;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.CODEC_COLUMN;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.READ_MODE;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.STARTUP_MODE;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.VALUE_COLUMN;
 
 class YTsaurusQueueDynamicTableFactoryTest {
     @Test
@@ -161,6 +175,78 @@ class YTsaurusQueueDynamicTableFactoryTest {
     }
 
     @Test
+    void allowsAnyFormatInColumnReadMode() {
+        Configuration options = new Configuration();
+        options.set(FactoryUtil.FORMAT, "json");
+        options.set(READ_MODE, YtQueueReadMode.COLUMN);
+
+        YTsaurusQueueDynamicTableFactory.validateFormatIdentifier(options);
+    }
+
+    @Test
+    void createsSourceInColumnReadModeWithoutCodecColumn() {
+        Map<String, String> options = validSqlOptions();
+        options.put("scan.read-mode", "COLUMN");
+
+        DynamicTableSource source = createSource(options);
+
+        assertThat(source).extracting("readMode").isEqualTo(YtQueueReadMode.COLUMN);
+        assertThat(source).extracting("columnModeOptions.valueColumn").isEqualTo("value");
+        assertThat(source).extracting("columnModeOptions.codecColumn").isNull();
+        assertRecordDeserializer(source, YtQueueColumnValueDeserializer.class);
+    }
+
+    @Test
+    void createsSourceInColumnReadModeWithCustomColumns() {
+        Map<String, String> options = validSqlOptions();
+        options.put("scan.read-mode", "COLUMN");
+        options.put("scan.value-column", "payload");
+        options.put("scan.codec-column", "compression");
+
+        DynamicTableSource source = createSource(options);
+
+        assertThat(source).extracting("columnModeOptions.valueColumn").isEqualTo("payload");
+        assertThat(source).extracting("columnModeOptions.codecColumn").isEqualTo("compression");
+    }
+
+    @Test
+    void usesRowReadModeByDefault() {
+        DynamicTableSource source = createSource(validSqlOptions());
+
+        assertThat(source).extracting("readMode").isEqualTo(YtQueueReadMode.ROW);
+        assertThat(source).extracting("columnModeOptions").isNull();
+        assertRecordDeserializer(source, YtQueueRowDataDeserializer.class);
+    }
+
+    @Test
+    void rejectsColumnOptionsInRowReadMode() {
+        Map<String, String> valueColumnOptions = validSqlOptions();
+        valueColumnOptions.put("scan.value-column", "payload");
+        assertThrows(ValidationException.class, () -> createSource(valueColumnOptions));
+
+        Map<String, String> codecColumnOptions = validSqlOptions();
+        codecColumnOptions.put("scan.codec-column", "codec");
+        assertThrows(ValidationException.class, () -> createSource(codecColumnOptions));
+    }
+
+    @Test
+    void rejectsBlankAndEqualColumnNames() {
+        Configuration options = new Configuration();
+        options.set(READ_MODE, YtQueueReadMode.COLUMN);
+        options.set(VALUE_COLUMN, " ");
+
+        assertThrows(
+                ValidationException.class,
+                () -> YTsaurusQueueDynamicTableFactory.createColumnModeOptions(options));
+
+        options.set(VALUE_COLUMN, "payload");
+        options.set(CODEC_COLUMN, "payload");
+        assertThrows(
+                ValidationException.class,
+                () -> YTsaurusQueueDynamicTableFactory.createColumnModeOptions(options));
+    }
+
+    @Test
     void requiresExplicitCredentialsForOptionsProvider() {
         Configuration options = new Configuration();
         options.set(CREDENTIALS_SOURCE, "options");
@@ -204,6 +290,22 @@ class YTsaurusQueueDynamicTableFactoryTest {
                 new Configuration(),
                 YTsaurusQueueDynamicTableFactoryTest.class.getClassLoader(),
                 false);
+    }
+
+    private static void assertRecordDeserializer(
+            DynamicTableSource tableSource,
+            Class<?> expectedDeserializerClass) {
+        ScanTableSource.ScanContext context = mock(ScanTableSource.ScanContext.class);
+        doReturn(TypeInformation.of(RowData.class))
+                .when(context)
+                .createTypeInformation(any(DataType.class));
+
+        SourceProvider runtimeProvider = (SourceProvider) ((ScanTableSource) tableSource)
+                .getScanRuntimeProvider(context);
+
+        assertThat(runtimeProvider.createSource())
+                .extracting("recordDeserializer")
+                .isInstanceOf(expectedDeserializerClass);
     }
 
     private static Map<String, String> validSqlOptions() {
