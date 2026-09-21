@@ -45,8 +45,6 @@ public abstract class AbstractYtRowDataInputFormat
         implements ResultTypeQueryable<RowData> {
 
     private static final Logger LOG = LoggerFactory.getLogger(AbstractYtRowDataInputFormat.class);
-    private static final int EMPTY_BATCH_RETRIES = 5;
-    private static final Duration EMPTY_BATCH_RETRY_DELAY = Duration.ofMillis(100);
 
     protected final String ysonSchemaString;
     protected final long limit;
@@ -179,7 +177,7 @@ public abstract class AbstractYtRowDataInputFormat
             // with canRead() still true is not the end of the table: readyEvent() also fires when
             // the request future completes, which can happen just before EOF reaches the stash.
             if (retry == null) {
-                retry = new FixedRetryStrategy(EMPTY_BATCH_RETRIES, EMPTY_BATCH_RETRY_DELAY);
+                retry = newRetryStrategy();
             }
             if (retry.getNumRemainingRetries() < 1) {
                 throw new IOException(String.format(
