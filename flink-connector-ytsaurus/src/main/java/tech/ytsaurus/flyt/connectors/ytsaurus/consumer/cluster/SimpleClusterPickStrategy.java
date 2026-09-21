@@ -77,9 +77,12 @@ public abstract class SimpleClusterPickStrategy implements ClusterPickStrategy {
             return option;
         }
         String suffix = option.key().substring(CLUSTER_PICK_STRATEGY.key().length());
-        List<String> deprecatedKeys = new ArrayList<>();
-        CLUSTER_PICK_STRATEGY.deprecatedKeys().forEach(base -> deprecatedKeys.add(base + suffix));
-        return deprecatedKeys.isEmpty() ? option : option.withDeprecatedKeys(deprecatedKeys.toArray(new String[0]));
+        List<String> optionDeprecatedKeys = new ArrayList<>();
+        YtConfigUtils.deprecatedKeys(CLUSTER_PICK_STRATEGY)
+                .forEach(key -> optionDeprecatedKeys.add(key + suffix));
+        return optionDeprecatedKeys.isEmpty()
+                ? option
+                : option.withDeprecatedKeys(optionDeprecatedKeys.toArray(new String[0]));
     }
 
     protected void checkOpen() {

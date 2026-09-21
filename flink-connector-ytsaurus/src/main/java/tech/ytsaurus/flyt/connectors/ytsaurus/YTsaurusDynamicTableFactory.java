@@ -304,7 +304,7 @@ public class YTsaurusDynamicTableFactory implements DynamicTableSinkFactory, Dyn
         List<String> excludedPrefixes = new ArrayList<>();
         excludedPrefixes.add(LOCKS_OPTIONS_PREFIX);
         excludedPrefixes.add(CLUSTER_PICK_STRATEGY.key());
-        CLUSTER_PICK_STRATEGY.deprecatedKeys().forEach(excludedPrefixes::add);
+        YtConfigUtils.deprecatedKeys(CLUSTER_PICK_STRATEGY).forEach(excludedPrefixes::add);
         return excludedPrefixes;
     }
 
@@ -520,4 +520,3 @@ public class YTsaurusDynamicTableFactory implements DynamicTableSinkFactory, Dyn
                 .build();
     }
 }
-

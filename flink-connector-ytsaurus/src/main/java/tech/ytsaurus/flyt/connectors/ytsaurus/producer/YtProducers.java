@@ -4,12 +4,12 @@ import java.time.Duration;
 import java.time.temporal.ChronoUnit;
 
 import lombok.experimental.UtilityClass;
-import org.apache.flink.configuration.Configuration;
+import org.apache.flink.api.common.functions.OpenContext;
 import org.apache.flink.formats.common.TimestampFormat;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.datastream.DataStreamSink;
-import org.apache.flink.streaming.api.functions.sink.RichSinkFunction;
-import org.apache.flink.table.connector.sink.SinkFunctionProvider;
+import org.apache.flink.streaming.api.functions.sink.legacy.RichSinkFunction;
+import org.apache.flink.table.connector.sink.legacy.SinkFunctionProvider;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.types.DataType;
 import org.apache.flink.util.concurrent.ExponentialBackoffRetryStrategy;
@@ -180,11 +180,11 @@ public final class YtProducers {
 
         var sink = new RichSinkFunction<T>() {
             @Override
-            public void open(Configuration parameters) throws Exception {
-                super.open(parameters);
+            public void open(OpenContext openContext) throws Exception {
+                super.open(openContext);
 
                 rowDataSinkFunction.setRuntimeContext(getRuntimeContext());
-                rowDataSinkFunction.open(parameters);
+                rowDataSinkFunction.open(openContext);
             }
 
             @Override

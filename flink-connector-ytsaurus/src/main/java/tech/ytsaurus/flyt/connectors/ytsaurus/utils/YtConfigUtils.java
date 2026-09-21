@@ -1,11 +1,15 @@
 package tech.ytsaurus.flyt.connectors.ytsaurus.utils;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.ServiceLoader;
 import java.util.stream.Collectors;
 
 import lombok.experimental.UtilityClass;
+import org.apache.flink.configuration.ConfigOption;
+import org.apache.flink.configuration.FallbackKey;
 import org.apache.flink.configuration.ReadableConfig;
 import org.apache.flink.table.api.ValidationException;
 
@@ -23,6 +27,16 @@ import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.P
 
 @UtilityClass
 public class YtConfigUtils {
+    public static List<String> deprecatedKeys(ConfigOption<?> option) {
+        List<String> deprecatedKeys = new ArrayList<>();
+        for (FallbackKey fallbackKey : option.fallbackKeys()) {
+            if (fallbackKey.isDeprecated()) {
+                deprecatedKeys.add(fallbackKey.getKey());
+            }
+        }
+        return deprecatedKeys;
+    }
+
     public static Map<String, ComplexYtPath> getPathMap(ReadableConfig options) {
         Map<String, String> pathMap;
         if (options.getOptional(PROXY).isPresent()) {
