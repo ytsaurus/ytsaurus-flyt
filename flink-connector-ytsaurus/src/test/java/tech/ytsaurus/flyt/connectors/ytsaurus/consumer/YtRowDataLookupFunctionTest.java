@@ -37,7 +37,7 @@ class YtRowDataLookupFunctionTest {
                 credentialsProvider,
                 "[{name=id;type=int64;sort_order=ascending;};{name=payload;type=string;}]",
                 ComplexYtPath.builder()
-                        .clusterName("hahn")
+                        .clusterName("test-cluster")
                         .basePath("//tmp/flink23-lookup")
                         .isPartitioned(false)
                         .enableDynamicStoreRead(true)
