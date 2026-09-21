@@ -53,6 +53,7 @@ import tech.ytsaurus.ysontree.YTreeTextSerializer;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.ComplexYtPath;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.LookupMethod;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.credentials.CredentialsProvider;
+import tech.ytsaurus.flyt.connectors.ytsaurus.common.credentials.OAuthCredentialsConfig;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.partition.PartitionConfig;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.utils.project.info.ProjectInfoUtils;
 import tech.ytsaurus.flyt.connectors.ytsaurus.producer.converters.RowDataToYtListConverters;
@@ -70,7 +71,7 @@ public class YtRowDataLookupFunction extends LookupFunction {
             Duration.of(2, ChronoUnit.MINUTES)
     );
 
-    private final CredentialsProvider credentialsProvider;
+    private final OAuthCredentialsConfig credentialsConfig;
 
     private final String ysonSchemaString;
 
@@ -134,7 +135,7 @@ public class YtRowDataLookupFunction extends LookupFunction {
         log.info("RowType: {}", rowType);
         log.info("Fail on unavailable {}", failOnUnavailable);
         this.ysonSchemaString = ysonSchemaString;
-        this.credentialsProvider = credentialsProvider;
+        this.credentialsConfig = credentialsProvider.getCredentials(path.getClusterName());
         this.path = path;
         this.partitionConfig = partitionConfig;
         this.deserializer = deserializer;
@@ -166,7 +167,7 @@ public class YtRowDataLookupFunction extends LookupFunction {
         }
         schema = TableSchema.fromYTree(YTreeTextSerializer.deserialize(ysonSchemaString)).toLookup();
         externalConverter = createKeyExternalConverter();
-        client = YtUtils.makeYtClient(path, credentialsProvider.getCredentials(path.getClusterName()));
+        client = YtUtils.makeYtClient(path, credentialsConfig);
         if (path.isPartitioned()) {
             executors = Executors.newCachedThreadPool();
             partitions = scanPartitions();
