@@ -4,13 +4,38 @@ from __future__ import annotations
 
 import shlex
 from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 from yt.wrapper.spec_builders import VanillaSpecBuilder
 
 from ytsaurus_flyt.config import FlytConfig
-from ytsaurus_flyt.models import JobmanagerParams, OperationParams
+from ytsaurus_flyt.models import JobmanagerParams, OperationParams, TaskmanagerParams, parse_memory
 
 FLINK_STANDALONE_FLAG = "FLINK_STANDALONE"
+
+# Environment read by the application-mode run scripts and the in-job helper.
+FLYT_CLUSTER_MODE_ENV = "FLYT_CLUSTER_MODE"
+FLYT_YT_PROXY_ENV = "FLYT_YT_PROXY"
+FLYT_DISCOVERY_PREFIX_ENV = "FLYT_DISCOVERY_PREFIX"
+
+# Vanilla task names in application mode; ``flink`` stays the MiniCluster task name.
+MINICLUSTER_TASK = "flink"
+JOBMANAGER_TASK = "jobmanager"
+TASKMANAGER_TASK = "taskmanager"
+
+# JobManager ports are fixed (one JobManager per operation, own slot IP); TaskManager ports are
+# random so several TaskManagers can share an exec node without porto network isolation.
+FLINK_REST_PORT = 27050
+FLINK_JOBMANAGER_RPC_PORT = 27051
+FLINK_BLOB_SERVER_PORT = 27052
+
+# Share of the TaskManager container left to the Flink JVM; the rest goes to Python UDF workers.
+TASKMANAGER_PROCESS_MEMORY_FRACTION = 0.75
+# How long a TaskManager waits for the JobManager discovery record before failing (and being restarted).
+TASKMANAGER_DISCOVERY_TIMEOUT_S = 900
+
+_RUN_SCRIPTS_DIR = Path(__file__).parent / "run_scripts"
+JOB_HELPER_FILENAME = "flyt_job_helper.py"
 
 
 def _split_job_command_tokens_posix(job_command: str) -> list[str]:
@@ -37,46 +62,60 @@ def _extract_service_name(job_command: str) -> str:
     return "unknown"
 
 
+def _script_fragments(*, use_squashfs_sandbox_unpack: bool, role: Optional[str]) -> List[str]:
+    """Ordered run-script fragments for a MiniCluster job or an application-mode role."""
+    ordered = ["00_set_essentials.sh"]
+    if use_squashfs_sandbox_unpack:
+        ordered.append("00_unpack_runtime_squashfs.sh")
+    ordered.append("01_prepare_squashfs.sh")
+    if role is not None:
+        ordered.append("02_prepare_cluster_bins.sh")
+    ordered += ["21_prepare_libs.sh", "30_prepare_service.sh"]
+    if role is None:
+        ordered.append("40_run_job.sh")
+    elif role == JOBMANAGER_TASK:
+        ordered += ["35_cluster_common.sh", "41_run_jobmanager.sh"]
+    elif role == TASKMANAGER_TASK:
+        ordered += ["35_cluster_common.sh", "42_run_taskmanager.sh"]
+    else:
+        raise ValueError(f"Unknown application-mode role: {role!r}")
+    return ordered
+
+
 def _build_run_script(
     job_command: str,
     config: FlytConfig,
     service_name: str,
     *,
     use_squashfs_sandbox_unpack: bool = False,
+    role: Optional[str] = None,
+    flink_args: Optional[List[str]] = None,
 ) -> str:
-    scripts_dir = Path(__file__).parent / "run_scripts"
     result_script = ["#!/bin/bash", "set -e"]
+    fmt: Dict[str, Any] = {
+        "job_args": _job_args_for_shell(job_command),
+        "service_name": service_name,
+        "python_bin": config.python_bin,
+    }
+    if role is not None:
+        # Values are substituted into the templates, not re-formatted, so braces in the helper are safe.
+        fmt.update(
+            {
+                "flink_args": " ".join(shlex.quote(a) for a in (flink_args or [])),
+                "job_helper": (_RUN_SCRIPTS_DIR / JOB_HELPER_FILENAME).read_text(encoding="utf-8"),
+                "job_helper_filename": JOB_HELPER_FILENAME,
+                "restart_completed_jobs": "1" if config.restart_completed_jobs else "0",
+                "rest_port": FLINK_REST_PORT,
+                "rpc_port": FLINK_JOBMANAGER_RPC_PORT,
+                "discovery_timeout": TASKMANAGER_DISCOVERY_TIMEOUT_S,
+            }
+        )
 
-    if use_squashfs_sandbox_unpack:
-        ordered = [
-            "00_set_essentials.sh",
-            "00_unpack_runtime_squashfs.sh",
-            "01_prepare_squashfs.sh",
-            "21_prepare_libs.sh",
-            "30_prepare_service.sh",
-            "40_run_job.sh",
-        ]
-    else:
-        ordered = [
-            "00_set_essentials.sh",
-            "01_prepare_squashfs.sh",
-            "21_prepare_libs.sh",
-            "30_prepare_service.sh",
-            "40_run_job.sh",
-        ]
-    script_paths = [scripts_dir / name for name in ordered]
-
-    for script_path in script_paths:
+    for name in _script_fragments(use_squashfs_sandbox_unpack=use_squashfs_sandbox_unpack, role=role):
+        script_path = _RUN_SCRIPTS_DIR / name
         result_script.append(f"echo 'Running {script_path.name}...' 1>&2")
         with open(script_path, encoding="utf-8") as script_file:
-            script_text = script_file.read()
-            result_script.append(
-                script_text.format(
-                    job_args=_job_args_for_shell(job_command),
-                    service_name=service_name,
-                    python_bin=config.python_bin,
-                )
-            )
+            result_script.append(script_file.read().format(**fmt))
 
     return "\n".join(result_script)
 
@@ -92,6 +131,97 @@ DEFAULT_ENVIRONMENT = {
 }
 
 
+_MIB = 1024 * 1024
+# Flink JobManager memory model defaults (off-heap, metaspace, JVM overhead bounds and fraction).
+_JM_DEFAULT_OFF_HEAP = 128 * _MIB
+_JM_METASPACE = 256 * _MIB
+_JM_OVERHEAD_MIN = 192 * _MIB
+_JM_OVERHEAD_MAX = 1024 * _MIB
+_JM_OVERHEAD_FRACTION = 0.1
+
+
+def _mebibytes(size_bytes: int) -> str:
+    return f"{max(int(size_bytes) // _MIB, 1)}m"
+
+
+def jobmanager_process_size(max_heap_size_str: str, off_heap_size_str: Optional[str]) -> str:
+    """``jobmanager.memory.process.size`` that makes Flink derive a heap of ``max_heap_size_str``.
+
+    The distribution's config.yaml ships a small ``process.size``, so it must be overridden as a whole:
+    heap + off-heap + metaspace + JVM overhead (a fraction of the total, clamped by Flink's bounds).
+    """
+    heap = parse_memory(max_heap_size_str)
+    off_heap = parse_memory(off_heap_size_str) if off_heap_size_str else _JM_DEFAULT_OFF_HEAP
+    base = heap + off_heap + _JM_METASPACE
+    overhead = base * _JM_OVERHEAD_FRACTION / (1 - _JM_OVERHEAD_FRACTION)
+    overhead = min(max(overhead, _JM_OVERHEAD_MIN), _JM_OVERHEAD_MAX)
+    return _mebibytes(int(base + overhead))
+
+
+def flink_dynamic_properties(
+    config: FlytConfig,
+    jobmanager_params: JobmanagerParams,
+    taskmanager_params: TaskmanagerParams,
+    max_heap_size_str: str,
+    off_heap_size_str: Optional[str],
+) -> Dict[str, str]:
+    """Flink options shared by the JobManager and TaskManagers in application mode.
+
+    Addresses are appended at runtime by the run scripts (slot IP, discovered JobManager).
+    ``config.flink_config`` is applied last and overrides any generated value.
+    """
+    props: Dict[str, str] = {
+        "rest.port": str(FLINK_REST_PORT),
+        "rest.bind-address": "0.0.0.0",
+        "jobmanager.rpc.port": str(FLINK_JOBMANAGER_RPC_PORT),
+        "jobmanager.bind-host": "0.0.0.0",
+        "blob.server.port": str(FLINK_BLOB_SERVER_PORT),
+        "taskmanager.bind-host": "0.0.0.0",
+        "taskmanager.rpc.port": "0",
+        "taskmanager.data.port": "0",
+        "taskmanager.numberOfTaskSlots": str(taskmanager_params.slots),
+        "parallelism.default": str(taskmanager_params.count * taskmanager_params.slots),
+        # Without checkpointing Flink defaults to no restarts: a lost TaskManager would fail the
+        # driver and turn into a full gang restart instead of an in-cluster job restart.
+        "restart-strategy.type": "exponential-delay",
+        "jobmanager.memory.process.size": jobmanager_process_size(max_heap_size_str, off_heap_size_str),
+        "taskmanager.memory.process.size": _mebibytes(
+            int(taskmanager_params.memory * TASKMANAGER_PROCESS_MEMORY_FRACTION)
+        ),
+        "python.executable": config.python_bin,
+        "python.client.executable": config.python_bin,
+        # YT exec nodes are IPv6-first; pin the JVM processor count to the container CPU limit.
+        "env.java.opts.all": "-Djava.net.preferIPv6Addresses=true",
+        "env.java.opts.jobmanager": f"-XX:ActiveProcessorCount={jobmanager_params.cpu}",
+        "env.java.opts.taskmanager": f"-XX:ActiveProcessorCount={taskmanager_params.cpu}",
+    }
+    if off_heap_size_str:
+        props["jobmanager.memory.off-heap.size"] = off_heap_size_str
+    props.update(config.flink_config)
+    return props
+
+
+def _dynamic_property_args(props: Dict[str, str]) -> List[str]:
+    return [f"-D{k}={v}" for k, v in props.items()]
+
+
+def _begin_task(
+    builder: VanillaSpecBuilder,
+    name: str,
+    *,
+    command: str,
+    job_count: int,
+    cpu: int,
+    memory: int,
+    task_spec: Dict[str, Any],
+    layer_paths: List[str],
+) -> None:
+    task = builder.begin_task(name).command(command).job_count(job_count).cpu_limit(cpu).memory_limit(memory)
+    if layer_paths:
+        task = task.tmpfs_path(".")
+    task.copy_files(True).spec(task_spec).end_task()
+
+
 def build_vanilla_operation_spec(
     title: str,
     job_command: str,
@@ -103,32 +233,57 @@ def build_vanilla_operation_spec(
     *,
     off_heap_size_str: str | None = None,
     use_squashfs_sandbox_unpack: bool = False,
+    taskmanager_params: Optional[TaskmanagerParams] = None,
+    yt_proxy: Optional[str] = None,
 ) -> VanillaSpecBuilder:
-    """Build a Vanilla operation spec to launch a Flink job (SquashFS runtime only)."""
+    """Build a Vanilla operation spec to launch a Flink job (SquashFS runtime only).
+
+    ``cluster_mode: minicluster`` yields a single ``flink`` task. ``cluster_mode: application``
+    yields a gang ``jobmanager`` task and a ``taskmanager`` task; ``taskmanager_params`` and
+    ``yt_proxy`` (HTTP proxy the jobs use for discovery) are required then.
+    """
     service_name = config.service_name or _extract_service_name(job_command)
+    application = config.is_application_cluster
+    if application:
+        if taskmanager_params is None:
+            raise ValueError("taskmanager_params is required for cluster_mode: application")
+        if not (yt_proxy or "").strip():
+            raise ValueError("yt_proxy is required for cluster_mode: application")
+        if not (config.discovery_path_prefix or "").strip():
+            raise ValueError("discovery_path_prefix is required for cluster_mode: application")
 
-    java_opts = f"-Xmx{max_heap_size_str}"
-    if off_heap_size_str:
-        # Bounds NIO/netty direct buffers (gRPC connectors); otherwise the JVM
-        # defaults MaxDirectMemorySize to ~the max heap size.
-        java_opts += f" -XX:MaxDirectMemorySize={off_heap_size_str}"
-    if jobmanager_params.cpu:
-        # Pin the JVM's processor count to the container CPU limit.
-        java_opts += f" -XX:ActiveProcessorCount={jobmanager_params.cpu}"
-
-    environment = {
+    environment: Dict[str, str] = {
         **DEFAULT_ENVIRONMENT,
         "JAVA_HOME": config.java_home,
-        "FLINK_ENV_JAVA_OPTS": java_opts,
         FLINK_STANDALONE_FLAG: "True",
-        **config.extra_environment,
     }
+    if application:
+        # Memory and JVM flags go through Flink's own memory model (-D options), never -Xmx.
+        environment[FLYT_CLUSTER_MODE_ENV] = "application"
+        environment[FLYT_YT_PROXY_ENV] = str(yt_proxy).strip()
+        environment[FLYT_DISCOVERY_PREFIX_ENV] = config.discovery_path_prefix.strip().rstrip("/")
+    else:
+        java_opts = f"-Xmx{max_heap_size_str}"
+        if off_heap_size_str:
+            # Bounds NIO/netty direct buffers (gRPC connectors); otherwise the JVM
+            # defaults MaxDirectMemorySize to ~the max heap size.
+            java_opts += f" -XX:MaxDirectMemorySize={off_heap_size_str}"
+        if jobmanager_params.cpu:
+            # Pin the JVM's processor count to the container CPU limit.
+            java_opts += f" -XX:ActiveProcessorCount={jobmanager_params.cpu}"
+        environment["FLINK_ENV_JAVA_OPTS"] = java_opts
+    environment.update(config.extra_environment)
 
-    common_task_spec = {
+    common_task_spec: Dict[str, Any] = {
         **DEFAULT_TASK_SPEC,
         "file_paths": operation_params.file_paths,
         "environment": environment,
     }
+    if application:
+        # Gang tasks reject restart_completed_jobs; the JobManager script re-runs the driver instead.
+        common_task_spec.pop("restart_completed_jobs")
+    else:
+        common_task_spec["restart_completed_jobs"] = config.restart_completed_jobs
     if operation_params.layer_paths:
         common_task_spec["layer_paths"] = operation_params.layer_paths
 
@@ -136,23 +291,65 @@ def build_vanilla_operation_spec(
         common_task_spec["network_project"] = config.network_project
 
     builder = VanillaSpecBuilder()
-    task = (
-        builder.begin_task("flink")
-        .command(
-            _build_run_script(
+    if application:
+        assert taskmanager_params is not None
+        flink_args = _dynamic_property_args(
+            flink_dynamic_properties(
+                config, jobmanager_params, taskmanager_params, max_heap_size_str, off_heap_size_str
+            )
+        )
+        _begin_task(
+            builder,
+            JOBMANAGER_TASK,
+            command=_build_run_script(
                 job_command,
                 config,
                 service_name,
                 use_squashfs_sandbox_unpack=use_squashfs_sandbox_unpack,
-            )
+                role=JOBMANAGER_TASK,
+                flink_args=flink_args,
+            ),
+            job_count=1,
+            cpu=jobmanager_params.cpu,
+            memory=jobmanager_params.memory,
+            # Any JobManager failure restarts the whole cluster with a new incarnation.
+            task_spec={**common_task_spec, "gang_options": {}},
+            layer_paths=operation_params.layer_paths,
         )
-        .job_count(1)
-        .cpu_limit(jobmanager_params.cpu)
-        .memory_limit(jobmanager_params.memory)
-    )
-    if operation_params.layer_paths:
-        task = task.tmpfs_path(".")
-    task.copy_files(True).spec(common_task_spec).end_task()
+        _begin_task(
+            builder,
+            TASKMANAGER_TASK,
+            command=_build_run_script(
+                job_command,
+                config,
+                service_name,
+                use_squashfs_sandbox_unpack=use_squashfs_sandbox_unpack,
+                role=TASKMANAGER_TASK,
+                flink_args=flink_args,
+            ),
+            job_count=taskmanager_params.count,
+            cpu=taskmanager_params.cpu,
+            memory=taskmanager_params.memory,
+            # Not a gang task: a lost TaskManager is restarted alone and Flink restarts the job.
+            task_spec=common_task_spec,
+            layer_paths=operation_params.layer_paths,
+        )
+    else:
+        _begin_task(
+            builder,
+            MINICLUSTER_TASK,
+            command=_build_run_script(
+                job_command,
+                config,
+                service_name,
+                use_squashfs_sandbox_unpack=use_squashfs_sandbox_unpack,
+            ),
+            job_count=1,
+            cpu=jobmanager_params.cpu,
+            memory=jobmanager_params.memory,
+            task_spec=common_task_spec,
+            layer_paths=operation_params.layer_paths,
+        )
 
     spec_dict = {}
     if title:

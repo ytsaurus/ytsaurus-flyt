@@ -123,6 +123,9 @@ def apply_cypress_base_path(cfg: FlytConfig, cypress_base_path: str) -> FlytConf
     wheels = (cfg.wheel_cache_prefix or "").strip()
     if not wheels:
         cfg = replace(cfg, wheel_cache_prefix=f"{base}/wheels")
+    discovery = (cfg.discovery_path_prefix or "").strip()
+    if not discovery:
+        cfg = replace(cfg, discovery_path_prefix=f"{base}/discovery")
     return cfg
 
 

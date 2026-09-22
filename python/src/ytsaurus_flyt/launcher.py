@@ -9,7 +9,11 @@ from typing import Any, Dict, Optional, Union
 from yt.wrapper import YtClient
 from yt.wrapper.run_operation_commands import run_operation
 
-from ytsaurus_flyt.config import FlytConfig, require_squashfs_runtime_config
+from ytsaurus_flyt.config import (
+    FlytConfig,
+    require_application_cluster_config,
+    require_squashfs_runtime_config,
+)
 from ytsaurus_flyt.credentials import get_secure_credentials
 from ytsaurus_flyt.flink_lib_jars import (
     partition_flink_lib_jars_for_delivery,
@@ -22,6 +26,7 @@ from ytsaurus_flyt.models import (
     ClusterPreset,
     JobmanagerParams,
     OperationParams,
+    TaskmanagerParams,
 )
 from ytsaurus_flyt.spec import build_vanilla_operation_spec
 from ytsaurus_flyt.wheel_utils import dedupe_file_paths_by_basename, upload_service_wheel
@@ -47,6 +52,18 @@ def _make_jobmanager_params(preset_params: ClusterParams) -> JobmanagerParams:
     return JobmanagerParams(
         cpu=preset_params.cpu,
         memory=preset_params.memory_bytes(),
+    )
+
+
+def _make_taskmanager_params(config: FlytConfig, jobmanager_preset: ClusterParams) -> TaskmanagerParams:
+    """TaskManager resources from ``taskmanager_preset`` (or the JobManager preset) and the config counts."""
+    name = (config.taskmanager_preset or "").strip()
+    params = ClusterPreset[name.upper()].params if name else jobmanager_preset
+    return TaskmanagerParams(
+        cpu=params.cpu,
+        memory=params.memory_bytes(),
+        count=config.taskmanager_count,
+        slots=config.taskmanager_slots,
     )
 
 
@@ -76,8 +93,13 @@ def launch_vanilla_job(
     sync: bool = True,
     force_rebuild_layer: bool = False,
     profile_name: Optional[str] = None,
+    taskmanager_params: Optional[TaskmanagerParams] = None,
 ) -> Any:
-    """Submit a PyFlink job as a Vanilla operation (application mode, ``execute.wait()``)."""
+    """Submit a PyFlink job as a Vanilla operation (``execute.wait()`` semantics).
+
+    With ``config.cluster_mode == "application"`` the operation runs a JobManager task and a
+    TaskManager task; ``taskmanager_params`` defaults to ``config.taskmanager_*`` over the preset.
+    """
     if isinstance(preset, ClusterPreset):
         preset_params = preset.params
         preset_name = preset.name
@@ -93,6 +115,20 @@ def launch_vanilla_job(
     )
 
     require_squashfs_runtime_config(config)
+    require_application_cluster_config(config)
+    if config.is_application_cluster:
+        if proxy_url == "unknown":
+            raise ValueError(
+                "Cannot determine the YT proxy URL from yt_client; application mode needs it for discovery"
+            )
+        if taskmanager_params is None:
+            taskmanager_params = _make_taskmanager_params(config, preset_params)
+        logger.info(
+            "Application cluster: 1 JobManager + %d TaskManager(s) x %d slot(s), discovery under %s",
+            taskmanager_params.count,
+            taskmanager_params.slots,
+            config.discovery_path_prefix,
+        )
 
     logger.info("Fetching credentials...")
     secure_vault = get_secure_credentials(yt_client, extra_secrets=extra_secrets)
@@ -172,6 +208,8 @@ def launch_vanilla_job(
             max_heap_size_str=preset_params.max_heap_size,
             off_heap_size_str=preset_params.off_heap_size,
             use_squashfs_sandbox_unpack=config.squashfs_layer_delivery == "sandbox_unpack",
+            taskmanager_params=taskmanager_params if config.is_application_cluster else None,
+            yt_proxy=proxy_url if config.is_application_cluster else None,
         )
 
         logger.info("Starting YT Vanilla operation...")

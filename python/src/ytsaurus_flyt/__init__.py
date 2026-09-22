@@ -9,6 +9,7 @@ from ytsaurus_flyt.models import (
     ClusterPreset,
     JobmanagerParams,
     OperationParams,
+    TaskmanagerParams,
 )
 
 __all__ = [
@@ -18,6 +19,7 @@ __all__ = [
     "ClusterPreset",
     "JobmanagerParams",
     "OperationParams",
+    "TaskmanagerParams",
     "build_vanilla_operation_spec",
     "ensure_runtime_layer",
     "FlinkLibJarsResolveResult",

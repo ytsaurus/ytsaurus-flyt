@@ -8,6 +8,7 @@ from typing import List, Optional, Tuple
 from yt.wrapper import YtClient
 
 from ytsaurus_flyt.config import (
+    APPLICATION_VALIDATE_DISCOVERY_MSG,
     SQUASHFS_VALIDATE_RUNTIME_PACKAGES_MSG,
     SQUASHFS_VALIDATE_RUNTIME_VERSION_MSG,
     FlytConfig,
@@ -45,6 +46,20 @@ def validate_flyt_config(
     rows: List[Tuple[str, bool, str]] = []
 
     rows.append(("Runtime mode", True, "SquashFS"))
+    if config.is_application_cluster:
+        tm_preset = config.taskmanager_preset or "same as JobManager"
+        rows.append(
+            (
+                "cluster_mode",
+                True,
+                f"application: 1 JobManager + {config.taskmanager_count} TaskManager(s) "
+                f"x {config.taskmanager_slots} slot(s), TaskManager preset {tm_preset}",
+            )
+        )
+        discovery = (config.discovery_path_prefix or "").strip()
+        rows.append(("discovery_path_prefix", bool(discovery), discovery or APPLICATION_VALIDATE_DISCOVERY_MSG))
+    else:
+        rows.append(("cluster_mode", True, "minicluster (single job, in-JVM MiniCluster)"))
 
     ok_pkgs = bool(config.runtime_python_packages)
     rows.append(

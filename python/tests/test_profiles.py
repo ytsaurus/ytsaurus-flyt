@@ -70,3 +70,10 @@ def test_resolve_effective_profile_name_env(monkeypatch, tmp_path: Path):
     assert resolve_effective_profile_name(None) == "from-file"
 
     assert resolve_effective_profile_name("cli") == "cli"
+
+
+def test_apply_cypress_base_path_derives_discovery_prefix():
+    out = apply_cypress_base_path(FlytConfig(), "//home/flyt/clusters/x/")
+    assert out.discovery_path_prefix == "//home/flyt/clusters/x/discovery"
+    explicit = apply_cypress_base_path(FlytConfig(discovery_path_prefix="//d"), "//home/flyt/clusters/x")
+    assert explicit.discovery_path_prefix == "//d"

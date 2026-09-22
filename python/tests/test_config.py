@@ -143,3 +143,69 @@ def test_require_squashfs_runtime_config_missing_version():
         require_squashfs_runtime_config(
             FlytConfig(runtime_python_packages=["apache-flink==1.20.1"], runtime_python_version="")
         )
+
+
+class TestClusterModeConfig:
+    def test_defaults_are_minicluster(self):
+        config = FlytConfig()
+        assert config.cluster_mode == "minicluster"
+        assert config.is_application_cluster is False
+        assert config.taskmanager_count == 1
+        assert config.taskmanager_preset == ""
+        assert config.taskmanager_slots == 1
+        assert config.restart_completed_jobs is True
+        assert config.discovery_path_prefix == ""
+        assert config.flink_config == {}
+
+    def test_application_mode_normalizes(self):
+        config = FlytConfig(cluster_mode=" Application ", taskmanager_preset="Small", flink_config={"a.b": 1})
+        assert config.cluster_mode == "application"
+        assert config.is_application_cluster is True
+        assert config.taskmanager_preset == "small"
+        assert config.flink_config == {"a.b": "1"}
+
+    def test_invalid_cluster_mode(self):
+        with pytest.raises(ValueError, match="cluster_mode"):
+            FlytConfig(cluster_mode="session")
+
+    def test_invalid_taskmanager_count_and_slots(self):
+        with pytest.raises(ValueError, match="taskmanager_count"):
+            FlytConfig(taskmanager_count=0)
+        with pytest.raises(ValueError, match="taskmanager_slots"):
+            FlytConfig(taskmanager_slots=0)
+
+    def test_invalid_taskmanager_preset(self):
+        with pytest.raises(ValueError, match="taskmanager_preset"):
+            FlytConfig(taskmanager_preset="huge")
+
+    def test_from_yaml_application_fields(self):
+        yaml_content = """
+cluster_mode: application
+taskmanager_count: 3
+taskmanager_preset: large
+taskmanager_slots: 2
+restart_completed_jobs: false
+discovery_path_prefix: //home/flyt/discovery
+flink_config:
+  restart-strategy.type: fixed-delay
+"""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write(yaml_content)
+            f.flush()
+            config = FlytConfig.from_yaml(f.name)
+        os.unlink(f.name)
+        assert config.is_application_cluster
+        assert config.taskmanager_count == 3
+        assert config.taskmanager_preset == "large"
+        assert config.taskmanager_slots == 2
+        assert config.restart_completed_jobs is False
+        assert config.discovery_path_prefix == "//home/flyt/discovery"
+        assert config.flink_config == {"restart-strategy.type": "fixed-delay"}
+
+    def test_require_application_cluster_config(self):
+        from ytsaurus_flyt.config import require_application_cluster_config
+
+        require_application_cluster_config(FlytConfig())  # minicluster: nothing required
+        with pytest.raises(ValueError, match="discovery_path_prefix"):
+            require_application_cluster_config(FlytConfig(cluster_mode="application"))
+        require_application_cluster_config(FlytConfig(cluster_mode="application", discovery_path_prefix="//d"))

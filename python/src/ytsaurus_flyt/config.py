@@ -6,7 +6,10 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
+from ytsaurus_flyt.models import ClusterPreset
+
 _VALID_SQUASHFS_DELIVERY: Tuple[str, ...] = ("layer_paths", "sandbox_unpack")
+_VALID_CLUSTER_MODES: Tuple[str, ...] = ("minicluster", "application")
 _VALID_SQUASHFS_COMPRESSION: Tuple[str, ...] = ("gzip", "xz", "zstd", "lz4")
 
 # Typical OpenJDK 11 path on Debian/Ubuntu exec images; single source for FlytConfig default and CLI profile template.
@@ -114,6 +117,41 @@ class FlytConfig:
     is skipped entirely.
     """
 
+    # --- Cluster topology ---
+    cluster_mode: str = "minicluster"
+    """``minicluster``: one job runs the PyFlink script with an in-JVM MiniCluster (JobManager and
+    TaskManager share a single JVM). ``application``: a Flink application cluster with a
+    ``jobmanager`` task (one gang job) and a ``taskmanager`` task with :attr:`taskmanager_count` jobs.
+    """
+
+    taskmanager_count: int = 1
+    """Number of TaskManager jobs (``application`` mode only)."""
+
+    taskmanager_preset: str = ""
+    """``ClusterPreset`` name (``micro``, ``small``, ...) for TaskManager cpu/memory (``application`` mode).
+    Empty uses the same preset as the JobManager.
+    """
+
+    taskmanager_slots: int = 1
+    """``taskmanager.numberOfTaskSlots`` per TaskManager (``application`` mode)."""
+
+    restart_completed_jobs: bool = True
+    """Re-run the pipeline when it finishes successfully (streaming semantics, the operation never
+    completes on its own). ``minicluster``: passed to the Vanilla task as ``restart_completed_jobs``.
+    ``application``: the JobManager job re-runs the driver in place (gang tasks cannot use the YT
+    option). Set ``False`` for batch jobs: the operation is completed once the driver exits 0.
+    """
+
+    discovery_path_prefix: str = ""
+    """Cypress directory where the JobManager publishes its address for TaskManagers
+    (``application`` mode; required). Profiles derive ``<cypress_base_path>/discovery``.
+    """
+
+    flink_config: Dict[str, str] = field(default_factory=dict)
+    """Extra Flink options for ``application`` mode, passed as ``-D key=value`` to the JobManager and
+    TaskManagers after the generated ones (memory, ports, restart strategy), so they override them.
+    """
+
     def __post_init__(self) -> None:
         d = (self.squashfs_layer_delivery or "").strip()
         c = (self.squashfs_compression or "").strip().lower()
@@ -123,6 +161,23 @@ class FlytConfig:
             raise ValueError(f"squashfs_compression must be one of {list(_VALID_SQUASHFS_COMPRESSION)}, got {c!r}")
         self.squashfs_layer_delivery = d
         self.squashfs_compression = c
+        m = (self.cluster_mode or "").strip().lower()
+        if m not in _VALID_CLUSTER_MODES:
+            raise ValueError(f"cluster_mode must be one of {list(_VALID_CLUSTER_MODES)}, got {m!r}")
+        self.cluster_mode = m
+        if int(self.taskmanager_count) < 1:
+            raise ValueError(f"taskmanager_count must be >= 1, got {self.taskmanager_count!r}")
+        if int(self.taskmanager_slots) < 1:
+            raise ValueError(f"taskmanager_slots must be >= 1, got {self.taskmanager_slots!r}")
+        self.taskmanager_count = int(self.taskmanager_count)
+        self.taskmanager_slots = int(self.taskmanager_slots)
+        self.taskmanager_preset = (self.taskmanager_preset or "").strip().lower()
+        if self.taskmanager_preset and self.taskmanager_preset.upper() not in ClusterPreset.__members__:
+            raise ValueError(
+                f"taskmanager_preset must be one of {[m.lower() for m in ClusterPreset.__members__]}, "
+                f"got {self.taskmanager_preset!r}"
+            )
+        self.flink_config = {str(k): str(v) for k, v in (self.flink_config or {}).items()}
         self.embed_squashfs_layer_jar_basenames = _normalize_jar_basename_list(self.embed_squashfs_layer_jar_basenames)
         self.runtime_jar_basenames = _normalize_jar_basename_list(self.runtime_jar_basenames)
         emb = set(self.embed_squashfs_layer_jar_basenames)
@@ -159,6 +214,23 @@ class FlytConfig:
                 stacklevel=2,
             )
         return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
+
+    @property
+    def is_application_cluster(self) -> bool:
+        return self.cluster_mode == "application"
+
+
+APPLICATION_VALIDATE_DISCOVERY_MSG = (
+    "required for cluster_mode: application (profiles derive <cypress_base_path>/discovery)"
+)
+
+
+def require_application_cluster_config(config: FlytConfig) -> None:
+    """Raise if ``cluster_mode: application`` prerequisites are missing."""
+    if not config.is_application_cluster:
+        return
+    if not (config.discovery_path_prefix or "").strip():
+        raise ValueError(f"discovery_path_prefix is {APPLICATION_VALIDATE_DISCOVERY_MSG}.")
 
 
 # Messages shared with validate_flyt_config row output

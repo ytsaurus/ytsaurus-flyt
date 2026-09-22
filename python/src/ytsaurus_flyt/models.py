@@ -112,3 +112,23 @@ class JobmanagerParams:
 
     cpu: int = 2
     memory: int = parse_memory("4G")
+
+
+@dataclass
+class TaskmanagerParams:
+    """Parameters for the Flink TaskManager task (``cluster_mode: application`` only).
+
+    ``count`` TaskManager jobs are started, each with ``slots`` task slots; the default
+    job parallelism becomes ``count * slots``.
+    """
+
+    cpu: int = 2
+    memory: int = parse_memory("4G")
+    count: int = 1
+    slots: int = 1
+
+    def __post_init__(self) -> None:
+        if self.count < 1:
+            raise ValueError(f"TaskmanagerParams.count must be >= 1, got {self.count}")
+        if self.slots < 1:
+            raise ValueError(f"TaskmanagerParams.slots must be >= 1, got {self.slots}")
