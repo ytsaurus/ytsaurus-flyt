@@ -180,7 +180,11 @@ def flink_dynamic_properties(
         "taskmanager.rpc.port": "0",
         "taskmanager.data.port": "0",
         "taskmanager.numberOfTaskSlots": str(taskmanager_params.slots),
-        "parallelism.default": str(taskmanager_params.count * taskmanager_params.slots),
+        "parallelism.default": str(
+            config.parallelism
+            if config.parallelism is not None
+            else taskmanager_params.count * taskmanager_params.slots
+        ),
         # Without checkpointing Flink defaults to no restarts: a lost TaskManager would fail the
         # driver and turn into a full gang restart instead of an in-cluster job restart.
         "restart-strategy.type": "exponential-delay",

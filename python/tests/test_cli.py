@@ -357,6 +357,32 @@ def test_run_application_flags_override_profile_config(monkeypatch, tmp_path: Pa
     assert cfg.taskmanager_slots == 2
 
 
+def test_run_parallelism_flag_sizes_cluster(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("FLYT_CONFIG_DIR", str(tmp_path))
+    _write_profile(tmp_path, "p1")
+    captured: dict = {}
+    monkeypatch.setattr("ytsaurus_flyt.__main__.launch_vanilla_job", lambda **kw: captured.update(kw))
+    monkeypatch.setattr("ytsaurus_flyt.__main__.make_yt_client", lambda _p: object())
+
+    result = CliRunner().invoke(
+        cli,
+        ["run", "--mode", "application", "--parallelism", "5", "--slots", "2", "--wheel", "svc.whl", "x.py"],
+        catch_exceptions=False,
+    )
+    assert result.exit_code == 0, result.output
+    cfg = captured["config"]
+    assert cfg.parallelism == 5
+    assert cfg.taskmanager_count is None
+    assert cfg.effective_taskmanager_count == 3
+
+    result = CliRunner().invoke(
+        cli,
+        ["run", "--mode", "application", "--parallelism", "5", "--taskmanagers", "1", "--wheel", "svc.whl", "x.py"],
+    )
+    assert result.exit_code != 0
+    assert "does not fit" in result.output
+
+
 def test_run_without_mode_flag_keeps_profile_cluster_mode(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("FLYT_CONFIG_DIR", str(tmp_path))
     profiles = tmp_path / "profiles"

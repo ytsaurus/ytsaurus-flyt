@@ -62,7 +62,7 @@ def _make_taskmanager_params(config: FlytConfig, jobmanager_preset: ClusterParam
     return TaskmanagerParams(
         cpu=params.cpu,
         memory=params.memory_bytes(),
-        count=config.taskmanager_count,
+        count=config.effective_taskmanager_count,
         slots=config.taskmanager_slots,
     )
 
@@ -124,9 +124,11 @@ def launch_vanilla_job(
         if taskmanager_params is None:
             taskmanager_params = _make_taskmanager_params(config, preset_params)
         logger.info(
-            "Application cluster: 1 JobManager + %d TaskManager(s) x %d slot(s), discovery under %s",
+            "Application cluster: 1 JobManager + %d TaskManager(s) x %d slot(s), parallelism.default %d, "
+            "discovery under %s",
             taskmanager_params.count,
             taskmanager_params.slots,
+            config.effective_parallelism,
             config.discovery_path_prefix,
         )
 

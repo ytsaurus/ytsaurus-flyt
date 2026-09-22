@@ -150,7 +150,10 @@ class TestClusterModeConfig:
         config = FlytConfig()
         assert config.cluster_mode == "minicluster"
         assert config.is_application_cluster is False
-        assert config.taskmanager_count == 1
+        assert config.taskmanager_count is None
+        assert config.parallelism is None
+        assert config.effective_taskmanager_count == 1
+        assert config.effective_parallelism == 1
         assert config.taskmanager_preset == ""
         assert config.taskmanager_slots == 1
         assert config.restart_completed_jobs is True
@@ -201,6 +204,22 @@ flink_config:
         assert config.restart_completed_jobs is False
         assert config.discovery_path_prefix == "//home/flyt/discovery"
         assert config.flink_config == {"restart-strategy.type": "fixed-delay"}
+
+    def test_taskmanager_count_derived_from_parallelism(self):
+        cfg = FlytConfig(parallelism=8, taskmanager_slots=3)
+        assert cfg.effective_taskmanager_count == 3  # ceil(8 / 3)
+        assert cfg.effective_parallelism == 8
+        explicit = FlytConfig(parallelism=4, taskmanager_count=4, taskmanager_slots=2)
+        assert explicit.effective_taskmanager_count == 4
+        assert explicit.effective_parallelism == 4
+        no_parallelism = FlytConfig(taskmanager_count=2, taskmanager_slots=2)
+        assert no_parallelism.effective_parallelism == 4
+
+    def test_parallelism_must_fit_into_explicit_cluster(self):
+        with pytest.raises(ValueError, match="does not fit"):
+            FlytConfig(parallelism=5, taskmanager_count=2, taskmanager_slots=2)
+        with pytest.raises(ValueError, match="parallelism"):
+            FlytConfig(parallelism=0)
 
     def test_require_application_cluster_config(self):
         from ytsaurus_flyt.config import require_application_cluster_config

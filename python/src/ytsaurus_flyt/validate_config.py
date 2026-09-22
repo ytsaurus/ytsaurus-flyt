@@ -52,8 +52,9 @@ def validate_flyt_config(
             (
                 "cluster_mode",
                 True,
-                f"application: 1 JobManager + {config.taskmanager_count} TaskManager(s) "
-                f"x {config.taskmanager_slots} slot(s), TaskManager preset {tm_preset}",
+                f"application: 1 JobManager + {config.effective_taskmanager_count} TaskManager(s) "
+                f"x {config.taskmanager_slots} slot(s), parallelism.default {config.effective_parallelism}, "
+                f"TaskManager preset {tm_preset}",
             )
         )
         discovery = (config.discovery_path_prefix or "").strip()

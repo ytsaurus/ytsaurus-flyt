@@ -158,6 +158,11 @@ def test_flink_dynamic_properties_derive_memory_slots_and_apply_overrides():
     assert props["custom.key"] == "v"
 
 
+def test_flink_dynamic_properties_use_explicit_parallelism():
+    props = flink_dynamic_properties(_app_config(parallelism=3), _jm(), _tm(count=2, slots=2), "2324M", None)
+    assert props["parallelism.default"] == "3"
+
+
 def test_flink_dynamic_properties_without_off_heap():
     props = flink_dynamic_properties(_app_config(), _jm(), _tm(), "2324M", None)
     assert "jobmanager.memory.off-heap.size" not in props

@@ -1,5 +1,6 @@
 """Configuration for ytsaurus-flyt Vanilla operations."""
 
+import math
 import warnings
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
@@ -124,8 +125,16 @@ class FlytConfig:
     ``jobmanager`` task (one gang job) and a ``taskmanager`` task with :attr:`taskmanager_count` jobs.
     """
 
-    taskmanager_count: int = 1
-    """Number of TaskManager jobs (``application`` mode only)."""
+    taskmanager_count: Optional[int] = None
+    """Number of TaskManager jobs (``application`` mode only). Unset: derived from :attr:`parallelism`
+    (``ceil(parallelism / taskmanager_slots)``), or 1 when neither is set.
+    """
+
+    parallelism: Optional[int] = None
+    """Default job parallelism (``parallelism.default``) for ``application`` mode. Also sizes the cluster
+    when :attr:`taskmanager_count` is unset; with both set, ``taskmanager_count * taskmanager_slots`` must
+    cover it. The pipeline's own ``set_parallelism`` still wins over the default.
+    """
 
     taskmanager_preset: str = ""
     """``ClusterPreset`` name (``micro``, ``small``, ...) for TaskManager cpu/memory (``application`` mode).
@@ -165,12 +174,24 @@ class FlytConfig:
         if m not in _VALID_CLUSTER_MODES:
             raise ValueError(f"cluster_mode must be one of {list(_VALID_CLUSTER_MODES)}, got {m!r}")
         self.cluster_mode = m
-        if int(self.taskmanager_count) < 1:
-            raise ValueError(f"taskmanager_count must be >= 1, got {self.taskmanager_count!r}")
+        if self.taskmanager_count is not None:
+            if int(self.taskmanager_count) < 1:
+                raise ValueError(f"taskmanager_count must be >= 1, got {self.taskmanager_count!r}")
+            self.taskmanager_count = int(self.taskmanager_count)
+        if self.parallelism is not None:
+            if int(self.parallelism) < 1:
+                raise ValueError(f"parallelism must be >= 1, got {self.parallelism!r}")
+            self.parallelism = int(self.parallelism)
         if int(self.taskmanager_slots) < 1:
             raise ValueError(f"taskmanager_slots must be >= 1, got {self.taskmanager_slots!r}")
-        self.taskmanager_count = int(self.taskmanager_count)
         self.taskmanager_slots = int(self.taskmanager_slots)
+        if self.taskmanager_count is not None and self.parallelism is not None:
+            capacity = self.taskmanager_count * self.taskmanager_slots
+            if capacity < self.parallelism:
+                raise ValueError(
+                    f"parallelism {self.parallelism} does not fit into taskmanager_count * taskmanager_slots "
+                    f"= {capacity}; raise taskmanager_count/taskmanager_slots or drop taskmanager_count to derive it"
+                )
         self.taskmanager_preset = (self.taskmanager_preset or "").strip().lower()
         if self.taskmanager_preset and self.taskmanager_preset.upper() not in ClusterPreset.__members__:
             raise ValueError(
@@ -218,6 +239,22 @@ class FlytConfig:
     @property
     def is_application_cluster(self) -> bool:
         return self.cluster_mode == "application"
+
+    @property
+    def effective_taskmanager_count(self) -> int:
+        """TaskManager jobs to start: explicit count, else enough slots for ``parallelism``, else 1."""
+        if self.taskmanager_count is not None:
+            return self.taskmanager_count
+        if self.parallelism is not None:
+            return max(1, math.ceil(self.parallelism / self.taskmanager_slots))
+        return 1
+
+    @property
+    def effective_parallelism(self) -> int:
+        """``parallelism.default`` for the cluster: explicit value, else every slot of every TaskManager."""
+        if self.parallelism is not None:
+            return self.parallelism
+        return self.effective_taskmanager_count * self.taskmanager_slots
 
 
 APPLICATION_VALIDATE_DISCOVERY_MSG = (

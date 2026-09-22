@@ -64,9 +64,10 @@ Application mode fields (profile or flags):
 
 ```yaml
 cluster_mode: application
-taskmanager_count: 4          # --taskmanagers
+parallelism: 8                # --parallelism; sizes the cluster: ceil(parallelism / slots) TaskManagers
+taskmanager_slots: 2          # --slots
+taskmanager_count: 4          # --taskmanagers; optional, must cover parallelism when both are set
 taskmanager_preset: small     # --tm-preset; empty = same preset as the JobManager
-taskmanager_slots: 2          # --slots; parallelism.default = count * slots
 restart_completed_jobs: true  # false: complete the operation when the pipeline finishes (batch)
 discovery_path_prefix: //home/flyt/clusters/my-dev/discovery   # derived from cypress_base_path
 flink_config:                 # optional Flink overrides, applied last
@@ -76,6 +77,8 @@ flink_config:                 # optional Flink overrides, applied last
 How it works: the JobManager is a [gang](https://ytsaurus.tech/docs/en/user-guide/data-processing/operations/vanilla#gang-operations) job, so any JobManager failure restarts the whole cluster with a new incarnation. It publishes its address under `discovery_path_prefix/<operation_id>` (kept alive by a heartbeat); TaskManagers wait for that record, check it belongs to their incarnation, and connect. Job-to-job traffic uses `YT_IP_ADDRESS_FASTBONE` when the exec node provides it (the default address is filtered between containers on some clusters); the Web UI stays on the default address. A failed TaskManager is restarted by YT on its own and the job recovers through Flink's restart strategy (`exponential-delay` by default). The Web UI stays on port 27050 of the JobManager job.
 
 Memory: the JobManager JVM heap is the preset `max_heap`, the rest of the container is left to the Python driver; TaskManagers give 75% of their container to `taskmanager.memory.process.size` and the rest to Python UDF workers. Override any of it via `flink_config`.
+
+Sizing: a standalone Flink cluster cannot ask YT for more TaskManagers, so the job's parallelism must fit into `taskmanager_count * taskmanager_slots` (otherwise it waits for slots and fails after `slot.request.timeout`). Set `parallelism` and let flyt derive the count, or set both and flyt checks they fit. `parallelism.default` is `parallelism` when set, else `count * slots`; a pipeline's own `set_parallelism` still overrides it.
 
 The MiniCluster script and Flink configuration are untouched by these fields.
 
@@ -99,7 +102,7 @@ With `--wheel` only, pass the script path as it appears inside the unpacked whee
 
 `--force-rebuild` ignores a cached SquashFS on Cypress and rebuilds the layer.
 
-`--mode application --taskmanagers N [--tm-preset P --slots K]` runs the pipeline as an application cluster (see [Cluster modes](#cluster-modes)); flags override the profile for this run.
+`--mode application --parallelism N [--slots K --tm-preset P]` (or `--taskmanagers N`) runs the pipeline as an application cluster (see [Cluster modes](#cluster-modes)); flags override the profile for this run.
 
 `-d` / `--detach` submits the operation, waits until it materializes, prints the tracking link and exits. Use `flyt ui --wait` afterwards to find the Flink Web UI. Add `--cache-wheel` to reuse the uploaded wheel across runs (needs `wheel_cache_prefix` or `cypress_base_path`).
 

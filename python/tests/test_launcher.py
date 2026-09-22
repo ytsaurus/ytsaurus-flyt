@@ -61,5 +61,7 @@ def test_make_taskmanager_params_from_config():
     micro = ClusterPreset.MICRO.params
     same = _make_taskmanager_params(FlytConfig(taskmanager_count=3, taskmanager_slots=2), micro)
     assert (same.cpu, same.memory, same.count, same.slots) == (micro.cpu, micro.memory_bytes(), 3, 2)
+    derived = _make_taskmanager_params(FlytConfig(parallelism=7, taskmanager_slots=2), micro)
+    assert (derived.count, derived.slots) == (4, 2)
     large = _make_taskmanager_params(FlytConfig(taskmanager_preset="large"), micro)
     assert (large.cpu, large.memory) == (ClusterPreset.LARGE.params.cpu, ClusterPreset.LARGE.params.memory_bytes())

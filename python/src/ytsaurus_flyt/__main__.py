@@ -383,7 +383,16 @@ def validate(
     "taskmanager_count",
     type=click.IntRange(min=1),
     default=None,
-    help="TaskManager job count for --mode application (default: taskmanager_count from profile, or 1).",
+    help="TaskManager job count for --mode application (default: taskmanager_count from profile, "
+    "else derived from --parallelism, else 1).",
+)
+@click.option(
+    "--parallelism",
+    "parallelism",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Default job parallelism for --mode application; sizes the cluster when --taskmanagers is not set "
+    "(ceil(parallelism / slots) TaskManagers).",
 )
 @click.option(
     "--tm-preset",
@@ -425,6 +434,7 @@ def run(
     preset: Optional[str],
     cluster_mode: Optional[str],
     taskmanager_count: Optional[int],
+    parallelism: Optional[int],
     taskmanager_preset: Optional[str],
     taskmanager_slots: Optional[int],
     wheel_path: Optional[str],
@@ -442,6 +452,7 @@ def run(
     cluster_overrides = {
         "cluster_mode": cluster_mode,
         "taskmanager_count": taskmanager_count,
+        "parallelism": parallelism,
         "taskmanager_preset": taskmanager_preset,
         "taskmanager_slots": taskmanager_slots,
     }
