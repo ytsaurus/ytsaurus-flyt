@@ -161,7 +161,8 @@ class FlytConfig:
     """Shell command started in the background in every ``application``-mode job (JobManager and
     TaskManagers) right before Flink, from the service directory with the job environment and
     ``secure_vault`` keys exported; killed when the job exits. Use it for per-container helpers
-    such as a metrics agent that every JVM must reach on ``localhost``.
+    such as a metrics agent that every JVM must reach on ``localhost``. Ignored in ``minicluster``
+    mode (the profile may keep it while the mode is chosen per run).
     """
 
     flink_config: Dict[str, str] = field(default_factory=dict)
@@ -211,8 +212,6 @@ class FlytConfig:
             )
         self.flink_config = {str(k): str(v) for k, v in (self.flink_config or {}).items()}
         self.sidecar_command = (self.sidecar_command or "").strip()
-        if self.sidecar_command and not self.is_application_cluster:
-            raise ValueError("sidecar_command is only supported with cluster_mode: application")
         self.embed_squashfs_layer_jar_basenames = _normalize_jar_basename_list(self.embed_squashfs_layer_jar_basenames)
         self.runtime_jar_basenames = _normalize_jar_basename_list(self.runtime_jar_basenames)
         emb = set(self.embed_squashfs_layer_jar_basenames)

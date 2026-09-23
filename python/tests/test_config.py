@@ -221,10 +221,10 @@ flink_config:
         with pytest.raises(ValueError, match="parallelism"):
             FlytConfig(parallelism=0)
 
-    def test_sidecar_command_requires_application_mode(self):
+    def test_sidecar_command_is_kept_in_any_mode(self):
         assert FlytConfig(cluster_mode="application", sidecar_command=" agent ").sidecar_command == "agent"
-        with pytest.raises(ValueError, match="sidecar_command"):
-            FlytConfig(sidecar_command="agent")
+        # a profile may carry it while --mode picks the topology per run; minicluster just ignores it
+        assert FlytConfig(sidecar_command="agent").sidecar_command == "agent"
 
     def test_invalid_discovery_timeout(self):
         with pytest.raises(ValueError, match="discovery_timeout"):
