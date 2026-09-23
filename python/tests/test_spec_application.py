@@ -34,7 +34,6 @@ def _app_config(**overrides) -> FlytConfig:
         java_home="/jdk",
         python_bin="/py",
         cluster_mode="application",
-        discovery_path_prefix="//home/flyt/discovery/",
     )
     base.update(overrides)
     return FlytConfig(**base)
@@ -75,7 +74,7 @@ def test_application_spec_has_gang_jobmanager_and_plain_taskmanager_tasks():
         env = task["environment"]
         assert env["FLYT_CLUSTER_MODE"] == "application"
         assert env["FLYT_YT_PROXY"] == "http://proxy.example:80"
-        assert env["FLYT_DISCOVERY_PREFIX"] == "//home/flyt/discovery"
+        assert "FLYT_DISCOVERY_PREFIX" not in env
         assert env["FLINK_STANDALONE"] == "True"
         # memory goes through Flink's memory model, never -Xmx
         assert "FLINK_ENV_JAVA_OPTS" not in env
@@ -104,16 +103,21 @@ def test_application_run_scripts_launch_standalone_job_and_taskmanager():
     assert 'standalone-job.sh" start-foreground' in jm_cmd
     assert "--job-classname org.apache.flink.client.python.PythonDriver" in jm_cmd
     assert "set -- pipeline.py --x 1" in jm_cmd
-    assert "publish --path" in jm_cmd
     assert 'CLUSTER_IP="${YT_IP_ADDRESS_FASTBONE:-$SLOT_IP}"' in jm_cmd
     assert '"-Djobmanager.rpc.address=$JM_HOST" "-Drest.address=$REST_HOST"' in jm_cmd
     assert '"-Dtaskmanager.host=$CLUSTER_IP"' in tm_cmd
-    assert "heartbeat --path" in jm_cmd
+    assert "publish" not in jm_cmd and "heartbeat" not in jm_cmd
     assert "complete-operation" in jm_cmd
     assert "42_run_taskmanager.sh" not in jm_cmd
     assert 'taskmanager.sh" start-foreground' in tm_cmd
-    assert "wait-jobmanager" in tm_cmd
+    assert 'wait-jobmanager --operation-id "$YT_OPERATION_ID"' in tm_cmd
+    assert "--rest-port 27050 --timeout 600" in tm_cmd
     assert "41_run_jobmanager.sh" not in tm_cmd
+
+
+def test_application_taskmanager_script_uses_configured_discovery_timeout():
+    tm_cmd = _build(_app_config(discovery_timeout=45))["tasks"][TASKMANAGER_TASK]["command"]
+    assert "--timeout 45" in tm_cmd
 
 
 def test_application_jobmanager_script_honours_restart_completed_jobs():

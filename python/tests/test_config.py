@@ -157,7 +157,7 @@ class TestClusterModeConfig:
         assert config.taskmanager_preset == ""
         assert config.taskmanager_slots == 1
         assert config.restart_completed_jobs is True
-        assert config.discovery_path_prefix == ""
+        assert config.discovery_timeout == 600
         assert config.flink_config == {}
 
     def test_application_mode_normalizes(self):
@@ -188,7 +188,7 @@ taskmanager_count: 3
 taskmanager_preset: large
 taskmanager_slots: 2
 restart_completed_jobs: false
-discovery_path_prefix: //home/flyt/discovery
+discovery_timeout: 120
 flink_config:
   restart-strategy.type: fixed-delay
 """
@@ -202,7 +202,7 @@ flink_config:
         assert config.taskmanager_preset == "large"
         assert config.taskmanager_slots == 2
         assert config.restart_completed_jobs is False
-        assert config.discovery_path_prefix == "//home/flyt/discovery"
+        assert config.discovery_timeout == 120
         assert config.flink_config == {"restart-strategy.type": "fixed-delay"}
 
     def test_taskmanager_count_derived_from_parallelism(self):
@@ -221,10 +221,6 @@ flink_config:
         with pytest.raises(ValueError, match="parallelism"):
             FlytConfig(parallelism=0)
 
-    def test_require_application_cluster_config(self):
-        from ytsaurus_flyt.config import require_application_cluster_config
-
-        require_application_cluster_config(FlytConfig())  # minicluster: nothing required
-        with pytest.raises(ValueError, match="discovery_path_prefix"):
-            require_application_cluster_config(FlytConfig(cluster_mode="application"))
-        require_application_cluster_config(FlytConfig(cluster_mode="application", discovery_path_prefix="//d"))
+    def test_invalid_discovery_timeout(self):
+        with pytest.raises(ValueError, match="discovery_timeout"):
+            FlytConfig(discovery_timeout=0)

@@ -44,16 +44,6 @@ def test_launch_vanilla_job_accepts_cluster_params_type():
     assert ClusterParams in hints["preset"].__args__
 
 
-def test_launch_application_mode_requires_discovery_prefix(mock_yt_client):
-    cfg = FlytConfig(
-        runtime_python_packages=["apache-flink==1.20.1"],
-        runtime_python_version="3.10",
-        cluster_mode="application",
-    )
-    with pytest.raises(ValueError, match="discovery_path_prefix"):
-        launch_vanilla_job(cfg, mock_yt_client, "p.py", "pool", wheel_path="/tmp/w.whl")
-
-
 def test_make_taskmanager_params_from_config():
     from ytsaurus_flyt.launcher import _make_taskmanager_params
     from ytsaurus_flyt.models import ClusterPreset

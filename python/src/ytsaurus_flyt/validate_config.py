@@ -8,7 +8,6 @@ from typing import List, Optional, Tuple
 from yt.wrapper import YtClient
 
 from ytsaurus_flyt.config import (
-    APPLICATION_VALIDATE_DISCOVERY_MSG,
     SQUASHFS_VALIDATE_RUNTIME_PACKAGES_MSG,
     SQUASHFS_VALIDATE_RUNTIME_VERSION_MSG,
     FlytConfig,
@@ -57,8 +56,7 @@ def validate_flyt_config(
                 f"TaskManager preset {tm_preset}",
             )
         )
-        discovery = (config.discovery_path_prefix or "").strip()
-        rows.append(("discovery_path_prefix", bool(discovery), discovery or APPLICATION_VALIDATE_DISCOVERY_MSG))
+        rows.append(("discovery_timeout", True, f"{config.discovery_timeout}s for TaskManagers to find the JobManager"))
     else:
         rows.append(("cluster_mode", True, "minicluster (single job, in-JVM MiniCluster)"))
 

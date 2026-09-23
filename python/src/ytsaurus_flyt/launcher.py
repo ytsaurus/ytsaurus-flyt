@@ -9,11 +9,7 @@ from typing import Any, Dict, Optional, Union
 from yt.wrapper import YtClient
 from yt.wrapper.run_operation_commands import run_operation
 
-from ytsaurus_flyt.config import (
-    FlytConfig,
-    require_application_cluster_config,
-    require_squashfs_runtime_config,
-)
+from ytsaurus_flyt.config import FlytConfig, require_squashfs_runtime_config
 from ytsaurus_flyt.credentials import get_secure_credentials
 from ytsaurus_flyt.flink_lib_jars import (
     partition_flink_lib_jars_for_delivery,
@@ -115,7 +111,6 @@ def launch_vanilla_job(
     )
 
     require_squashfs_runtime_config(config)
-    require_application_cluster_config(config)
     if config.is_application_cluster:
         if proxy_url == "unknown":
             raise ValueError(
@@ -124,12 +119,10 @@ def launch_vanilla_job(
         if taskmanager_params is None:
             taskmanager_params = _make_taskmanager_params(config, preset_params)
         logger.info(
-            "Application cluster: 1 JobManager + %d TaskManager(s) x %d slot(s), parallelism.default %d, "
-            "discovery under %s",
+            "Application cluster: 1 JobManager + %d TaskManager(s) x %d slot(s), parallelism.default %d",
             taskmanager_params.count,
             taskmanager_params.slots,
             config.effective_parallelism,
-            config.discovery_path_prefix,
         )
 
     logger.info("Fetching credentials...")

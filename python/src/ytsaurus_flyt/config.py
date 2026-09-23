@@ -151,9 +151,10 @@ class FlytConfig:
     option). Set ``False`` for batch jobs: the operation is completed once the driver exits 0.
     """
 
-    discovery_path_prefix: str = ""
-    """Cypress directory where the JobManager publishes its address for TaskManagers
-    (``application`` mode; required). Profiles derive ``<cypress_base_path>/discovery``.
+    discovery_timeout: int = 600
+    """Seconds a TaskManager waits for the JobManager job of its incarnation to advertise its RPC
+    endpoint (``application`` mode). On timeout the TaskManager job fails and YT restarts it, so a
+    JobManager that never gets scheduled eventually fails the operation via ``max_failed_job_count``.
     """
 
     flink_config: Dict[str, str] = field(default_factory=dict)
@@ -185,6 +186,9 @@ class FlytConfig:
         if int(self.taskmanager_slots) < 1:
             raise ValueError(f"taskmanager_slots must be >= 1, got {self.taskmanager_slots!r}")
         self.taskmanager_slots = int(self.taskmanager_slots)
+        if int(self.discovery_timeout) < 1:
+            raise ValueError(f"discovery_timeout must be >= 1 second, got {self.discovery_timeout!r}")
+        self.discovery_timeout = int(self.discovery_timeout)
         if self.taskmanager_count is not None and self.parallelism is not None:
             capacity = self.taskmanager_count * self.taskmanager_slots
             if capacity < self.parallelism:
@@ -255,19 +259,6 @@ class FlytConfig:
         if self.parallelism is not None:
             return self.parallelism
         return self.effective_taskmanager_count * self.taskmanager_slots
-
-
-APPLICATION_VALIDATE_DISCOVERY_MSG = (
-    "required for cluster_mode: application (profiles derive <cypress_base_path>/discovery)"
-)
-
-
-def require_application_cluster_config(config: FlytConfig) -> None:
-    """Raise if ``cluster_mode: application`` prerequisites are missing."""
-    if not config.is_application_cluster:
-        return
-    if not (config.discovery_path_prefix or "").strip():
-        raise ValueError(f"discovery_path_prefix is {APPLICATION_VALIDATE_DISCOVERY_MSG}.")
 
 
 # Messages shared with validate_flyt_config row output

@@ -7,7 +7,7 @@ Two topologies (`FlytConfig.cluster_mode`):
 * `minicluster`: a single `flink` task; the job runs `python <script>` and PyFlink starts an in-JVM MiniCluster. Heap comes from `FLINK_ENV_JAVA_OPTS`, the task uses `restart_completed_jobs` so a pipeline that exits 0 is re-run.
 * `application`: a `jobmanager` task (one job, `gang_options`) and a `taskmanager` task (`taskmanager_count` jobs). The JobManager job runs `standalone-job.sh --job-classname org.apache.flink.client.python.PythonDriver -py <script>`, i.e. Flink application mode; memory and ports are passed as `-D` options from `spec.flink_dynamic_properties`. Gang tasks cannot use `restart_completed_jobs`, so the JobManager script re-runs the driver in place on exit 0 (or calls `complete_operation` when `restart_completed_jobs` is false); a non-zero exit fails the gang job and YT restarts every job with a new incarnation. TaskManagers are not gang jobs: YT restarts a failed one alone and Flink's restart strategy recovers the job.
 
-Discovery in application mode lives in Cypress: `run_scripts/flyt_job_helper.py` (stdlib only, talks to the HTTP proxy from `FLYT_YT_PROXY`) publishes `{host, rpc_port, rest_port, incarnation}` under `discovery_path_prefix/<operation_id>`, keeps it alive with a heartbeat that bumps `expiration_time`, and removes it on a clean exit. TaskManagers poll the record, require a matching `YT_OPERATION_INCARNATION`, probe the REST port, then `exec taskmanager.sh`.
+Discovery in application mode goes through the YT API, not a registry: `run_scripts/flyt_job_helper.py` (stdlib only, talks to the HTTP proxy from `FLYT_YT_PROXY`) runs on each TaskManager, calls `list_jobs` for the running `jobmanager` job of its operation and `YT_OPERATION_INCARNATION` (server-side filter, client-side fallback), takes the job's `exec_attributes/ip_addresses`, reads Flink's `/jobmanager/config` from the first address whose REST port answers and connects to the advertised `jobmanager.rpc.address`/`jobmanager.rpc.port` after a TCP probe, then `exec taskmanager.sh`. Polling backs off from 2 s to 15 s up to `discovery_timeout`.
 
 Profiles encapsulate cluster proxy/pool, paths, layers, etc. See [FlytConfig](src/ytsaurus_flyt/config.py).
 
@@ -31,14 +31,13 @@ flowchart LR
         V[Vanilla task: flink]
         JM[jobmanager task, gang]
         TM[taskmanager task x N]
-        D[(discovery node)]
+        API[(YT API: list_jobs / get_job)]
     end
     A --> W & R & J
     W & R & J --> V
     W & R & J --> JM & TM
-    JM -- publish --> D
-    D -- wait --> TM
-    TM -- register --> JM
+    TM -- discover --> API
+    TM -- /jobmanager/config, register --> JM
 ```
 
 `minicluster` uses only the `flink` task; `application` uses `jobmanager` + `taskmanager`.

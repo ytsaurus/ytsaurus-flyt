@@ -16,7 +16,6 @@ FLINK_STANDALONE_FLAG = "FLINK_STANDALONE"
 # Environment read by the application-mode run scripts and the in-job helper.
 FLYT_CLUSTER_MODE_ENV = "FLYT_CLUSTER_MODE"
 FLYT_YT_PROXY_ENV = "FLYT_YT_PROXY"
-FLYT_DISCOVERY_PREFIX_ENV = "FLYT_DISCOVERY_PREFIX"
 
 # Vanilla task names in application mode; ``flink`` stays the MiniCluster task name.
 MINICLUSTER_TASK = "flink"
@@ -31,9 +30,6 @@ FLINK_BLOB_SERVER_PORT = 27052
 
 # Share of the TaskManager container left to the Flink JVM; the rest goes to Python UDF workers.
 TASKMANAGER_PROCESS_MEMORY_FRACTION = 0.75
-# How long a TaskManager waits for the JobManager discovery record before failing (and being restarted).
-TASKMANAGER_DISCOVERY_TIMEOUT_S = 900
-
 _RUN_SCRIPTS_DIR = Path(__file__).parent / "run_scripts"
 JOB_HELPER_FILENAME = "flyt_job_helper.py"
 
@@ -107,7 +103,7 @@ def _build_run_script(
                 "restart_completed_jobs": "1" if config.restart_completed_jobs else "0",
                 "rest_port": FLINK_REST_PORT,
                 "rpc_port": FLINK_JOBMANAGER_RPC_PORT,
-                "discovery_timeout": TASKMANAGER_DISCOVERY_TIMEOUT_S,
+                "discovery_timeout": config.discovery_timeout,
             }
         )
 
@@ -244,7 +240,7 @@ def build_vanilla_operation_spec(
 
     ``cluster_mode: minicluster`` yields a single ``flink`` task. ``cluster_mode: application``
     yields a gang ``jobmanager`` task and a ``taskmanager`` task; ``taskmanager_params`` and
-    ``yt_proxy`` (HTTP proxy the jobs use for discovery) are required then.
+    ``yt_proxy`` (HTTP proxy the TaskManagers query to discover the JobManager) are required then.
     """
     service_name = config.service_name or _extract_service_name(job_command)
     application = config.is_application_cluster
@@ -253,8 +249,6 @@ def build_vanilla_operation_spec(
             raise ValueError("taskmanager_params is required for cluster_mode: application")
         if not (yt_proxy or "").strip():
             raise ValueError("yt_proxy is required for cluster_mode: application")
-        if not (config.discovery_path_prefix or "").strip():
-            raise ValueError("discovery_path_prefix is required for cluster_mode: application")
 
     environment: Dict[str, str] = {
         **DEFAULT_ENVIRONMENT,
@@ -265,7 +259,6 @@ def build_vanilla_operation_spec(
         # Memory and JVM flags go through Flink's own memory model (-D options), never -Xmx.
         environment[FLYT_CLUSTER_MODE_ENV] = "application"
         environment[FLYT_YT_PROXY_ENV] = str(yt_proxy).strip()
-        environment[FLYT_DISCOVERY_PREFIX_ENV] = config.discovery_path_prefix.strip().rstrip("/")
     else:
         java_opts = f"-Xmx{max_heap_size_str}"
         if off_heap_size_str:

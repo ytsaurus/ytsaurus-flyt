@@ -32,17 +32,16 @@ unset _flyt_var _flyt_key _flyt_val 2>/dev/null || true
 
 export SERVICE_NAME="{service_name}"
 
-# In-job helper: JobManager discovery in Cypress and operation completion (stdlib only).
+# In-job helper: JobManager discovery through the YT API and operation completion (stdlib only).
 cat > "$ROOT_DIR/{job_helper_filename}" <<'FLYT_JOB_HELPER_EOF'
 {job_helper}
 FLYT_JOB_HELPER_EOF
 FLYT_HELPER=("$PYTHON_BIN" "$ROOT_DIR/{job_helper_filename}")
 
-if [ -z "${{FLYT_DISCOVERY_PREFIX:-}}" ] || [ -z "${{YT_OPERATION_ID:-}}" ]; then
-    echo "ERROR: FLYT_DISCOVERY_PREFIX and YT_OPERATION_ID must be set for application mode" 1>&2
+if [ -z "${{YT_OPERATION_ID:-}}" ]; then
+    echo "ERROR: YT_OPERATION_ID must be set for application mode" 1>&2
     exit 1
 fi
-FLYT_DISCOVERY_NODE="$FLYT_DISCOVERY_PREFIX/$YT_OPERATION_ID"
 
 # Flink options shared by both roles (memory, ports, slots, restart strategy, flink_config overrides).
 FLYT_FLINK_ARGS=({flink_args})

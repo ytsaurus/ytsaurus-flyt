@@ -69,12 +69,12 @@ taskmanager_slots: 2          # --slots
 taskmanager_count: 4          # --taskmanagers; optional, must cover parallelism when both are set
 taskmanager_preset: small     # --tm-preset; empty = same preset as the JobManager
 restart_completed_jobs: true  # false: complete the operation when the pipeline finishes (batch)
-discovery_path_prefix: //home/flyt/clusters/my-dev/discovery   # derived from cypress_base_path
+discovery_timeout: 600        # seconds a TaskManager waits for the JobManager before failing
 flink_config:                 # optional Flink overrides, applied last
   restart-strategy.type: fixed-delay
 ```
 
-How it works: the JobManager is a [gang](https://ytsaurus.tech/docs/en/user-guide/data-processing/operations/vanilla#gang-operations) job, so any JobManager failure restarts the whole cluster with a new incarnation. It publishes its address under `discovery_path_prefix/<operation_id>` (kept alive by a heartbeat); TaskManagers wait for that record, check it belongs to their incarnation, and connect. Job-to-job traffic uses `YT_IP_ADDRESS_FASTBONE` when the exec node provides it (the default address is filtered between containers on some clusters); the Web UI stays on the default address. A failed TaskManager is restarted by YT on its own and the job recovers through Flink's restart strategy (`exponential-delay` by default). The Web UI stays on port 27050 of the JobManager job.
+How it works: the JobManager is a [gang](https://ytsaurus.tech/docs/en/user-guide/data-processing/operations/vanilla#gang-operations) job, so any JobManager failure restarts the whole cluster with a new incarnation. TaskManagers find it through the YT API: they list the running `jobmanager` job of their own operation and incarnation, read its addresses from the job's `exec_attributes`, fetch `/jobmanager/config` from its REST port and connect to the `jobmanager.rpc.address` it advertises (no Cypress registry). A TaskManager that finds no JobManager within `discovery_timeout` fails and is restarted by YT, so a JobManager that never gets scheduled eventually fails the operation through `max_failed_job_count`. Job-to-job traffic uses `YT_IP_ADDRESS_FASTBONE` when the exec node provides it (the default address is filtered between containers on some clusters); the Web UI stays on the default address. A failed TaskManager is restarted by YT on its own and the job recovers through Flink's restart strategy (`exponential-delay` by default). The Web UI stays on port 27050 of the JobManager job.
 
 Memory: the JobManager JVM heap is the preset `max_heap`, the rest of the container is left to the Python driver; TaskManagers give 75% of their container to `taskmanager.memory.process.size` and the rest to Python UDF workers. Override any of it via `flink_config`.
 
