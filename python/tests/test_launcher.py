@@ -53,5 +53,12 @@ def test_make_taskmanager_params_from_config():
     assert (same.cpu, same.memory, same.count, same.slots) == (micro.cpu, micro.memory_bytes(), 3, 2)
     derived = _make_taskmanager_params(FlytConfig(parallelism=7, taskmanager_slots=2), micro)
     assert (derived.count, derived.slots) == (4, 2)
+    assert same.off_heap is None
+    # the MiniCluster off_heap knob keeps its meaning for TaskManagers, taskmanager_off_heap overrides it
+    import dataclasses
+
+    micro_off_heap = dataclasses.replace(micro, off_heap_size="1G")
+    assert _make_taskmanager_params(FlytConfig(), micro_off_heap).off_heap == 1024**3
+    assert _make_taskmanager_params(FlytConfig(taskmanager_off_heap="512M"), micro_off_heap).off_heap == 512 * 1024**2
     large = _make_taskmanager_params(FlytConfig(taskmanager_preset="large"), micro)
     assert (large.cpu, large.memory) == (ClusterPreset.LARGE.params.cpu, ClusterPreset.LARGE.params.memory_bytes())

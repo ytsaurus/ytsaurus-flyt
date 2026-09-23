@@ -156,6 +156,7 @@ class TestClusterModeConfig:
         assert config.effective_parallelism == 1
         assert config.taskmanager_preset == ""
         assert config.taskmanager_slots == 1
+        assert config.taskmanager_off_heap == ""
         assert config.restart_completed_jobs is True
         assert config.discovery_timeout == 600
         assert config.flink_config == {}

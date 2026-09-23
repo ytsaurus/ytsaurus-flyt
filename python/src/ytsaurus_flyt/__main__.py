@@ -408,6 +408,13 @@ def validate(
     default=None,
     help="Task slots per TaskManager for --mode application (default: taskmanager_slots from profile, or 1).",
 )
+@click.option(
+    "--tm-off-heap",
+    "taskmanager_off_heap",
+    default=None,
+    help="TaskManager task off-heap (direct memory for connectors), e.g. 2G, for --mode application "
+    "(default: preset off_heap, else 1/8 of the TaskManager JVM).",
+)
 @click.option("--wheel", "wheel_path", default=None)
 @click.option("--source-dir", "source_dir", default=None)
 @click.option("--cache-wheel", is_flag=True)
@@ -437,6 +444,7 @@ def run(
     parallelism: Optional[int],
     taskmanager_preset: Optional[str],
     taskmanager_slots: Optional[int],
+    taskmanager_off_heap: Optional[str],
     wheel_path: Optional[str],
     source_dir: Optional[str],
     cache_wheel: bool,
@@ -455,6 +463,7 @@ def run(
         "parallelism": parallelism,
         "taskmanager_preset": taskmanager_preset,
         "taskmanager_slots": taskmanager_slots,
+        "taskmanager_off_heap": taskmanager_off_heap,
     }
     cluster_overrides = {k: v for k, v in cluster_overrides.items() if v is not None}
     if cluster_overrides:

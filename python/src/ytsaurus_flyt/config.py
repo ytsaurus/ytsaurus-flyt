@@ -144,6 +144,12 @@ class FlytConfig:
     taskmanager_slots: int = 1
     """``taskmanager.numberOfTaskSlots`` per TaskManager (``application`` mode)."""
 
+    taskmanager_off_heap: str = ""
+    """``taskmanager.memory.task.off-heap.size`` (e.g. ``2G``): direct memory for connectors' netty/gRPC
+    buffers, which Flink otherwise caps at ``framework.off-heap`` (128m) in a real cluster. Empty uses
+    the preset's ``off_heap_size`` when set, else 1/8 of the TaskManager JVM process size.
+    """
+
     restart_completed_jobs: bool = True
     """Re-run the pipeline when it finishes successfully (streaming semantics, the operation never
     completes on its own). ``minicluster``: passed to the Vanilla task as ``restart_completed_jobs``.
@@ -205,6 +211,7 @@ class FlytConfig:
                     f"= {capacity}; raise taskmanager_count/taskmanager_slots or drop taskmanager_count to derive it"
                 )
         self.taskmanager_preset = (self.taskmanager_preset or "").strip().lower()
+        self.taskmanager_off_heap = (self.taskmanager_off_heap or "").strip()
         if self.taskmanager_preset and self.taskmanager_preset.upper() not in ClusterPreset.__members__:
             raise ValueError(
                 f"taskmanager_preset must be one of {[m.lower() for m in ClusterPreset.__members__]}, "

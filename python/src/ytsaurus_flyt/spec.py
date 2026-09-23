@@ -30,6 +30,9 @@ FLINK_BLOB_SERVER_PORT = 27052
 
 # Share of the TaskManager container left to the Flink JVM; the rest goes to Python UDF workers.
 TASKMANAGER_PROCESS_MEMORY_FRACTION = 0.75
+# Default task off-heap share of the TaskManager JVM when no off_heap is configured: Flink pins
+# -XX:MaxDirectMemorySize to framework + task off-heap, and connectors (gRPC, netty) need direct buffers.
+TASKMANAGER_TASK_OFF_HEAP_FRACTION = 0.125
 _RUN_SCRIPTS_DIR = Path(__file__).parent / "run_scripts"
 JOB_HELPER_FILENAME = "flyt_job_helper.py"
 
@@ -167,6 +170,7 @@ def flink_dynamic_properties(
     Addresses are appended at runtime by the run scripts (slot IP, discovered JobManager).
     ``config.flink_config`` is applied last and overrides any generated value.
     """
+    tm_process_size = int(taskmanager_params.memory * TASKMANAGER_PROCESS_MEMORY_FRACTION)
     props: Dict[str, str] = {
         "rest.port": str(FLINK_REST_PORT),
         "rest.bind-address": "0.0.0.0",
@@ -186,8 +190,11 @@ def flink_dynamic_properties(
         # driver and turn into a full gang restart instead of an in-cluster job restart.
         "restart-strategy.type": "exponential-delay",
         "jobmanager.memory.process.size": jobmanager_process_size(max_heap_size_str, off_heap_size_str),
-        "taskmanager.memory.process.size": _mebibytes(
-            int(taskmanager_params.memory * TASKMANAGER_PROCESS_MEMORY_FRACTION)
+        "taskmanager.memory.process.size": _mebibytes(tm_process_size),
+        "taskmanager.memory.task.off-heap.size": _mebibytes(
+            taskmanager_params.off_heap
+            if taskmanager_params.off_heap is not None
+            else int(tm_process_size * TASKMANAGER_TASK_OFF_HEAP_FRACTION)
         ),
         "python.executable": config.python_bin,
         "python.client.executable": config.python_bin,

@@ -165,6 +165,7 @@ def test_flink_dynamic_properties_derive_memory_slots_and_apply_overrides():
     assert props["jobmanager.memory.process.size"] == "3435m"
     assert props["jobmanager.memory.off-heap.size"] == "512M"
     assert props["taskmanager.memory.process.size"] == "3072m"  # 75% of 4G
+    assert props["taskmanager.memory.task.off-heap.size"] == "384m"  # 1/8 of the TM JVM by default
     assert props["taskmanager.numberOfTaskSlots"] == "2"
     assert props["parallelism.default"] == "6"
     assert props["python.executable"] == "/py"
@@ -185,6 +186,12 @@ def test_flink_dynamic_properties_without_off_heap():
     # heap 2324 + default off-heap 128 + metaspace 256 = 2708, plus overhead 300
     assert props["jobmanager.memory.process.size"] == "3008m"
     assert props["restart-strategy.type"] == "exponential-delay"
+
+
+def test_flink_dynamic_properties_use_explicit_taskmanager_off_heap():
+    tm = TaskmanagerParams(cpu=2, memory=_MICRO.memory_bytes(), count=1, slots=1, off_heap=2 * 1024**3)
+    props = flink_dynamic_properties(_app_config(), _jm(), tm, "2324M", None)
+    assert props["taskmanager.memory.task.off-heap.size"] == "2048m"
 
 
 def test_jobmanager_process_size_clamps_overhead():

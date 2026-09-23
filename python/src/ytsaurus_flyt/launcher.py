@@ -23,6 +23,7 @@ from ytsaurus_flyt.models import (
     JobmanagerParams,
     OperationParams,
     TaskmanagerParams,
+    parse_memory,
 )
 from ytsaurus_flyt.spec import build_vanilla_operation_spec
 from ytsaurus_flyt.wheel_utils import dedupe_file_paths_by_basename, upload_service_wheel
@@ -59,11 +60,15 @@ def taskmanager_params_from_config(config: FlytConfig, jobmanager_preset: Cluste
     """
     name = (config.taskmanager_preset or "").strip()
     params = ClusterPreset[name.upper()].params if name else jobmanager_preset
+    # Connectors run in TaskManagers, so the preset's off_heap (the MiniCluster -XX:MaxDirectMemorySize
+    # knob) keeps its meaning there unless taskmanager_off_heap overrides it.
+    off_heap_str = config.taskmanager_off_heap or params.off_heap_size or jobmanager_preset.off_heap_size
     return TaskmanagerParams(
         cpu=params.cpu,
         memory=params.memory_bytes(),
         count=config.effective_taskmanager_count,
         slots=config.taskmanager_slots,
+        off_heap=parse_memory(off_heap_str) if off_heap_str else None,
     )
 
 
