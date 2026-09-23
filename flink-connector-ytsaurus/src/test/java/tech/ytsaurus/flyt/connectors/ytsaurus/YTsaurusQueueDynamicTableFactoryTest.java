@@ -25,6 +25,7 @@ import org.apache.flink.table.types.DataType;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.config.YtQueueReadMode;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.config.YtQueueStartupMode;
@@ -193,7 +194,10 @@ class YTsaurusQueueDynamicTableFactoryTest {
         assertThat(source).extracting("readMode").isEqualTo(YtQueueReadMode.COLUMN);
         assertThat(source).extracting("columnModeOptions.valueColumn").isEqualTo("value");
         assertThat(source).extracting("columnModeOptions.codecColumn").isNull();
+        assertThat(source).extracting("columnModeOptions.ignoreDecompressionErrors").isEqualTo(false);
         assertRecordDeserializer(source, YtQueueColumnValueDeserializer.class);
+        assertThat(runtimeProvider(source).createSource())
+                .extracting("recordDeserializer.ignoreDecompressionErrors").isEqualTo(false);
     }
 
     @Test
@@ -207,6 +211,25 @@ class YTsaurusQueueDynamicTableFactoryTest {
 
         assertThat(source).extracting("columnModeOptions.valueColumn").isEqualTo("payload");
         assertThat(source).extracting("columnModeOptions.codecColumn").isEqualTo("compression");
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void passesDecompressionErrorOptionToRuntimeAndCopiedSource(boolean ignoreDecompressionErrors) {
+        Map<String, String> options = validSqlOptions();
+        options.put("scan.read-mode", "COLUMN");
+        options.put("scan.codec-column", "codec");
+        options.put("scan.ignore-decompression-errors", Boolean.toString(ignoreDecompressionErrors));
+
+        DynamicTableSource source = createSource(options);
+
+        for (DynamicTableSource current : List.of(source, source.copy())) {
+            assertThat(current).extracting("columnModeOptions.ignoreDecompressionErrors")
+                    .isEqualTo(ignoreDecompressionErrors);
+            assertThat(runtimeProvider(current).createSource())
+                    .extracting("recordDeserializer.ignoreDecompressionErrors")
+                    .isEqualTo(ignoreDecompressionErrors);
+        }
     }
 
     @Test
@@ -227,6 +250,14 @@ class YTsaurusQueueDynamicTableFactoryTest {
         Map<String, String> codecColumnOptions = validSqlOptions();
         codecColumnOptions.put("scan.codec-column", "codec");
         assertThrows(ValidationException.class, () -> createSource(codecColumnOptions));
+    }
+
+    @Test
+    void rejectsEnabledDecompressionErrorSkippingInRowReadMode() {
+        Map<String, String> options = validSqlOptions();
+        options.put("scan.ignore-decompression-errors", "true");
+
+        assertThrows(ValidationException.class, () -> createSource(options));
     }
 
     @Test
@@ -295,17 +326,19 @@ class YTsaurusQueueDynamicTableFactoryTest {
     private static void assertRecordDeserializer(
             DynamicTableSource tableSource,
             Class<?> expectedDeserializerClass) {
+        assertThat(runtimeProvider(tableSource).createSource())
+                .extracting("recordDeserializer")
+                .isInstanceOf(expectedDeserializerClass);
+    }
+
+    private static SourceProvider runtimeProvider(DynamicTableSource tableSource) {
         ScanTableSource.ScanContext context = mock(ScanTableSource.ScanContext.class);
         doReturn(TypeInformation.of(RowData.class))
                 .when(context)
                 .createTypeInformation(any(DataType.class));
 
-        SourceProvider runtimeProvider = (SourceProvider) ((ScanTableSource) tableSource)
+        return (SourceProvider) ((ScanTableSource) tableSource)
                 .getScanRuntimeProvider(context);
-
-        assertThat(runtimeProvider.createSource())
-                .extracting("recordDeserializer")
-                .isInstanceOf(expectedDeserializerClass);
     }
 
     private static Map<String, String> validSqlOptions() {

@@ -12,14 +12,10 @@ import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.YtQueueRecordDeseri
 abstract class YtQueueDeserializationSchemaAdapter<T> implements YtQueueRecordDeserializer<T> {
     private static final long serialVersionUID = 1L;
 
-    private final DeserializationSchema<T> deserializationSchema;
+    protected final DeserializationSchema<T> deserializationSchema;
 
     YtQueueDeserializationSchemaAdapter(DeserializationSchema<T> deserializationSchema) {
         this.deserializationSchema = Objects.requireNonNull(deserializationSchema, "deserializationSchema");
-    }
-
-    protected final DeserializationSchema<T> deserializationSchema() {
-        return deserializationSchema;
     }
 
     @Override

@@ -95,7 +95,8 @@ public class YtQueueDynamicTableSource implements ScanTableSource {
                 return new YtQueueColumnValueDeserializer<>(
                         deserializer,
                         options.getValueColumn(),
-                        options.getCodecColumn());
+                        options.getCodecColumn(),
+                        options.isIgnoreDecompressionErrors());
             default:
                 throw new IllegalStateException("Unsupported YT queue read mode: " + readMode);
         }

@@ -17,7 +17,6 @@ public class YtQueueRowDataDeserializer extends YtQueueDeserializationSchemaAdap
 
     @Override
     public RowData deserialize(UnversionedRow row, TableSchema schema) throws Exception {
-        DeserializationSchema<RowData> deserializationSchema = deserializationSchema();
         YTreeMapNode node = row.toYTreeMap(schema, true);
         if (deserializationSchema instanceof YTreeNodeDeserializationSchema) {
             return ((YTreeNodeDeserializationSchema) deserializationSchema).deserialize(node);

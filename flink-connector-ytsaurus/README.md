@@ -730,9 +730,13 @@ CREATE TABLE queue_events (
 
 `COLUMN` treats the record as a payload stored in one column, which is common for queues that keep an already serialized message in `value` and, optionally, the name of the YTsaurus compression codec in `codec`. The Flink DDL then describes the payload rather than the queue row, and the payload bytes are passed to the configured format as is, so any insert-only format is accepted.
 
-The payload column is `scan.value-column` and defaults to `value`. The codec column is `scan.codec-column` and has no default: without it the payload is read as is, which is what an uncompressed queue needs. Set it to decompress the payload with the codec named in that column. Supported codecs are `none` and `zstd_1`..`zstd_21`; any other codec fails the job with an explicit error.
+The payload column is `scan.value-column` and defaults to `value`. The codec column is `scan.codec-column` and has no default: without it the payload is read as is, which is what an uncompressed queue needs. Set it to decompress the payload with the codec named in that column. Supported codecs are `none` and `zstd_1`..`zstd_21`; any other codec fails the job with an explicit error by default.
+
+Set `scan.ignore-decompression-errors` to `true` in `COLUMN` mode to skip rows with an unknown codec or a malformed compressed payload. It defaults to `false`. Skipped rows are not emitted downstream, but their offsets are advanced and included in subsequent checkpoints. The source reader's `numDecompressionErrors` counter counts unknown-codec and decompression failures; with this option enabled it counts the skipped rows. Queue schema/type errors are never ignored by this option, and payload format errors remain subject to the configured format's own error handling.
 
 Both configured columns must exist in the queue schema and must be string-like, otherwise the job fails: a missing column is a configuration error rather than an uncompressed payload. A null codec value means that this particular row is not compressed, and a row whose payload column is null is skipped. The source reader's `numNullPayloads` counter tracks rows skipped because the payload is null or absent from the row; null results returned by the configured format are not included.
+
+Column indices are resolved once from the first received rowset and remain fixed for the reader's lifetime; the queue schema is expected to remain unchanged.
 
 ```sql
 CREATE TABLE queue_events (
@@ -765,6 +769,8 @@ YtQueueSource<String> source = YtQueueSource.<String>builder()
         .build();
 ```
 
+To ignore decompression errors with the DataStream API, use `new YtQueueColumnValueDeserializer<>(format, "value", "codec", true)`; the existing constructors keep failing on decompression errors by default.
+
 Metadata columns are not supported in either mode, so `$timestamp`, `$cumulative_data_weight`, partition index and offset are not available to the job.
 
 ### Queue Source Options
@@ -789,6 +795,7 @@ Metadata columns are not supported in either mode, so `$timestamp`, `$cumulative
 | `scan.read-mode` | Enum | `ROW` | `ROW` reads the whole queue row as a record, `COLUMN` reads a payload from one column |
 | `scan.value-column` | String | `value` | Queue column with the payload; requires `scan.read-mode` = `COLUMN` |
 | `scan.codec-column` | String | - | Queue column with the YTsaurus codec name; without it the payload is read as is; requires `scan.read-mode` = `COLUMN` |
+| `scan.ignore-decompression-errors` | Boolean | `false` | Skip rows with unknown codecs or invalid compressed payloads; enabling requires `scan.read-mode` = `COLUMN`. Does not suppress queue schema/type errors or payload format errors |
 | `scan.parallelism` | Integer | - | Optional Flink source parallelism |
 | `yson.fail-on-missing-field` | Boolean | `false` | Fail when a declared field is absent in a queue row |
 | `yson.ignore-parse-errors` | Boolean | `false` | Set invalid fields to null and skip rows that cannot be parsed |

@@ -15,9 +15,6 @@ final class ZstdValueCodec implements YtValueCodec {
 
     private static final long MAX_UNCOMPRESSED_SIZE = Integer.MAX_VALUE - 8L;
 
-    ZstdValueCodec() {
-    }
-
     @Override
     public byte[] decompress(byte[] compressed) {
         if (compressed.length < HEADER_SIZE) {

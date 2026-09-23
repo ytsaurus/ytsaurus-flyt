@@ -34,6 +34,7 @@ import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.Y
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.ASYNC_BUFFER_CAPACITY;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.ASYNC_WORKER_COUNT;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.CODEC_COLUMN;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.IGNORE_DECOMPRESSION_ERRORS;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.MAX_DATA_WEIGHT;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.MAX_ROW_COUNT;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.PARTITION_DISCOVERY_INTERVAL;
@@ -110,6 +111,7 @@ public class YTsaurusQueueDynamicTableFactory implements DynamicTableSourceFacto
                 READ_MODE,
                 VALUE_COLUMN,
                 CODEC_COLUMN,
+                IGNORE_DECOMPRESSION_ERRORS,
                 FactoryUtil.SOURCE_PARALLELISM);
     }
 
@@ -174,9 +176,11 @@ public class YTsaurusQueueDynamicTableFactory implements DynamicTableSourceFacto
     @Nullable
     static YtQueueColumnModeOptions createColumnModeOptions(ReadableConfig options) {
         if (options.get(READ_MODE) != YtQueueReadMode.COLUMN) {
-            if (options.getOptional(VALUE_COLUMN).isPresent() || options.getOptional(CODEC_COLUMN).isPresent()) {
+            if (options.getOptional(VALUE_COLUMN).isPresent() || options.getOptional(CODEC_COLUMN).isPresent() ||
+                    options.get(IGNORE_DECOMPRESSION_ERRORS)) {
                 throw new ValidationException(
-                        "'scan.value-column' and 'scan.codec-column' are only valid " +
+                        "'scan.value-column', 'scan.codec-column' and 'scan.ignore-decompression-errors' " +
+                                "are only valid " +
                                 "for 'scan.read-mode' = 'COLUMN'");
             }
             return null;
@@ -185,7 +189,8 @@ public class YTsaurusQueueDynamicTableFactory implements DynamicTableSourceFacto
         try {
             return new YtQueueColumnModeOptions(
                     valueColumn,
-                    options.getOptional(CODEC_COLUMN).orElse(null));
+                    options.getOptional(CODEC_COLUMN).orElse(null),
+                    options.get(IGNORE_DECOMPRESSION_ERRORS));
         } catch (IllegalArgumentException | NullPointerException e) {
             throw new ValidationException("Invalid queue column mode options", e);
         }

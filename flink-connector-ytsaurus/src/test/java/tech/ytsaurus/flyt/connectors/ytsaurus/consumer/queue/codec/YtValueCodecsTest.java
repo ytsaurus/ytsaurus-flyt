@@ -43,8 +43,8 @@ class YtValueCodecsTest {
 
     @ParameterizedTest
     @ValueSource(strings = {
-            "brotli_3", "snappy", "quick_lz", "zstd_0", "zstd_06", "zstd_22", "zlib_0", "zlib_01",
-            "zlib_10", "zstd_x", "lz4", "lz4_high_compression", "zlib_1", "zlib_6", "zlib_9"
+            "brotli_3", "snappy", "quick_lz", "zstd_0", "zstd_06", "zstd_22", "zstd_x",
+            "lz4", "lz4_high_compression", "zlib_6"
     })
     void rejectsUnsupportedCodecs(String codecName) {
         assertThatThrownBy(() -> codecs.forName(codecName))

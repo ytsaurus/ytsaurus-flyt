@@ -29,9 +29,19 @@ public class YtQueueColumnValueDeserializer<T> extends YtQueueDeserializationSch
     @Nullable
     private final String codecColumn;
 
+    private final boolean ignoreDecompressionErrors;
+
+    private transient boolean columnIndicesInitialized;
+
+    private transient int valueIndex;
+
+    private transient int codecIndex;
+
     private transient YtValueCodecs valueCodecs;
 
     private transient Counter numNullPayloads;
+
+    private transient Counter numDecompressionErrors;
 
     public YtQueueColumnValueDeserializer(DeserializationSchema<T> deserializationSchema) {
         this(deserializationSchema, DEFAULT_VALUE_COLUMN, null);
@@ -47,9 +57,18 @@ public class YtQueueColumnValueDeserializer<T> extends YtQueueDeserializationSch
             DeserializationSchema<T> deserializationSchema,
             String valueColumn,
             @Nullable String codecColumn) {
+        this(deserializationSchema, valueColumn, codecColumn, false);
+    }
+
+    public YtQueueColumnValueDeserializer(
+            DeserializationSchema<T> deserializationSchema,
+            String valueColumn,
+            @Nullable String codecColumn,
+            boolean ignoreDecompressionErrors) {
         super(deserializationSchema);
         this.valueColumn = requireNonBlank(valueColumn, "valueColumn");
         this.codecColumn = codecColumn == null ? null : requireNonBlank(codecColumn, "codecColumn");
+        this.ignoreDecompressionErrors = ignoreDecompressionErrors;
         if (this.valueColumn.equals(this.codecColumn)) {
             throw new IllegalArgumentException("valueColumn and codecColumn must be different");
         }
@@ -59,13 +78,17 @@ public class YtQueueColumnValueDeserializer<T> extends YtQueueDeserializationSch
     public void open(SourceReaderContext context) throws Exception {
         super.open(context);
         numNullPayloads = context.metricGroup().counter("numNullPayloads");
+        numDecompressionErrors = context.metricGroup().counter("numDecompressionErrors");
     }
 
     @Override
     @Nullable
     public T deserialize(UnversionedRow row, TableSchema schema) throws Exception {
-        int valueIndex = columnIndex(schema, valueColumn);
-        int codecIndex = codecColumn == null ? -1 : columnIndex(schema, codecColumn);
+        if (!columnIndicesInitialized) {
+            valueIndex = columnIndex(schema, valueColumn);
+            codecIndex = codecColumn == null ? -1 : columnIndex(schema, codecColumn);
+            columnIndicesInitialized = true;
+        }
 
         byte[] value = null;
         String codecName = null;
@@ -81,10 +104,18 @@ public class YtQueueColumnValueDeserializer<T> extends YtQueueDeserializationSch
             numNullPayloads.inc();
             return null;
         }
-        if (codecIndex < 0) {
-            return deserializationSchema().deserialize(value);
+        if (codecIndex != -1) {
+            try {
+                value = valueCodecs().forName(codecName).decompress(value);
+            } catch (IllegalArgumentException e) {
+                numDecompressionErrors.inc();
+                if (!ignoreDecompressionErrors) {
+                    throw e;
+                }
+                return null;
+            }
         }
-        return deserializationSchema().deserialize(valueCodecs().forName(codecName).decompress(value));
+        return deserializationSchema.deserialize(value);
     }
 
     private YtValueCodecs valueCodecs() {

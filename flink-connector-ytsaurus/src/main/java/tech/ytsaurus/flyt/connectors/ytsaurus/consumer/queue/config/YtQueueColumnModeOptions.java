@@ -19,9 +19,15 @@ public final class YtQueueColumnModeOptions implements Serializable {
     @Nullable
     private final String codecColumn;
 
-    public YtQueueColumnModeOptions(String valueColumn, @Nullable String codecColumn) {
+    private final boolean ignoreDecompressionErrors;
+
+    public YtQueueColumnModeOptions(
+            String valueColumn,
+            @Nullable String codecColumn,
+            boolean ignoreDecompressionErrors) {
         this.valueColumn = requireNonBlank(valueColumn, "valueColumn");
         this.codecColumn = codecColumn == null ? null : requireNonBlank(codecColumn, "codecColumn");
+        this.ignoreDecompressionErrors = ignoreDecompressionErrors;
         if (this.valueColumn.equals(this.codecColumn)) {
             throw new IllegalArgumentException("valueColumn and codecColumn must be different");
         }

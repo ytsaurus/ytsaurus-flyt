@@ -44,23 +44,22 @@ public final class YtValueCodecs {
             return IDENTITY;
         }
         if (codecName.startsWith(ZSTD_PREFIX)) {
-            parseLevel(codecName, ZSTD_PREFIX, MAX_ZSTD_LEVEL);
+            validateZstdLevel(codecName);
             return new ZstdValueCodec();
         }
         throw new IllegalArgumentException(unsupported(codecName));
     }
 
-    private static int parseLevel(String codecName, String prefix, int maxLevel) {
+    private static void validateZstdLevel(String codecName) {
         int level;
         try {
-            level = Integer.parseInt(codecName.substring(prefix.length()));
+            level = Integer.parseInt(codecName.substring(ZSTD_PREFIX.length()));
         } catch (NumberFormatException e) {
             throw new IllegalArgumentException(unsupported(codecName), e);
         }
-        if (level < 1 || level > maxLevel || !codecName.equals(prefix + level)) {
+        if (level < 1 || level > MAX_ZSTD_LEVEL || !codecName.equals(ZSTD_PREFIX + level)) {
             throw new IllegalArgumentException(unsupported(codecName));
         }
-        return level;
     }
 
     private static String unsupported(String codecName) {

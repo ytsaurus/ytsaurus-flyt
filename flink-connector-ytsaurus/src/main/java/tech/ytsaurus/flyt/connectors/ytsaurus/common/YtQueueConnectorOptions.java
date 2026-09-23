@@ -75,4 +75,9 @@ public class YtQueueConnectorOptions {
             ConfigOptions.key("scan.codec-column")
                     .stringType()
                     .noDefaultValue();
+
+    public static final ConfigOption<Boolean> IGNORE_DECOMPRESSION_ERRORS =
+            ConfigOptions.key("scan.ignore-decompression-errors")
+                    .booleanType()
+                    .defaultValue(false);
 }
