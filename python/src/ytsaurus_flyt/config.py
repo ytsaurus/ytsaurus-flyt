@@ -144,6 +144,12 @@ class FlytConfig:
     taskmanager_slots: int = 1
     """``taskmanager.numberOfTaskSlots`` per TaskManager (``application`` mode)."""
 
+    taskmanager_cpu: Optional[int] = None
+    """CPU limit of one TaskManager job (``application`` mode); overrides the preset's cpu."""
+
+    taskmanager_memory: str = ""
+    """Memory limit of one TaskManager job, e.g. ``24G`` (``application`` mode); overrides the preset's memory."""
+
     taskmanager_off_heap: str = ""
     """``taskmanager.memory.task.off-heap.size`` (e.g. ``2G``): direct memory for connectors' netty/gRPC
     buffers, which Flink otherwise caps at ``framework.off-heap`` (128m) in a real cluster. Empty uses
@@ -212,6 +218,11 @@ class FlytConfig:
                 )
         self.taskmanager_preset = (self.taskmanager_preset or "").strip().lower()
         self.taskmanager_off_heap = (self.taskmanager_off_heap or "").strip()
+        self.taskmanager_memory = (self.taskmanager_memory or "").strip()
+        if self.taskmanager_cpu is not None:
+            if int(self.taskmanager_cpu) < 1:
+                raise ValueError(f"taskmanager_cpu must be >= 1, got {self.taskmanager_cpu!r}")
+            self.taskmanager_cpu = int(self.taskmanager_cpu)
         if self.taskmanager_preset and self.taskmanager_preset.upper() not in ClusterPreset.__members__:
             raise ValueError(
                 f"taskmanager_preset must be one of {[m.lower() for m in ClusterPreset.__members__]}, "

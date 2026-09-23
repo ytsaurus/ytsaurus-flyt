@@ -68,6 +68,8 @@ parallelism: 8                # --parallelism; sizes the cluster: ceil(paralleli
 taskmanager_slots: 2          # --slots
 taskmanager_count: 4          # --taskmanagers; optional, must cover parallelism when both are set
 taskmanager_preset: small     # --tm-preset; empty = same preset as the JobManager
+taskmanager_cpu: 20           # --tm-cpu; overrides the preset's cpu per TaskManager
+taskmanager_memory: 24G       # --tm-mem; overrides the preset's memory per TaskManager
 taskmanager_off_heap: 2G      # --tm-off-heap; direct memory for connectors (default: preset off_heap, else 1/8 of the TM JVM)
 restart_completed_jobs: true  # false: complete the operation when the pipeline finishes (batch)
 discovery_timeout: 600        # seconds a TaskManager waits for the JobManager before failing

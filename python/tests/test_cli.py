@@ -345,6 +345,10 @@ def test_run_application_flags_override_profile_config(monkeypatch, tmp_path: Pa
             "2",
             "--tm-off-heap",
             "2G",
+            "--tm-cpu",
+            "20",
+            "--tm-mem",
+            "24G",
             "--wheel",
             "svc.whl",
             "x.py",
@@ -358,6 +362,8 @@ def test_run_application_flags_override_profile_config(monkeypatch, tmp_path: Pa
     assert cfg.taskmanager_preset == "small"
     assert cfg.taskmanager_slots == 2
     assert cfg.taskmanager_off_heap == "2G"
+    assert cfg.taskmanager_cpu == 20
+    assert cfg.taskmanager_memory == "24G"
 
 
 def test_run_parallelism_flag_sizes_cluster(monkeypatch, tmp_path: Path) -> None:

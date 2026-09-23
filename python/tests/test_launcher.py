@@ -60,5 +60,9 @@ def test_make_taskmanager_params_from_config():
     micro_off_heap = dataclasses.replace(micro, off_heap_size="1G")
     assert _make_taskmanager_params(FlytConfig(), micro_off_heap).off_heap == 1024**3
     assert _make_taskmanager_params(FlytConfig(taskmanager_off_heap="512M"), micro_off_heap).off_heap == 512 * 1024**2
+    custom = _make_taskmanager_params(
+        FlytConfig(taskmanager_preset="large", taskmanager_cpu=20, taskmanager_memory="24G"), micro
+    )
+    assert (custom.cpu, custom.memory) == (20, 24 * 1024**3)
     large = _make_taskmanager_params(FlytConfig(taskmanager_preset="large"), micro)
     assert (large.cpu, large.memory) == (ClusterPreset.LARGE.params.cpu, ClusterPreset.LARGE.params.memory_bytes())

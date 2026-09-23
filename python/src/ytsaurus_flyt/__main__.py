@@ -409,6 +409,19 @@ def validate(
     help="Task slots per TaskManager for --mode application (default: taskmanager_slots from profile, or 1).",
 )
 @click.option(
+    "--tm-cpu",
+    "taskmanager_cpu",
+    type=click.IntRange(min=1),
+    default=None,
+    help="CPU per TaskManager job for --mode application (overrides --tm-preset).",
+)
+@click.option(
+    "--tm-mem",
+    "taskmanager_memory",
+    default=None,
+    help="Memory per TaskManager job, e.g. 24G, for --mode application (overrides --tm-preset).",
+)
+@click.option(
     "--tm-off-heap",
     "taskmanager_off_heap",
     default=None,
@@ -444,6 +457,8 @@ def run(
     parallelism: Optional[int],
     taskmanager_preset: Optional[str],
     taskmanager_slots: Optional[int],
+    taskmanager_cpu: Optional[int],
+    taskmanager_memory: Optional[str],
     taskmanager_off_heap: Optional[str],
     wheel_path: Optional[str],
     source_dir: Optional[str],
@@ -463,6 +478,8 @@ def run(
         "parallelism": parallelism,
         "taskmanager_preset": taskmanager_preset,
         "taskmanager_slots": taskmanager_slots,
+        "taskmanager_cpu": taskmanager_cpu,
+        "taskmanager_memory": taskmanager_memory,
         "taskmanager_off_heap": taskmanager_off_heap,
     }
     cluster_overrides = {k: v for k, v in cluster_overrides.items() if v is not None}

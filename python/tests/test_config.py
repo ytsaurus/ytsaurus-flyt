@@ -157,6 +157,8 @@ class TestClusterModeConfig:
         assert config.taskmanager_preset == ""
         assert config.taskmanager_slots == 1
         assert config.taskmanager_off_heap == ""
+        assert config.taskmanager_cpu is None
+        assert config.taskmanager_memory == ""
         assert config.restart_completed_jobs is True
         assert config.discovery_timeout == 600
         assert config.flink_config == {}
@@ -177,6 +179,10 @@ class TestClusterModeConfig:
             FlytConfig(taskmanager_count=0)
         with pytest.raises(ValueError, match="taskmanager_slots"):
             FlytConfig(taskmanager_slots=0)
+
+    def test_invalid_taskmanager_cpu(self):
+        with pytest.raises(ValueError, match="taskmanager_cpu"):
+            FlytConfig(taskmanager_cpu=0)
 
     def test_invalid_taskmanager_preset(self):
         with pytest.raises(ValueError, match="taskmanager_preset"):

@@ -64,8 +64,8 @@ def taskmanager_params_from_config(config: FlytConfig, jobmanager_preset: Cluste
     # knob) keeps its meaning there unless taskmanager_off_heap overrides it.
     off_heap_str = config.taskmanager_off_heap or params.off_heap_size or jobmanager_preset.off_heap_size
     return TaskmanagerParams(
-        cpu=params.cpu,
-        memory=params.memory_bytes(),
+        cpu=config.taskmanager_cpu if config.taskmanager_cpu is not None else params.cpu,
+        memory=parse_memory(config.taskmanager_memory) if config.taskmanager_memory else params.memory_bytes(),
         count=config.effective_taskmanager_count,
         slots=config.taskmanager_slots,
         off_heap=parse_memory(off_heap_str) if off_heap_str else None,
