@@ -15,6 +15,7 @@ from ytsaurus_flyt.models import (
 __all__ = [
     "FlytConfig",
     "launch_vanilla_job",
+    "taskmanager_params_from_config",
     "ClusterParams",
     "ClusterPreset",
     "JobmanagerParams",
@@ -40,6 +41,7 @@ def __getattr__(name):
     """Lazy imports for modules that depend on the YTsaurus client."""
     _lazy = {
         "launch_vanilla_job": "ytsaurus_flyt.launcher",
+        "taskmanager_params_from_config": "ytsaurus_flyt.launcher",
         "build_vanilla_operation_spec": "ytsaurus_flyt.spec",
         "ensure_runtime_layer": "ytsaurus_flyt.layer_builder",
         "FlinkLibJarsResolveResult": "ytsaurus_flyt.flink_lib_jars",

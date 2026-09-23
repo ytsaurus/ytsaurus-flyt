@@ -157,6 +157,13 @@ class FlytConfig:
     JobManager that never gets scheduled eventually fails the operation via ``max_failed_job_count``.
     """
 
+    sidecar_command: str = ""
+    """Shell command started in the background in every ``application``-mode job (JobManager and
+    TaskManagers) right before Flink, from the service directory with the job environment and
+    ``secure_vault`` keys exported; killed when the job exits. Use it for per-container helpers
+    such as a metrics agent that every JVM must reach on ``localhost``.
+    """
+
     flink_config: Dict[str, str] = field(default_factory=dict)
     """Extra Flink options for ``application`` mode, passed as ``-D key=value`` to the JobManager and
     TaskManagers after the generated ones (memory, ports, restart strategy), so they override them.
@@ -203,6 +210,9 @@ class FlytConfig:
                 f"got {self.taskmanager_preset!r}"
             )
         self.flink_config = {str(k): str(v) for k, v in (self.flink_config or {}).items()}
+        self.sidecar_command = (self.sidecar_command or "").strip()
+        if self.sidecar_command and not self.is_application_cluster:
+            raise ValueError("sidecar_command is only supported with cluster_mode: application")
         self.embed_squashfs_layer_jar_basenames = _normalize_jar_basename_list(self.embed_squashfs_layer_jar_basenames)
         self.runtime_jar_basenames = _normalize_jar_basename_list(self.runtime_jar_basenames)
         emb = set(self.embed_squashfs_layer_jar_basenames)

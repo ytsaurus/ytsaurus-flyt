@@ -70,6 +70,7 @@ taskmanager_count: 4          # --taskmanagers; optional, must cover parallelism
 taskmanager_preset: small     # --tm-preset; empty = same preset as the JobManager
 restart_completed_jobs: true  # false: complete the operation when the pipeline finishes (batch)
 discovery_timeout: 600        # seconds a TaskManager waits for the JobManager before failing
+sidecar_command: ""           # optional helper started in every JM/TM container before Flink (e.g. a metrics agent)
 flink_config:                 # optional Flink overrides, applied last
   restart-strategy.type: fixed-delay
 ```

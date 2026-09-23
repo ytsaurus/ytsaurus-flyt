@@ -115,6 +115,18 @@ def test_application_run_scripts_launch_standalone_job_and_taskmanager():
     assert "41_run_jobmanager.sh" not in tm_cmd
 
 
+def test_application_sidecar_command_runs_on_both_roles():
+    spec = _build(_app_config(sidecar_command="python -m svc.agent --port 4400"))
+    for task in (JOBMANAGER_TASK, TASKMANAGER_TASK):
+        cmd = spec["tasks"][task]["command"]
+        assert "36_start_sidecar.sh" in cmd
+        assert "FLYT_SIDECAR_COMMAND='python -m svc.agent --port 4400'" in cmd
+        assert cmd.index("35_cluster_common.sh") < cmd.index("36_start_sidecar.sh")
+    assert cmd.index("36_start_sidecar.sh") < cmd.index("42_run_taskmanager.sh")
+    without = _build(_app_config())["tasks"][TASKMANAGER_TASK]["command"]
+    assert "FLYT_SIDECAR_COMMAND=''" in without
+
+
 def test_application_taskmanager_script_uses_configured_discovery_timeout():
     tm_cmd = _build(_app_config(discovery_timeout=45))["tasks"][TASKMANAGER_TASK]["command"]
     assert "--timeout 45" in tm_cmd

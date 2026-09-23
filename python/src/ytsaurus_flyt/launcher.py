@@ -51,8 +51,12 @@ def _make_jobmanager_params(preset_params: ClusterParams) -> JobmanagerParams:
     )
 
 
-def _make_taskmanager_params(config: FlytConfig, jobmanager_preset: ClusterParams) -> TaskmanagerParams:
-    """TaskManager resources from ``taskmanager_preset`` (or the JobManager preset) and the config counts."""
+def taskmanager_params_from_config(config: FlytConfig, jobmanager_preset: ClusterParams) -> TaskmanagerParams:
+    """TaskManager resources from ``taskmanager_preset`` (or the JobManager preset) and the config counts.
+
+    Public so launchers that build the operation spec themselves (``build_vanilla_operation_spec``)
+    size the cluster the same way ``launch_vanilla_job`` does.
+    """
     name = (config.taskmanager_preset or "").strip()
     params = ClusterPreset[name.upper()].params if name else jobmanager_preset
     return TaskmanagerParams(
@@ -117,7 +121,7 @@ def launch_vanilla_job(
                 "Cannot determine the YT proxy URL from yt_client; application mode needs it for discovery"
             )
         if taskmanager_params is None:
-            taskmanager_params = _make_taskmanager_params(config, preset_params)
+            taskmanager_params = taskmanager_params_from_config(config, preset_params)
         logger.info(
             "Application cluster: 1 JobManager + %d TaskManager(s) x %d slot(s), parallelism.default %d",
             taskmanager_params.count,

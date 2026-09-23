@@ -70,9 +70,9 @@ def _script_fragments(*, use_squashfs_sandbox_unpack: bool, role: Optional[str])
     if role is None:
         ordered.append("40_run_job.sh")
     elif role == JOBMANAGER_TASK:
-        ordered += ["35_cluster_common.sh", "41_run_jobmanager.sh"]
+        ordered += ["35_cluster_common.sh", "36_start_sidecar.sh", "41_run_jobmanager.sh"]
     elif role == TASKMANAGER_TASK:
-        ordered += ["35_cluster_common.sh", "42_run_taskmanager.sh"]
+        ordered += ["35_cluster_common.sh", "36_start_sidecar.sh", "42_run_taskmanager.sh"]
     else:
         raise ValueError(f"Unknown application-mode role: {role!r}")
     return ordered
@@ -101,6 +101,7 @@ def _build_run_script(
                 "job_helper": (_RUN_SCRIPTS_DIR / JOB_HELPER_FILENAME).read_text(encoding="utf-8"),
                 "job_helper_filename": JOB_HELPER_FILENAME,
                 "restart_completed_jobs": "1" if config.restart_completed_jobs else "0",
+                "sidecar_command": shlex.quote(config.sidecar_command) if config.sidecar_command else "''",
                 "rest_port": FLINK_REST_PORT,
                 "rpc_port": FLINK_JOBMANAGER_RPC_PORT,
                 "discovery_timeout": config.discovery_timeout,

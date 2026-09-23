@@ -45,7 +45,7 @@ def test_launch_vanilla_job_accepts_cluster_params_type():
 
 
 def test_make_taskmanager_params_from_config():
-    from ytsaurus_flyt.launcher import _make_taskmanager_params
+    from ytsaurus_flyt.launcher import taskmanager_params_from_config as _make_taskmanager_params
     from ytsaurus_flyt.models import ClusterPreset
 
     micro = ClusterPreset.MICRO.params

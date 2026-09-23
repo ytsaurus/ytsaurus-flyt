@@ -9,4 +9,8 @@ echo "JobManager job $JM_JOB_ID discovered at $JM_HOST:$JM_RPC_PORT" 1>&2
 
 TM_ARGS=("-Djobmanager.rpc.address=$JM_HOST" "-Djobmanager.rpc.port=$JM_RPC_PORT" "-Dtaskmanager.host=$CLUSTER_IP")
 
-exec "$FLINK_HOME/bin/taskmanager.sh" start-foreground "${{FLYT_FLINK_ARGS[@]}}" "${{TM_ARGS[@]}}" 1>&2
+# Not exec'ed so the EXIT trap can stop the sidecar when the TaskManager goes down.
+"$FLINK_HOME/bin/taskmanager.sh" start-foreground "${{FLYT_FLINK_ARGS[@]}}" "${{TM_ARGS[@]}}" 1>&2 \
+    && EXIT_CODE=0 || EXIT_CODE=$?
+echo "FLINK TASKMANAGER FINISHED (exit code: $EXIT_CODE)" 1>&2
+exit "$EXIT_CODE"
