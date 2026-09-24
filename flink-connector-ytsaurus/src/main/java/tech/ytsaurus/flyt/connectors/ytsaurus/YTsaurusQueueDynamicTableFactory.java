@@ -19,6 +19,8 @@ import org.apache.flink.table.factories.DynamicTableSourceFactory;
 import org.apache.flink.table.factories.FactoryUtil;
 
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.credentials.CredentialsProvider;
+import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.config.YtQueueColumnModeOptions;
+import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.config.YtQueueReadMode;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.config.YtQueueStartupMode;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.YtQueueReaderOptions;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.table.YtQueueDynamicTableSource;
@@ -31,13 +33,18 @@ import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.Y
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.YT_USERNAME_OPTION;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.ASYNC_BUFFER_CAPACITY;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.ASYNC_WORKER_COUNT;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.CODEC_COLUMN;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.IGNORE_DECOMPRESSION_ERRORS;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.MAX_DATA_WEIGHT;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.MAX_ROW_COUNT;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.PARTITION_DISCOVERY_INTERVAL;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.POLL_BACKOFF;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.READ_MODE;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.SPECIFIC_OFFSETS;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.STARTUP_MODE;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.TRIMMED_OFFSET_POLICY;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.VALUE_COLUMN;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.table.YtQueueColumnValueDeserializer.DEFAULT_VALUE_COLUMN;
 
 public class YTsaurusQueueDynamicTableFactory implements DynamicTableSourceFactory {
     public static final String IDENTIFIER = "ytsaurus-queue";
@@ -58,6 +65,7 @@ public class YTsaurusQueueDynamicTableFactory implements DynamicTableSourceFacto
         validateCredentialsOptions(options);
         CredentialsProvider credentialsProvider = getAndValidateCredentialsProvider(options);
         YtQueueReaderOptions readerOptions = createReaderOptions(options);
+        YtQueueColumnModeOptions columnModeOptions = createColumnModeOptions(options);
 
         return YtQueueDynamicTableSource.builder()
                 .proxy(options.get(PROXY))
@@ -69,6 +77,8 @@ public class YTsaurusQueueDynamicTableFactory implements DynamicTableSourceFacto
                 .specificOffsets(options.getOptional(SPECIFIC_OFFSETS).orElse(null))
                 .trimmedOffsetPolicy(options.get(TRIMMED_OFFSET_POLICY))
                 .readerOptions(readerOptions)
+                .readMode(options.get(READ_MODE))
+                .columnModeOptions(columnModeOptions)
                 .partitionDiscoveryInterval(options.get(PARTITION_DISCOVERY_INTERVAL))
                 .parallelism(options.getOptional(FactoryUtil.SOURCE_PARALLELISM).orElse(null))
                 .build();
@@ -98,6 +108,10 @@ public class YTsaurusQueueDynamicTableFactory implements DynamicTableSourceFacto
                 ASYNC_WORKER_COUNT,
                 ASYNC_BUFFER_CAPACITY,
                 PARTITION_DISCOVERY_INTERVAL,
+                READ_MODE,
+                VALUE_COLUMN,
+                CODEC_COLUMN,
+                IGNORE_DECOMPRESSION_ERRORS,
                 FactoryUtil.SOURCE_PARALLELISM);
     }
 
@@ -159,17 +173,45 @@ public class YTsaurusQueueDynamicTableFactory implements DynamicTableSourceFacto
         }
     }
 
+    @Nullable
+    static YtQueueColumnModeOptions createColumnModeOptions(ReadableConfig options) {
+        if (options.get(READ_MODE) != YtQueueReadMode.COLUMN) {
+            if (options.getOptional(VALUE_COLUMN).isPresent() || options.getOptional(CODEC_COLUMN).isPresent() ||
+                    options.get(IGNORE_DECOMPRESSION_ERRORS)) {
+                throw new ValidationException(
+                        "'scan.value-column', 'scan.codec-column' and 'scan.ignore-decompression-errors' " +
+                                "are only valid " +
+                                "for 'scan.read-mode' = 'COLUMN'");
+            }
+            return null;
+        }
+        String valueColumn = options.getOptional(VALUE_COLUMN).orElse(DEFAULT_VALUE_COLUMN);
+        try {
+            return new YtQueueColumnModeOptions(
+                    valueColumn,
+                    options.getOptional(CODEC_COLUMN).orElse(null),
+                    options.get(IGNORE_DECOMPRESSION_ERRORS));
+        } catch (IllegalArgumentException | NullPointerException e) {
+            throw new ValidationException("Invalid queue column mode options", e);
+        }
+    }
+
     static void validateFormatIdentifier(ReadableConfig options) {
+        if (options.get(READ_MODE) == YtQueueReadMode.COLUMN) {
+            return;
+        }
         String format = options.get(FactoryUtil.FORMAT);
         if (!SUPPORTED_FORMAT.equals(format)) {
             throw new ValidationException(
-                    "The 'ytsaurus-queue' connector supports only 'format' = 'yson'");
+                    "The 'ytsaurus-queue' connector supports only 'format' = 'yson' for " +
+                            "'scan.read-mode' = 'ROW'; in 'COLUMN' mode the column payload is passed " +
+                            "to the configured format as is");
         }
     }
 
     static void validateChangelogMode(DecodingFormat<?> decodingFormat) {
         if (!ChangelogMode.insertOnly().equals(decodingFormat.getChangelogMode())) {
-            throw new ValidationException("The YSON decoder for 'ytsaurus-queue' must be insert-only");
+            throw new ValidationException("The decoder for 'ytsaurus-queue' must be insert-only");
         }
     }
 
