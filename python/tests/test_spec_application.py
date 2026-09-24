@@ -106,6 +106,7 @@ def test_application_run_scripts_launch_standalone_job_and_taskmanager():
     assert 'CLUSTER_IP="${YT_IP_ADDRESS_FASTBONE:-$SLOT_IP}"' in jm_cmd
     assert '"-Djobmanager.rpc.address=$JM_HOST" "-Drest.address=$REST_HOST"' in jm_cmd
     assert '"-Dtaskmanager.host=$CLUSTER_IP"' in tm_cmd
+    assert '"-Dtaskmanager.resource-id=${YT_JOB_ID:-tm-$(hostname)-$$}"' in tm_cmd
     assert "publish" not in jm_cmd and "heartbeat" not in jm_cmd
     assert "complete-operation" in jm_cmd
     assert "42_run_taskmanager.sh" not in jm_cmd
