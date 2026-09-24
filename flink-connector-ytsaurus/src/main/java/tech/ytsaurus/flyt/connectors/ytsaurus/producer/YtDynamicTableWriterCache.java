@@ -69,19 +69,16 @@ final class YtDynamicTableWriterCache {
         Preconditions.checkNotNull(action);
 
         lifecycleLock.readLock().lock();
-        CacheEntry entry = null;
         try {
             Preconditions.checkState(!stopped, "Writer cache is stopped");
-            entry = pin(tableName, writerSupplier);
-            action.accept(entry.getWriter());
-        } finally {
+            CacheEntry entry = pin(tableName, writerSupplier);
             try {
-                if (entry != null) {
-                    unpin(tableName, entry);
-                }
+                action.accept(entry.getWriter());
             } finally {
-                lifecycleLock.readLock().unlock();
+                unpin(tableName, entry);
             }
+        } finally {
+            lifecycleLock.readLock().unlock();
         }
     }
 

@@ -5,7 +5,6 @@ import java.time.Instant;
 import javax.annotation.Nullable;
 
 import org.apache.flink.util.Preconditions;
-import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.runtime.state.FunctionInitializationContext;
@@ -177,7 +176,6 @@ public class YtRowDataSinkFunction extends RichSinkFunction<RowData> implements 
                 () -> getRuntimeContext().getMetricGroup());
     }
 
-    @SneakyThrows
     @Override
     public void invoke(RowData value, Context context) {
         if (value == null) {
@@ -187,7 +185,7 @@ public class YtRowDataSinkFunction extends RichSinkFunction<RowData> implements 
     }
 
     @Override
-    public void finish() throws Exception {
+    public void finish() {
         log.info("Finish sink function for table: {}", path);
         pool.finish();
     }

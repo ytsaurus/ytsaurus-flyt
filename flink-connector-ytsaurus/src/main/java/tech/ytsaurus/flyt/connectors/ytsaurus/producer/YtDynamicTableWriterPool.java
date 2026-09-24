@@ -23,14 +23,11 @@ import org.apache.flink.util.concurrent.ExponentialBackoffRetryStrategy;
 import org.apache.flink.util.concurrent.RetryStrategy;
 import tech.ytsaurus.client.YTsaurusClient;
 import tech.ytsaurus.client.request.CreateNode;
-import tech.ytsaurus.client.request.ReshardTable;
 import tech.ytsaurus.core.cypress.CypressNodeType;
 import tech.ytsaurus.core.cypress.YPath;
-import tech.ytsaurus.core.tables.TableSchema;
 import tech.ytsaurus.flyt.connectors.datametrics.DataMetricsConfig;
 import tech.ytsaurus.flyt.connectors.datametrics.DataMetricsWriterDelegate;
 import tech.ytsaurus.flyt.locks.api.LocksProvider;
-import tech.ytsaurus.ysontree.YTreeTextSerializer;
 
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.ComplexYtPath;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.ReshardingConfig;
@@ -176,12 +173,18 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
         withWriter(writerClassifier, writer -> writer.write(record));
     }
 
-    @VisibleForTesting
-    void withWriter(
+    private void withWriter(
             WriterClassifier writerClassifier,
             Consumer<YtDynamicTableWriter> action) {
         String tableName = writerClassifier.getTableName();
         cache.withWriter(tableName, () -> prepareWriter(writerClassifier), action);
+    }
+
+    @VisibleForTesting
+    void initializeWriter(WriterClassifier writerClassifier) {
+        withWriter(writerClassifier, writer -> {
+            // Writer creation performs eager table initialization.
+        });
     }
 
     public void finish() {
@@ -194,9 +197,12 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
 
     @Override
     public void close() {
-        Collection<YtDynamicTableWriter> writers = cache.stopCleanup();
-        multipleOperations(writers, YtDynamicTableWriter::close, "close");
-        dataMetrics.close();
+        try {
+            Collection<YtDynamicTableWriter> writers = cache.stopCleanup();
+            multipleOperations(writers, YtDynamicTableWriter::close, "close");
+        } finally {
+            dataMetrics.close();
+        }
     }
 
     private void multipleOperations(Consumer<YtDynamicTableWriter> operation, String operationName) {
@@ -281,10 +287,7 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
     public void createFullPathTable() {
         // Acquiring a table in case of partitioning's absence
         // automatically triggers table init
-        WriterClassifier writerClassifier = WriterClassifier.plain(path.getBaseTableName());
-        withWriter(writerClassifier, writer -> {
-            // Writer creation performs eager table initialization.
-        });
+        initializeWriter(WriterClassifier.plain(path.getBaseTableName()));
     }
 
 

@@ -5,9 +5,9 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.List;
 import java.util.Random;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -351,10 +351,7 @@ public class YtDynamicTableWriterPoolClientTest {
     }
 
     @Test
-    void testMultipleOperationsErrorReporting() throws Exception {
-        var pool = makePool(TestPoolSettings.builder()
-                .clientPool(CountingTestYtClientPool.ofSingle(makeTestClient())));
-
+    void testMultipleOperationsErrorReporting() {
         var failingWriter1 = Mockito.mock(YtDynamicTableWriter.class);
         var failingWriter2 = Mockito.mock(YtDynamicTableWriter.class);
         Mockito.when(failingWriter1.getPath()).thenReturn("table1");
@@ -362,34 +359,27 @@ public class YtDynamicTableWriterPoolClientTest {
         Mockito.doThrow(new RuntimeException("Test error 1")).when(failingWriter1).close();
         Mockito.doThrow(new RuntimeException("Test error 2")).when(failingWriter2).close();
 
-        var method = YtDynamicTableWriterPool.class.getDeclaredMethod(
-                "multipleOperations", Collection.class, java.util.function.Consumer.class, String.class);
-        method.setAccessible(true);
-
-        var writersList = new ArrayList<YtDynamicTableWriter>(List.of(failingWriter1, failingWriter2));
-
-        RuntimeException exception = Assertions.assertThrows(RuntimeException.class, () -> {
-            try {
-                method.invoke(pool,
-                        writersList,
-                        (java.util.function.Consumer<YtDynamicTableWriter>) YtDynamicTableWriter::close,
-                        "close");
-            } catch (java.lang.reflect.InvocationTargetException e) {
-                Throwable cause = e.getCause();
-                if (cause instanceof RuntimeException) {
-                    throw (RuntimeException) cause;
-                }
-                throw new RuntimeException(cause);
-            }
+        var cache = new YtDynamicTableWriterCache(Duration.ofMinutes(1));
+        cache.withWriter("table1", () -> failingWriter1, writer -> {
         });
+        cache.withWriter("table2", () -> failingWriter2, writer -> {
+        });
+        var pool = makePool(TestPoolSettings.builder()
+                .clientPool(CountingTestYtClientPool.ofSingle(makeTestClient()))
+                .customCache(cache));
+
+        RuntimeException exception = Assertions.assertThrows(RuntimeException.class, pool::close);
 
         Assertions.assertTrue(exception.getMessage().contains("Failure to close 2 writer(-s)"));
         Assertions.assertTrue(exception.getMessage().contains("Writer at '"));
         Assertions.assertTrue(exception.getMessage().contains("Test error 1"));
         Assertions.assertTrue(exception.getMessage().contains("Test error 2"));
         Assertions.assertEquals(2, exception.getSuppressed().length);
-        Assertions.assertEquals("Test error 1", exception.getSuppressed()[0].getMessage());
-        Assertions.assertEquals("Test error 2", exception.getSuppressed()[1].getMessage());
+        Assertions.assertEquals(
+                Set.of("Test error 1", "Test error 2"),
+                Stream.of(exception.getSuppressed())
+                        .map(Throwable::getMessage)
+                        .collect(Collectors.toSet()));
     }
 
     @Builder

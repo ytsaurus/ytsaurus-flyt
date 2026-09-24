@@ -120,21 +120,17 @@ public class YtDynamicTableWriterPoolTest {
         setYtPathAvailable("home", "smth", "__tests__", "tests", "sample");
         mockMountAny();
         try (var pool = makePool("//home/smth/__tests__/tests", "[]", new IntType())) {
-            pool.withWriter(
-                    WriterClassifier.plain("sample"),
-                    writer -> assertEquals(
-                            "//home/smth/__tests__/tests/sample",
-                            writer.getPath()));
+            pool.initializeWriter(WriterClassifier.plain("sample"));
         }
+        Mockito.verify(mockedClient, Mockito.atLeastOnce())
+                .existsNode("//home/smth/__tests__/tests/sample");
     }
 
     @Test
     void poolAcquireConnectionForbiddenPathSuccess() {
         setYtPathAvailable("__non_existent__");
         try (var pool = makePool("//home/smth/__tests__/tests", "[]", new IntType())) {
-            pool.withWriter(WriterClassifier.plain("sample"), writer -> {
-                // Writer creation must fail before the action is invoked.
-            });
+            pool.initializeWriter(WriterClassifier.plain("sample"));
             fail("No exception was thrown acquiring writer for a forbidden path");
         } catch (RuntimeException e) {
             assertTrue(e.getMessage().contains("Insufficient permissions"));
@@ -365,9 +361,7 @@ public class YtDynamicTableWriterPoolTest {
                         partitionConfigBuilder
                                 .converter(new YtPartitioningInstantRowDataConverter(new TimestampType(3)))
                                 .build());
-                pool.withWriter(writerClassifier, writer -> {
-                    // Writer creation applies the partition TTL.
-                });
+                pool.initializeWriter(writerClassifier);
             }
 
             Mockito.verify(mockedClient, Mockito.times(1))

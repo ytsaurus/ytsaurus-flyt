@@ -488,18 +488,14 @@ public class YtDynamicTableWriter implements Serializable {
 
     private void flushData() {
         checkError();
-        boolean becameIdle = false;
         flushModificationLock.lock();
         commitTransactionLock.lock();
         try {
             flushModification();
-            becameIdle = commitTransaction();
+            commitTransaction();
         } finally {
             commitTransactionLock.unlock();
             flushModificationLock.unlock();
-        }
-        if (becameIdle) {
-            notifyCacheIdleListener();
         }
     }
 
