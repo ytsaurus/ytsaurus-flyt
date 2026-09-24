@@ -171,7 +171,7 @@ public class YtDynamicTableWriter implements Serializable {
     private transient String acquiredLock;
 
     @Nullable
-    private transient volatile Runnable cacheIdleListener;
+    private transient volatile Runnable cacheStateListener;
 
     // Shared data metrics delegate (managed by pool, not by individual writers)
     private final DataMetricsWriterDelegate dataMetrics;
@@ -248,17 +248,17 @@ public class YtDynamicTableWriter implements Serializable {
             transactionCommitter.scheduleAtFixedRate(() -> {
                 if (lastTransactionCommit.get() + ytWriterOptions.getCommitTransactionPeriod().toMillis()
                         < System.currentTimeMillis()) {
-                    boolean becameIdle = false;
+                    boolean committed = false;
                     commitTransactionLock.lock();
                     try {
-                        becameIdle = commitTransaction();
+                        committed = commitTransaction();
                     } catch (Exception e) {
                         error.set(e);
                     } finally {
                         commitTransactionLock.unlock();
                     }
-                    if (becameIdle) {
-                        notifyCacheIdleListener();
+                    if (committed) {
+                        notifyCacheStateChanged();
                     }
                 }
             }, 0L, ytWriterOptions.getCommitTransactionPeriod().toMillis(), TimeUnit.MILLISECONDS);
@@ -790,7 +790,7 @@ public class YtDynamicTableWriter implements Serializable {
             return false;
         }
         lastCommitTimestamp.set(current);
-        return committedData && !isBusy();
+        return committedData;
     }
 
     private void commitWithRetry() throws InterruptedException {
@@ -887,16 +887,16 @@ public class YtDynamicTableWriter implements Serializable {
         return rowsInBuffer.get() != 0 || rowsInTransaction.get() != 0;
     }
 
-    void setCacheIdleListener(Runnable listener) {
-        cacheIdleListener = listener;
+    void setCacheStateListener(Runnable listener) {
+        cacheStateListener = listener;
     }
 
-    void clearCacheIdleListener() {
-        cacheIdleListener = null;
+    void clearCacheStateListener() {
+        cacheStateListener = null;
     }
 
-    private void notifyCacheIdleListener() {
-        Runnable listener = cacheIdleListener;
+    private void notifyCacheStateChanged() {
+        Runnable listener = cacheStateListener;
         if (listener != null) {
             listener.run();
         }

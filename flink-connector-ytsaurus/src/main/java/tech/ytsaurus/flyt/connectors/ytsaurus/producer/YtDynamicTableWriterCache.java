@@ -24,10 +24,10 @@ import org.apache.flink.util.Preconditions;
 /**
  * A Caffeine-backed writer cache with conditional expiration.
  *
- * <p>An entry is pinned while it is being used or its writer has uncommitted data. Writer idle transitions are
- * published back to Caffeine so that its expiration policy can schedule eviction once the writer becomes idle.
- * The idle transition starts a fresh TTL. An eviction listener closes an expired writer synchronously before another
- * writer can be installed for the same table.
+ * <p>An entry is pinned while it is being used or its writer has uncommitted data. Successful background commits
+ * refresh the entry so that Caffeine can schedule eviction once the writer becomes idle. The transition to idle
+ * starts a fresh TTL. An eviction listener closes an expired writer synchronously before another writer can be
+ * installed for the same table.
  */
 @Slf4j
 final class YtDynamicTableWriterCache {
@@ -126,18 +126,16 @@ final class YtDynamicTableWriterCache {
     }
 
     private CacheEntry pin(String tableName, Supplier<YtDynamicTableWriter> writerSupplier) {
-        CacheEntry entry = cache.asMap().compute(tableName, (ignored, current) -> {
-            CacheEntry result = current;
-            if (result == null) {
+        return cache.asMap().compute(tableName, (ignored, current) -> {
+            if (current == null) {
                 YtDynamicTableWriter writer = Preconditions.checkNotNull(writerSupplier.get());
-                result = new CacheEntry(writer);
-                CacheEntry created = result;
-                writer.setCacheIdleListener(() -> onWriterIdle(tableName, created));
+                current = new CacheEntry(writer);
+                CacheEntry created = current;
+                writer.setCacheStateListener(() -> refreshExpiration(tableName, created));
             }
-            result.activeUses++;
-            return result;
+            current.activeUses++;
+            return current;
         });
-        return Preconditions.checkNotNull(entry);
     }
 
     @Nullable
@@ -158,7 +156,7 @@ final class YtDynamicTableWriterCache {
         });
     }
 
-    private void onWriterIdle(String tableName, CacheEntry expected) {
+    private void refreshExpiration(String tableName, CacheEntry expected) {
         if (stopped || expected.retired) {
             return;
         }
@@ -219,7 +217,7 @@ final class YtDynamicTableWriterCache {
 
         private void retire() {
             retired = true;
-            writer.clearCacheIdleListener();
+            writer.clearCacheStateListener();
         }
 
         private boolean isClosed() {

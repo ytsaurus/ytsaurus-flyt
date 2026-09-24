@@ -36,7 +36,7 @@ public class YtDynamicTableWriterCacheTest {
         cache.cleanupExpired();
 
         Assertions.assertEquals(0, cache.getSize());
-        Mockito.verify(writer).clearCacheIdleListener();
+        Mockito.verify(writer).clearCacheStateListener();
         Mockito.verify(writer).close();
     }
 
@@ -45,13 +45,14 @@ public class YtDynamicTableWriterCacheTest {
         YtDynamicTableWriter writer = Mockito.mock(YtDynamicTableWriter.class);
         YtDynamicTableWriterCache cache = makeCache();
         putWriter(cache, "table", writer);
-        Runnable becameIdle = captureIdleListener(writer);
+        Runnable refreshExpiration = captureStateListener(writer);
 
         Mockito.when(writer.isBusy()).thenReturn(true);
         cache.withWriter("table", () -> {
             throw new AssertionError("Writer supplier must not be called for a cached writer");
         }, ignored -> {
         });
+        refreshExpiration.run();
         ticker.advance(TTL.plusNanos(1));
         cache.cleanupExpired();
 
@@ -59,7 +60,7 @@ public class YtDynamicTableWriterCacheTest {
         Mockito.verify(writer, Mockito.never()).close();
 
         Mockito.when(writer.isBusy()).thenReturn(false);
-        becameIdle.run();
+        refreshExpiration.run();
 
         Assertions.assertEquals(1, cache.getSize());
         Mockito.verify(writer, Mockito.never()).close();
@@ -153,7 +154,7 @@ public class YtDynamicTableWriterCacheTest {
             Assertions.assertSame(writer, second.get(5, TimeUnit.SECONDS));
             Assertions.assertEquals(1, supplierCalls.get());
             Assertions.assertEquals(1, cache.getSize());
-            Mockito.verify(writer, Mockito.times(1)).setCacheIdleListener(Mockito.any());
+            Mockito.verify(writer, Mockito.times(1)).setCacheStateListener(Mockito.any());
         } finally {
             releaseSupplier.countDown();
             executor.shutdownNow();
@@ -428,7 +429,7 @@ public class YtDynamicTableWriterCacheTest {
             action.get(5, TimeUnit.SECONDS);
 
             Assertions.assertEquals(List.of(writer), stop.get(5, TimeUnit.SECONDS));
-            Mockito.verify(writer).clearCacheIdleListener();
+            Mockito.verify(writer).clearCacheStateListener();
             Mockito.verify(writer, Mockito.never()).close();
         } finally {
             releaseAction.countDown();
@@ -451,8 +452,8 @@ public class YtDynamicTableWriterCacheTest {
         Assertions.assertEquals(0, cache.getSize());
         Mockito.verify(firstWriter, Mockito.never()).close();
         Mockito.verify(secondWriter, Mockito.never()).close();
-        Mockito.verify(firstWriter).clearCacheIdleListener();
-        Mockito.verify(secondWriter).clearCacheIdleListener();
+        Mockito.verify(firstWriter).clearCacheStateListener();
+        Mockito.verify(secondWriter).clearCacheStateListener();
 
         AtomicInteger supplierCalls = new AtomicInteger();
         AtomicInteger actionCalls = new AtomicInteger();
@@ -489,9 +490,9 @@ public class YtDynamicTableWriterCacheTest {
         return writer;
     }
 
-    private Runnable captureIdleListener(YtDynamicTableWriter writer) {
+    private Runnable captureStateListener(YtDynamicTableWriter writer) {
         ArgumentCaptor<Runnable> listenerCaptor = ArgumentCaptor.forClass(Runnable.class);
-        Mockito.verify(writer).setCacheIdleListener(listenerCaptor.capture());
+        Mockito.verify(writer).setCacheStateListener(listenerCaptor.capture());
         return listenerCaptor.getValue();
     }
 
