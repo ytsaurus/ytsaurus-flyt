@@ -5,6 +5,7 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.Random;
 import java.util.concurrent.CountDownLatch;
@@ -350,6 +351,7 @@ public class YtDynamicTableWriterPoolClientTest {
     }
 
     @Test
+    @SuppressWarnings("removal")
     void testMultipleOperationsErrorReporting() throws Exception {
         var pool = makePool(TestPoolSettings.builder()
                 .clientPool(CountingTestYtClientPool.ofSingle(makeTestClient())));
@@ -366,17 +368,17 @@ public class YtDynamicTableWriterPoolClientTest {
         Mockito.doThrow(new RuntimeException("Test error 2")).when(failingWriter2).close();
 
         var method = YtDynamicTableWriterPool.class.getDeclaredMethod(
-                "multipleOperations", java.util.function.Consumer.class, String.class);
+                "multipleOperations", Collection.class, java.util.function.Consumer.class, String.class);
         method.setAccessible(true);
 
         var writersList = new ArrayList<YtDynamicTableWriter>(List.of(failingWriter1, failingWriter2));
-        var poolSpy = Mockito.spy(pool);
-        Mockito.when(poolSpy.getWriters()).thenReturn(writersList);
 
         RuntimeException exception = Assertions.assertThrows(RuntimeException.class, () -> {
             try {
-                method.invoke(poolSpy,
-                        (java.util.function.Consumer<YtDynamicTableWriter>) YtDynamicTableWriter::close, "close");
+                method.invoke(pool,
+                        writersList,
+                        (java.util.function.Consumer<YtDynamicTableWriter>) YtDynamicTableWriter::close,
+                        "close");
             } catch (java.lang.reflect.InvocationTargetException e) {
                 Throwable cause = e.getCause();
                 if (cause instanceof RuntimeException) {

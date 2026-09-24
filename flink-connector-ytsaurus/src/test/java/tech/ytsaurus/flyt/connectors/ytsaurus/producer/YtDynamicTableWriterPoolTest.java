@@ -116,6 +116,7 @@ public class YtDynamicTableWriterPoolTest {
     }
 
     @Test
+    @SuppressWarnings("removal")
     void poolAcquireConnectionThenCheckPathSuccess() {
         setYtPathAvailable("home", "smth", "__tests__", "tests", "sample");
         mockMountAny();
@@ -126,6 +127,7 @@ public class YtDynamicTableWriterPoolTest {
     }
 
     @Test
+    @SuppressWarnings("removal")
     void poolAcquireConnectionForbiddenPathSuccess() {
         setYtPathAvailable("__non_existent__");
         try (var pool = makePool("//home/smth/__tests__/tests", "[]", new IntType())) {
@@ -170,7 +172,7 @@ public class YtDynamicTableWriterPoolTest {
         Mockito.when(transaction.commit()).thenReturn(CompletableFuture.completedFuture(null));
 
         try (var pool = makePool("/", schema, logicalType)) {
-            var writer = pool.getOrAcquire(WriterClassifier.plain("values"));
+            var classifier = WriterClassifier.plain("values");
             for (int i = 0; i < ytWriterOptions.getRowsInModificationLimit() + 1; i++) {
                 GenericRowData genericRowData = new GenericRowData(RowKind.INSERT, 2);
                 // id
@@ -181,7 +183,7 @@ public class YtDynamicTableWriterPoolTest {
                                 .of(2022, 10, 30, 10, 10, 10)
                                 .toInstant(ZoneOffset.UTC)
                 ));
-                writer.write(genericRowData);
+                pool.write(classifier, genericRowData);
             }
             assertEquals(1, rows.get().size());
         }
@@ -316,6 +318,7 @@ public class YtDynamicTableWriterPoolTest {
                 .createNode(Mockito.<CreateNode>any());
     }
 
+    @SuppressWarnings("removal")
     private void testPartition(
             OffsetDateTime current,
             Instant rowInstant,

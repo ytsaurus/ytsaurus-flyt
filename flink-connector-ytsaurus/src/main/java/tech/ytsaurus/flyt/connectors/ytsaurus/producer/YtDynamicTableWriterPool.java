@@ -172,25 +172,39 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
         return new YtDynamicTableWriterCache(CACHE_TTL);
     }
 
+    /**
+     * @deprecated returning a writer outside a cache scope disables idle eviction for that writer until this pool is
+     * closed. Use the scoped pool operations instead.
+     */
+    @Deprecated(forRemoval = true)
     public YtDynamicTableWriter getOrAcquire(WriterClassifier writerClassifier) {
         String tableName = writerClassifier.getTableName();
-        return cache.getOrAcquire(tableName, () -> prepareWriter(writerClassifier));
+        return cache.getOrAcquireLegacy(tableName, () -> prepareWriter(writerClassifier));
     }
 
     public void write(WriterClassifier writerClassifier, RowData record) {
         String tableName = writerClassifier.getTableName();
-        try (YtDynamicTableWriterCache.WriterLease lease = cache.acquire(
-                tableName, () -> prepareWriter(writerClassifier))) {
-            lease.getWriter().write(record);
-        }
+        cache.withWriter(
+                tableName,
+                () -> prepareWriter(writerClassifier),
+                writer -> writer.write(record));
     }
 
+    /**
+     * @deprecated returning writers outside a cache scope disables idle eviction for them until this pool is closed.
+     * Use the scoped pool operations instead.
+     */
+    @Deprecated(forRemoval = true)
     public Collection<YtDynamicTableWriter> getWriters() {
-        return cache.valuesSnapshot();
+        return cache.legacyValuesSnapshot();
     }
 
     public void finish() {
         multipleOperations(YtDynamicTableWriter::finish, "finish");
+    }
+
+    public void snapshotState(long checkpointId) {
+        multipleOperations(writer -> writer.snapshotState(checkpointId), "snapshot state");
     }
 
     @Override
@@ -201,7 +215,15 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
     }
 
     private void multipleOperations(Consumer<YtDynamicTableWriter> operation, String operationName) {
-        multipleOperations(getWriters(), operation, operationName);
+        List<Exception> writerExceptions = new ArrayList<>();
+        List<String> writerPaths = new ArrayList<>();
+        cache.forEachWriter(writer -> performOperation(
+                writer,
+                operation,
+                operationName,
+                writerExceptions,
+                writerPaths));
+        throwIfOperationsFailed(operationName, writerExceptions, writerPaths);
     }
 
     private void multipleOperations(
@@ -211,20 +233,35 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
         List<Exception> writerExceptions = new ArrayList<>();
         List<String> writerPaths = new ArrayList<>();
         for (YtDynamicTableWriter writer : writers) {
-            try {
-                operation.accept(writer);
-            } catch (Exception e) {
-                writerExceptions.add(e);
-                writerPaths.add(writer.getPath());
-            }
+            performOperation(writer, operation, operationName, writerExceptions, writerPaths);
         }
+        throwIfOperationsFailed(operationName, writerExceptions, writerPaths);
+    }
+
+    private void performOperation(
+            YtDynamicTableWriter writer,
+            Consumer<YtDynamicTableWriter> operation,
+            String operationName,
+            List<Exception> writerExceptions,
+            List<String> writerPaths) {
+        try {
+            operation.accept(writer);
+        } catch (Exception e) {
+            writerExceptions.add(e);
+            writerPaths.add(writer.getPath());
+            log.error("Error to {} writer for table at '{}'", operationName, writer.getPath(), e);
+        }
+    }
+
+    private void throwIfOperationsFailed(
+            String operationName,
+            List<Exception> writerExceptions,
+            List<String> writerPaths) {
         if (!writerExceptions.isEmpty()) {
             StringBuilder errorDetails = new StringBuilder();
             for (int i = 0; i < writerExceptions.size(); i++) {
                 Exception exception = writerExceptions.get(i);
                 String writerPath = writerPaths.get(i);
-                log.error("Error to {} writer for table at '{}'", operationName, writerPath, exception);
-
                 errorDetails.append(String.format("Writer at '%s': %s", writerPath, exception.getMessage()));
                 if (i < writerExceptions.size() - 1) {
                     errorDetails.append("; ");
@@ -259,7 +296,13 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
     public void createFullPathTable() {
         // Acquiring a table in case of partitioning's absence
         // automatically triggers table init
-        getOrAcquire(WriterClassifier.plain(path.getBaseTableName()));
+        WriterClassifier writerClassifier = WriterClassifier.plain(path.getBaseTableName());
+        cache.withWriter(
+                writerClassifier.getTableName(),
+                () -> prepareWriter(writerClassifier),
+                writer -> {
+                    // Writer creation performs eager table initialization.
+                });
     }
 
 

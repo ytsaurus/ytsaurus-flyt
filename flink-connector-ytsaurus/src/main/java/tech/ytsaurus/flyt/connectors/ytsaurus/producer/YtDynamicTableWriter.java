@@ -171,7 +171,7 @@ public class YtDynamicTableWriter implements Serializable {
     private transient String acquiredLock;
 
     @Nullable
-    private transient volatile Runnable cacheStateListener;
+    private transient volatile Runnable cacheIdleListener;
 
     // Shared data metrics delegate (managed by pool, not by individual writers)
     private final DataMetricsWriterDelegate dataMetrics;
@@ -248,14 +248,17 @@ public class YtDynamicTableWriter implements Serializable {
             transactionCommitter.scheduleAtFixedRate(() -> {
                 if (lastTransactionCommit.get() + ytWriterOptions.getCommitTransactionPeriod().toMillis()
                         < System.currentTimeMillis()) {
+                    boolean becameIdle = false;
                     commitTransactionLock.lock();
                     try {
-                        commitTransaction();
+                        becameIdle = commitTransaction();
                     } catch (Exception e) {
                         error.set(e);
                     } finally {
                         commitTransactionLock.unlock();
-                        notifyCacheStateListener();
+                    }
+                    if (becameIdle) {
+                        notifyCacheIdleListener();
                     }
                 }
             }, 0L, ytWriterOptions.getCommitTransactionPeriod().toMillis(), TimeUnit.MILLISECONDS);
@@ -402,38 +405,34 @@ public class YtDynamicTableWriter implements Serializable {
     }
 
     public void write(RowData record) {
-        try {
-            dataMetrics.onRecord(record);
+        dataMetrics.onRecord(record);
 
-            if (modificationSize() == ytWriterOptions.getRowsInModificationLimit()) {
-                flushModificationLock.lock();
-                try {
-                    flushModification();
-                } finally {
-                    flushModificationLock.unlock();
-                }
-            }
-            if (rowsInTransaction.get() >= ytWriterOptions.getRowsInTransactionLimit()) {
-                commitTransactionLock.lock();
-                try {
-                    if (rowsInTransaction.get() >= ytWriterOptions.getRowsInTransactionLimit()) {
-                        commitTransaction();
-                    }
-                } finally {
-                    commitTransactionLock.unlock();
-                }
-            }
+        if (modificationSize() == ytWriterOptions.getRowsInModificationLimit()) {
             flushModificationLock.lock();
             try {
-                final Map<String, ? extends Serializable> row = createRow(record);
-                modificationBuffer.addInsert(row);
-                unflushedRows.add(row);
-                rowsInBuffer.incrementAndGet();
+                flushModification();
             } finally {
                 flushModificationLock.unlock();
             }
+        }
+        if (rowsInTransaction.get() >= ytWriterOptions.getRowsInTransactionLimit()) {
+            commitTransactionLock.lock();
+            try {
+                if (rowsInTransaction.get() >= ytWriterOptions.getRowsInTransactionLimit()) {
+                    commitTransaction();
+                }
+            } finally {
+                commitTransactionLock.unlock();
+            }
+        }
+        flushModificationLock.lock();
+        try {
+            final Map<String, ? extends Serializable> row = createRow(record);
+            modificationBuffer.addInsert(row);
+            unflushedRows.add(row);
+            rowsInBuffer.incrementAndGet();
         } finally {
-            notifyCacheStateListener();
+            flushModificationLock.unlock();
         }
     }
 
@@ -489,15 +488,18 @@ public class YtDynamicTableWriter implements Serializable {
 
     private void flushData() {
         checkError();
+        boolean becameIdle = false;
         flushModificationLock.lock();
         commitTransactionLock.lock();
         try {
             flushModification();
-            commitTransaction();
+            becameIdle = commitTransaction();
         } finally {
             commitTransactionLock.unlock();
             flushModificationLock.unlock();
-            notifyCacheStateListener();
+        }
+        if (becameIdle) {
+            notifyCacheIdleListener();
         }
     }
 
@@ -760,8 +762,9 @@ public class YtDynamicTableWriter implements Serializable {
     }
 
     @SneakyThrows
-    private void commitTransaction() {
+    private boolean commitTransaction() {
         checkError();
+        boolean committedData = false;
         if (currentTransaction != null && rowsInTransaction.get() != 0) {
             FutureUtils.allOf(transactionDataBuffer).get(ytWriterOptions.getTransactionTimeout().getSeconds(),
                     TimeUnit.SECONDS);
@@ -781,15 +784,17 @@ public class YtDynamicTableWriter implements Serializable {
                     lastNonCommittedTrackableField.get()));
             log.info("Commit successful transaction {} with {} rows for table {}",
                     currentTransactionId, committedRows, getPath());
+            committedData = true;
         } else {
             log.info("No data to commit in writer for {}", getPath());
         }
         long current = System.currentTimeMillis();
         if (lastCommitTimestamp.get() == VALUE_METRIC_CLOSED) {
             log.error("Preventing reset of last commit timestamp: was=-1, now={} (we're closed)", current);
-            return;
+            return false;
         }
         lastCommitTimestamp.set(current);
+        return committedData && !isBusy();
     }
 
     private void commitWithRetry() throws InterruptedException {
@@ -886,16 +891,16 @@ public class YtDynamicTableWriter implements Serializable {
         return rowsInBuffer.get() != 0 || rowsInTransaction.get() != 0;
     }
 
-    void setCacheStateListener(Runnable listener) {
-        cacheStateListener = listener;
+    void setCacheIdleListener(Runnable listener) {
+        cacheIdleListener = listener;
     }
 
-    void clearCacheStateListener() {
-        cacheStateListener = null;
+    void clearCacheIdleListener() {
+        cacheIdleListener = null;
     }
 
-    private void notifyCacheStateListener() {
-        Runnable listener = cacheStateListener;
+    private void notifyCacheIdleListener() {
+        Runnable listener = cacheIdleListener;
         if (listener != null) {
             listener.run();
         }

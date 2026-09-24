@@ -1,10 +1,12 @@
 package tech.ytsaurus.flyt.connectors.ytsaurus.producer;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
@@ -23,7 +25,7 @@ import org.apache.flink.util.Preconditions;
 /**
  * A Caffeine-backed writer cache with conditional expiration.
  *
- * <p>An entry is pinned while it is being used or its writer has uncommitted data. Writer state changes are
+ * <p>An entry is pinned while it is being used or its writer has uncommitted data. Writer idle transitions are
  * published back to Caffeine so that its expiration policy can schedule eviction once the writer becomes idle.
  * The idle transition starts a fresh TTL. An eviction listener closes an expired writer synchronously before another
  * writer can be installed for the same table.
@@ -59,44 +61,99 @@ final class YtDynamicTableWriterCache {
                 .build();
     }
 
-    WriterLease acquire(String tableName, Supplier<YtDynamicTableWriter> writerSupplier) {
+    void withWriter(
+            String tableName,
+            Supplier<YtDynamicTableWriter> writerSupplier,
+            Consumer<YtDynamicTableWriter> action) {
         Preconditions.checkNotNull(tableName);
         Preconditions.checkNotNull(writerSupplier);
+        Preconditions.checkNotNull(action);
 
         lifecycleLock.readLock().lock();
-        boolean acquired = false;
+        CacheEntry entry = null;
         try {
             Preconditions.checkState(!stopped, "Writer cache is stopped");
-            CacheEntry entry = cache.asMap().compute(tableName, (ignored, current) -> {
-                CacheEntry result = current;
-                if (result == null) {
-                    YtDynamicTableWriter writer = Preconditions.checkNotNull(writerSupplier.get());
-                    result = new CacheEntry(writer);
-                    CacheEntry created = result;
-                    writer.setCacheStateListener(() -> onWriterStateChanged(tableName, created));
-                }
-                result.activeUses++;
-                return result;
-            });
-            acquired = true;
-            return new WriterLease(tableName, Preconditions.checkNotNull(entry));
+            entry = pin(tableName, writerSupplier, false);
+            action.accept(entry.getWriter());
         } finally {
-            if (!acquired) {
+            try {
+                if (entry != null) {
+                    unpin(tableName, entry);
+                }
+            } finally {
                 lifecycleLock.readLock().unlock();
             }
         }
     }
 
-    YtDynamicTableWriter getOrAcquire(String tableName, Supplier<YtDynamicTableWriter> writerSupplier) {
-        try (WriterLease lease = acquire(tableName, writerSupplier)) {
-            return lease.getWriter();
+    /** Compatibility bridge for the deprecated public raw-writer API. */
+    YtDynamicTableWriter getOrAcquireLegacy(
+            String tableName,
+            Supplier<YtDynamicTableWriter> writerSupplier) {
+        Preconditions.checkNotNull(tableName);
+        Preconditions.checkNotNull(writerSupplier);
+
+        lifecycleLock.readLock().lock();
+        CacheEntry entry = null;
+        try {
+            Preconditions.checkState(!stopped, "Writer cache is stopped");
+            entry = pin(tableName, writerSupplier, true);
+            return entry.getWriter();
+        } finally {
+            try {
+                if (entry != null) {
+                    unpin(tableName, entry);
+                }
+            } finally {
+                lifecycleLock.readLock().unlock();
+            }
         }
     }
 
-    Collection<YtDynamicTableWriter> valuesSnapshot() {
-        return cache.asMap().values().stream()
-                .map(CacheEntry::getWriter)
-                .collect(Collectors.toUnmodifiableList());
+    /**
+     * Returns a snapshot retained for compatibility. Exposed writers stay pinned until cache shutdown.
+     */
+    Collection<YtDynamicTableWriter> legacyValuesSnapshot() {
+        lifecycleLock.readLock().lock();
+        try {
+            List<YtDynamicTableWriter> writers = new ArrayList<>();
+            for (String tableName : List.copyOf(cache.asMap().keySet())) {
+                CacheEntry entry = pinIfPresent(tableName, true);
+                if (entry == null) {
+                    continue;
+                }
+                try {
+                    writers.add(entry.getWriter());
+                } finally {
+                    unpin(tableName, entry);
+                }
+            }
+            return List.copyOf(writers);
+        } finally {
+            lifecycleLock.readLock().unlock();
+        }
+    }
+
+    void forEachWriter(Consumer<YtDynamicTableWriter> action) {
+        Preconditions.checkNotNull(action);
+
+        lifecycleLock.writeLock().lock();
+        try {
+            Preconditions.checkState(!stopped, "Writer cache is stopped");
+            for (String tableName : List.copyOf(cache.asMap().keySet())) {
+                CacheEntry entry = pinIfPresent(tableName, false);
+                if (entry == null) {
+                    continue;
+                }
+                try {
+                    action.accept(entry.getWriter());
+                } finally {
+                    unpin(tableName, entry);
+                }
+            }
+        } finally {
+            lifecycleLock.writeLock().unlock();
+        }
     }
 
     Collection<YtDynamicTableWriter> stopCleanup() {
@@ -120,36 +177,58 @@ final class YtDynamicTableWriterCache {
         }
     }
 
-    private void release(String tableName, CacheEntry expected) {
-        try {
-            cache.asMap().computeIfPresent(tableName, (ignored, current) -> {
-                if (current == expected) {
-                    Preconditions.checkState(current.activeUses > 0, "Writer cache lease is already released");
-                    current.activeUses--;
-                }
-                return current;
-            });
-        } finally {
-            lifecycleLock.readLock().unlock();
-        }
+    private CacheEntry pin(
+            String tableName,
+            Supplier<YtDynamicTableWriter> writerSupplier,
+            boolean legacyPinned) {
+        CacheEntry entry = cache.asMap().compute(tableName, (ignored, current) -> {
+            CacheEntry result = current;
+            if (result == null) {
+                YtDynamicTableWriter writer = Preconditions.checkNotNull(writerSupplier.get());
+                result = new CacheEntry(writer);
+                CacheEntry created = result;
+                writer.setCacheIdleListener(() -> onWriterIdle(tableName, created));
+            }
+            if (legacyPinned) {
+                result.legacyPinned = true;
+            }
+            result.activeUses++;
+            return result;
+        });
+        return Preconditions.checkNotNull(entry);
     }
 
-    private void onWriterStateChanged(String tableName, CacheEntry expected) {
+    @Nullable
+    private CacheEntry pinIfPresent(String tableName, boolean legacyPinned) {
+        return cache.asMap().computeIfPresent(tableName, (ignored, current) -> {
+            if (legacyPinned) {
+                current.legacyPinned = true;
+            }
+            current.activeUses++;
+            return current;
+        });
+    }
+
+    private void unpin(String tableName, CacheEntry expected) {
+        cache.asMap().computeIfPresent(tableName, (ignored, current) -> {
+            if (current == expected) {
+                Preconditions.checkState(current.activeUses > 0, "Writer cache entry is not pinned");
+                current.activeUses--;
+            }
+            return current;
+        });
+    }
+
+    private void onWriterIdle(String tableName, CacheEntry expected) {
         if (stopped || expected.retired) {
             return;
         }
 
-        synchronized (expected) {
-            try {
-                boolean busy = expected.getWriter().isBusy();
-                if (busy != expected.lastKnownBusy
-                        && cache.asMap().replace(tableName, expected, expected)) {
-                    expected.lastKnownBusy = busy;
-                }
-            } catch (RuntimeException e) {
-                if (!stopped) {
-                    log.error("Unable to update writer cache state for key: {}", tableName, e);
-                }
+        try {
+            cache.asMap().replace(tableName, expected, expected);
+        } catch (RuntimeException e) {
+            if (!stopped) {
+                log.error("Unable to update writer cache state for key: {}", tableName, e);
             }
         }
     }
@@ -185,7 +264,7 @@ final class YtDynamicTableWriterCache {
         private final YtDynamicTableWriter writer;
         private final AtomicBoolean closed = new AtomicBoolean();
         private int activeUses;
-        private boolean lastKnownBusy;
+        private volatile boolean legacyPinned;
         private volatile boolean retired;
 
         private CacheEntry(YtDynamicTableWriter writer) {
@@ -197,12 +276,12 @@ final class YtDynamicTableWriterCache {
         }
 
         private boolean isPinned() {
-            return activeUses > 0 || writer.isBusy();
+            return activeUses > 0 || legacyPinned || writer.isBusy();
         }
 
         private void retire() {
             retired = true;
-            writer.clearCacheStateListener();
+            writer.clearCacheIdleListener();
         }
 
         private boolean isClosed() {
@@ -216,26 +295,4 @@ final class YtDynamicTableWriterCache {
         }
     }
 
-    /** A lease must be closed by the thread that acquired it. */
-    final class WriterLease implements AutoCloseable {
-        private final String tableName;
-        private final CacheEntry entry;
-        private final AtomicBoolean released = new AtomicBoolean();
-
-        private WriterLease(String tableName, CacheEntry entry) {
-            this.tableName = tableName;
-            this.entry = entry;
-        }
-
-        YtDynamicTableWriter getWriter() {
-            return entry.getWriter();
-        }
-
-        @Override
-        public void close() {
-            if (released.compareAndSet(false, true)) {
-                release(tableName, entry);
-            }
-        }
-    }
 }

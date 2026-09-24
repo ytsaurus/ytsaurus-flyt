@@ -133,9 +133,7 @@ public class YtRowDataSinkFunction extends RichSinkFunction<RowData> implements 
 
     @Override
     public void snapshotState(FunctionSnapshotContext context) {
-        for (YtDynamicTableWriter writer : pool.getWriters()) {
-            writer.snapshotState(context.getCheckpointId());
-        }
+        pool.snapshotState(context.getCheckpointId());
     }
 
     @Override
