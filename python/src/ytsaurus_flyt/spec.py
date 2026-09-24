@@ -33,6 +33,12 @@ TASKMANAGER_PROCESS_MEMORY_FRACTION = 0.75
 # Default task off-heap share of the TaskManager JVM when no off_heap is configured: Flink pins
 # -XX:MaxDirectMemorySize to framework + task off-heap, and connectors (gRPC, netty) need direct buffers.
 TASKMANAGER_TASK_OFF_HEAP_FRACTION = 0.125
+# Flink reserves 40% of a TaskManager for managed memory, which only RocksDB, batch operators and
+# Python UDF workers use; flyt jobs are stateless with the heap state backend, so most of it would
+# sit idle while task heap starves. 10% keeps a slice for Python UDF workers.
+TASKMANAGER_MANAGED_MEMORY_FRACTION = "0.1"
+# A JVM that survives an OutOfMemoryError hangs in GC, misses heartbeats and is never restarted by YT.
+JVM_EXIT_ON_OOM_OPT = "-XX:+ExitOnOutOfMemoryError"
 _RUN_SCRIPTS_DIR = Path(__file__).parent / "run_scripts"
 JOB_HELPER_FILENAME = "flyt_job_helper.py"
 
@@ -196,12 +202,16 @@ def flink_dynamic_properties(
             if taskmanager_params.off_heap is not None
             else int(tm_process_size * TASKMANAGER_TASK_OFF_HEAP_FRACTION)
         ),
+        "taskmanager.memory.managed.fraction": TASKMANAGER_MANAGED_MEMORY_FRACTION,
+        # Task-thread OOMs kill the TaskManager (Flink option); ExitOnOutOfMemoryError covers every
+        # other thread. Either way YT restarts the job and Flink recovers instead of hanging.
+        "taskmanager.jvm-exit-on-oom": "true",
         "python.executable": config.python_bin,
         "python.client.executable": config.python_bin,
         # YT exec nodes are IPv6-first; pin the JVM processor count to the container CPU limit.
         "env.java.opts.all": "-Djava.net.preferIPv6Addresses=true",
-        "env.java.opts.jobmanager": f"-XX:ActiveProcessorCount={jobmanager_params.cpu}",
-        "env.java.opts.taskmanager": f"-XX:ActiveProcessorCount={taskmanager_params.cpu}",
+        "env.java.opts.jobmanager": f"-XX:ActiveProcessorCount={jobmanager_params.cpu} {JVM_EXIT_ON_OOM_OPT}",
+        "env.java.opts.taskmanager": f"-XX:ActiveProcessorCount={taskmanager_params.cpu} {JVM_EXIT_ON_OOM_OPT}",
     }
     if off_heap_size_str:
         props["jobmanager.memory.off-heap.size"] = off_heap_size_str

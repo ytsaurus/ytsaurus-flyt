@@ -169,8 +169,10 @@ def test_flink_dynamic_properties_derive_memory_slots_and_apply_overrides():
     assert props["taskmanager.numberOfTaskSlots"] == "2"
     assert props["parallelism.default"] == "6"
     assert props["python.executable"] == "/py"
-    assert props["env.java.opts.taskmanager"] == "-XX:ActiveProcessorCount=4"
-    assert props["env.java.opts.jobmanager"] == "-XX:ActiveProcessorCount=2"
+    assert props["env.java.opts.taskmanager"] == "-XX:ActiveProcessorCount=4 -XX:+ExitOnOutOfMemoryError"
+    assert props["env.java.opts.jobmanager"] == "-XX:ActiveProcessorCount=2 -XX:+ExitOnOutOfMemoryError"
+    assert props["taskmanager.jvm-exit-on-oom"] == "true"
+    assert props["taskmanager.memory.managed.fraction"] == "0.1"
     assert props["restart-strategy.type"] == "fixed-delay"
     assert props["custom.key"] == "v"
 
