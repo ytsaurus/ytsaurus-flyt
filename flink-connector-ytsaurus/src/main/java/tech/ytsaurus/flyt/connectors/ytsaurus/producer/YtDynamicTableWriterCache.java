@@ -1,7 +1,6 @@
 package tech.ytsaurus.flyt.connectors.ytsaurus.producer;
 
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -73,7 +72,7 @@ final class YtDynamicTableWriterCache {
         CacheEntry entry = null;
         try {
             Preconditions.checkState(!stopped, "Writer cache is stopped");
-            entry = pin(tableName, writerSupplier, false);
+            entry = pin(tableName, writerSupplier);
             action.accept(entry.getWriter());
         } finally {
             try {
@@ -86,54 +85,6 @@ final class YtDynamicTableWriterCache {
         }
     }
 
-    /** Compatibility bridge for the deprecated public raw-writer API. */
-    YtDynamicTableWriter getOrAcquireLegacy(
-            String tableName,
-            Supplier<YtDynamicTableWriter> writerSupplier) {
-        Preconditions.checkNotNull(tableName);
-        Preconditions.checkNotNull(writerSupplier);
-
-        lifecycleLock.readLock().lock();
-        CacheEntry entry = null;
-        try {
-            Preconditions.checkState(!stopped, "Writer cache is stopped");
-            entry = pin(tableName, writerSupplier, true);
-            return entry.getWriter();
-        } finally {
-            try {
-                if (entry != null) {
-                    unpin(tableName, entry);
-                }
-            } finally {
-                lifecycleLock.readLock().unlock();
-            }
-        }
-    }
-
-    /**
-     * Returns a snapshot retained for compatibility. Exposed writers stay pinned until cache shutdown.
-     */
-    Collection<YtDynamicTableWriter> legacyValuesSnapshot() {
-        lifecycleLock.readLock().lock();
-        try {
-            List<YtDynamicTableWriter> writers = new ArrayList<>();
-            for (String tableName : List.copyOf(cache.asMap().keySet())) {
-                CacheEntry entry = pinIfPresent(tableName, true);
-                if (entry == null) {
-                    continue;
-                }
-                try {
-                    writers.add(entry.getWriter());
-                } finally {
-                    unpin(tableName, entry);
-                }
-            }
-            return List.copyOf(writers);
-        } finally {
-            lifecycleLock.readLock().unlock();
-        }
-    }
-
     void forEachWriter(Consumer<YtDynamicTableWriter> action) {
         Preconditions.checkNotNull(action);
 
@@ -141,7 +92,7 @@ final class YtDynamicTableWriterCache {
         try {
             Preconditions.checkState(!stopped, "Writer cache is stopped");
             for (String tableName : List.copyOf(cache.asMap().keySet())) {
-                CacheEntry entry = pinIfPresent(tableName, false);
+                CacheEntry entry = pinIfPresent(tableName);
                 if (entry == null) {
                     continue;
                 }
@@ -177,10 +128,7 @@ final class YtDynamicTableWriterCache {
         }
     }
 
-    private CacheEntry pin(
-            String tableName,
-            Supplier<YtDynamicTableWriter> writerSupplier,
-            boolean legacyPinned) {
+    private CacheEntry pin(String tableName, Supplier<YtDynamicTableWriter> writerSupplier) {
         CacheEntry entry = cache.asMap().compute(tableName, (ignored, current) -> {
             CacheEntry result = current;
             if (result == null) {
@@ -189,9 +137,6 @@ final class YtDynamicTableWriterCache {
                 CacheEntry created = result;
                 writer.setCacheIdleListener(() -> onWriterIdle(tableName, created));
             }
-            if (legacyPinned) {
-                result.legacyPinned = true;
-            }
             result.activeUses++;
             return result;
         });
@@ -199,11 +144,8 @@ final class YtDynamicTableWriterCache {
     }
 
     @Nullable
-    private CacheEntry pinIfPresent(String tableName, boolean legacyPinned) {
+    private CacheEntry pinIfPresent(String tableName) {
         return cache.asMap().computeIfPresent(tableName, (ignored, current) -> {
-            if (legacyPinned) {
-                current.legacyPinned = true;
-            }
             current.activeUses++;
             return current;
         });
@@ -264,7 +206,6 @@ final class YtDynamicTableWriterCache {
         private final YtDynamicTableWriter writer;
         private final AtomicBoolean closed = new AtomicBoolean();
         private int activeUses;
-        private volatile boolean legacyPinned;
         private volatile boolean retired;
 
         private CacheEntry(YtDynamicTableWriter writer) {
@@ -276,7 +217,7 @@ final class YtDynamicTableWriterCache {
         }
 
         private boolean isPinned() {
-            return activeUses > 0 || legacyPinned || writer.isBusy();
+            return activeUses > 0 || writer.isBusy();
         }
 
         private void retire() {

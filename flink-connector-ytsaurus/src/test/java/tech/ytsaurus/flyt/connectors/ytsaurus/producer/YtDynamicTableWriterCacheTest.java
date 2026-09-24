@@ -117,50 +117,6 @@ public class YtDynamicTableWriterCacheTest {
     }
 
     @Test
-    public void testValuesSnapshotIsDetachedAndUnmodifiable() {
-        YtDynamicTableWriter firstWriter = Mockito.mock(YtDynamicTableWriter.class);
-        YtDynamicTableWriter secondWriter = Mockito.mock(YtDynamicTableWriter.class);
-        YtDynamicTableWriterCache cache = makeCache();
-        putWriter(cache, "first", firstWriter);
-
-        Collection<YtDynamicTableWriter> snapshot = cache.legacyValuesSnapshot();
-        putWriter(cache, "second", secondWriter);
-
-        Assertions.assertEquals(List.of(firstWriter), snapshot);
-        Assertions.assertThrows(UnsupportedOperationException.class, snapshot::clear);
-        Assertions.assertEquals(2, cache.getSize());
-    }
-
-    @Test
-    public void testLegacyAccessPinsWriterUntilShutdown() {
-        YtDynamicTableWriter writer = Mockito.mock(YtDynamicTableWriter.class);
-        YtDynamicTableWriterCache cache = makeCache();
-
-        Assertions.assertSame(writer, cache.getOrAcquireLegacy("table", () -> writer));
-        ticker.advance(TTL.multipliedBy(2));
-        cache.cleanupExpired();
-
-        Assertions.assertEquals(1, cache.getSize());
-        Mockito.verify(writer, Mockito.never()).close();
-        Assertions.assertEquals(List.of(writer), cache.stopCleanup());
-    }
-
-    @Test
-    public void testLegacySnapshotPinsExposedWritersUntilShutdown() {
-        YtDynamicTableWriter writer = Mockito.mock(YtDynamicTableWriter.class);
-        YtDynamicTableWriterCache cache = makeCache();
-        putWriter(cache, "table", writer);
-
-        Assertions.assertEquals(List.of(writer), cache.legacyValuesSnapshot());
-        ticker.advance(TTL.multipliedBy(2));
-        cache.cleanupExpired();
-
-        Assertions.assertEquals(1, cache.getSize());
-        Mockito.verify(writer, Mockito.never()).close();
-        Assertions.assertEquals(List.of(writer), cache.stopCleanup());
-    }
-
-    @Test
     @Timeout(10)
     public void testConcurrentAcquireCreatesSingleWriter() throws Exception {
         YtDynamicTableWriter writer = Mockito.mock(YtDynamicTableWriter.class);
@@ -242,7 +198,7 @@ public class YtDynamicTableWriterCacheTest {
 
             Assertions.assertSame(replacementWriter, acquire.get(5, TimeUnit.SECONDS));
             Assertions.assertEquals(1, replacementSupplierCalls.get());
-            Assertions.assertEquals(List.of(replacementWriter), cache.legacyValuesSnapshot());
+            Assertions.assertEquals(1, cache.getSize());
             Mockito.verify(expiredWriter).close();
         } finally {
             releaseClose.countDown();

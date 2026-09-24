@@ -172,31 +172,16 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
         return new YtDynamicTableWriterCache(CACHE_TTL);
     }
 
-    /**
-     * @deprecated returning a writer outside a cache scope disables idle eviction for that writer until this pool is
-     * closed. Use the scoped pool operations instead.
-     */
-    @Deprecated(forRemoval = true)
-    public YtDynamicTableWriter getOrAcquire(WriterClassifier writerClassifier) {
-        String tableName = writerClassifier.getTableName();
-        return cache.getOrAcquireLegacy(tableName, () -> prepareWriter(writerClassifier));
-    }
-
     public void write(WriterClassifier writerClassifier, RowData record) {
-        String tableName = writerClassifier.getTableName();
-        cache.withWriter(
-                tableName,
-                () -> prepareWriter(writerClassifier),
-                writer -> writer.write(record));
+        withWriter(writerClassifier, writer -> writer.write(record));
     }
 
-    /**
-     * @deprecated returning writers outside a cache scope disables idle eviction for them until this pool is closed.
-     * Use the scoped pool operations instead.
-     */
-    @Deprecated(forRemoval = true)
-    public Collection<YtDynamicTableWriter> getWriters() {
-        return cache.legacyValuesSnapshot();
+    @VisibleForTesting
+    void withWriter(
+            WriterClassifier writerClassifier,
+            Consumer<YtDynamicTableWriter> action) {
+        String tableName = writerClassifier.getTableName();
+        cache.withWriter(tableName, () -> prepareWriter(writerClassifier), action);
     }
 
     public void finish() {
@@ -297,12 +282,9 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
         // Acquiring a table in case of partitioning's absence
         // automatically triggers table init
         WriterClassifier writerClassifier = WriterClassifier.plain(path.getBaseTableName());
-        cache.withWriter(
-                writerClassifier.getTableName(),
-                () -> prepareWriter(writerClassifier),
-                writer -> {
-                    // Writer creation performs eager table initialization.
-                });
+        withWriter(writerClassifier, writer -> {
+            // Writer creation performs eager table initialization.
+        });
     }
 
 

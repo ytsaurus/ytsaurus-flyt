@@ -351,19 +351,14 @@ public class YtDynamicTableWriterPoolClientTest {
     }
 
     @Test
-    @SuppressWarnings("removal")
     void testMultipleOperationsErrorReporting() throws Exception {
         var pool = makePool(TestPoolSettings.builder()
                 .clientPool(CountingTestYtClientPool.ofSingle(makeTestClient())));
 
-        WriterClassifier classifier1 = WriterClassifier.plain("table1");
-        WriterClassifier classifier2 = WriterClassifier.plain("table2");
-
-        var writer1 = pool.getOrAcquire(classifier1);
-        var writer2 = pool.getOrAcquire(classifier2);
-
-        var failingWriter1 = Mockito.spy(writer1);
-        var failingWriter2 = Mockito.spy(writer2);
+        var failingWriter1 = Mockito.mock(YtDynamicTableWriter.class);
+        var failingWriter2 = Mockito.mock(YtDynamicTableWriter.class);
+        Mockito.when(failingWriter1.getPath()).thenReturn("table1");
+        Mockito.when(failingWriter2.getPath()).thenReturn("table2");
         Mockito.doThrow(new RuntimeException("Test error 1")).when(failingWriter1).close();
         Mockito.doThrow(new RuntimeException("Test error 2")).when(failingWriter2).close();
 
