@@ -94,21 +94,20 @@ public class YtDynamicTableWriterPoolTest {
 
     private YtDynamicTableWriterPool makePool(ComplexYtPath path, String schema, LogicalType logicalType) {
         RowDataToYtListConverters ytConverter = new RowDataToYtListConverters(TimestampFormat.ISO_8601);
-        return new YtDynamicTableWriterPool(
-                () -> mockedClient,
-                ytConverter.createConverter(logicalType, YTreeTextSerializer.deserialize(schema)),
-                path,
-                schema,
-                null,
-                retryStrategy,
-                context,
-                YtTableAttributes.empty(),
-                ReshardingConfig.builder()
+        return YtDynamicTableWriterPool.builder()
+                .clientSupplier(() -> mockedClient)
+                .ytConverter(ytConverter.createConverter(logicalType, YTreeTextSerializer.deserialize(schema)))
+                .path(path)
+                .ysonSchemaString(schema)
+                .retryStrategy(retryStrategy)
+                .context(context)
+                .tableAttributes(YtTableAttributes.empty())
+                .reshardingConfig(ReshardingConfig.builder()
                         .reshardStrategy(ReshardStrategy.NONE)
-                        .build(),
-                ytWriterOptions,
-                new NoopLocksProvider()
-        );
+                        .build())
+                .ytWriterOptions(ytWriterOptions)
+                .locksProvider(new NoopLocksProvider())
+                .build();
     }
 
     private YtDynamicTableWriterPool makePool(String basePath, String schema, LogicalType logicalType) {

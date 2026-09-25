@@ -80,7 +80,8 @@ class YtDynamicTableWriterTest {
                 null, // ReshardTable
                 ytWriterOptions,
                 new NoopLocksProvider(),
-                NoopDataMetricsWriterDelegate.INSTANCE
+                NoopDataMetricsWriterDelegate.INSTANCE,
+                null
         );
         ytDynamicTableWriter = Mockito.spy(ytDynamicTableWriter);
         doReturn(false).when(ytDynamicTableWriter).isTableMounted();

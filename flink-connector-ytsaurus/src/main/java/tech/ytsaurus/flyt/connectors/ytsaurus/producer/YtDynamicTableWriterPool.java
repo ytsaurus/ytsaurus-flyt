@@ -5,15 +5,23 @@ import java.io.Serializable;
 import java.time.Duration;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
-import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
 import javax.annotation.Nullable;
 
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
+import com.github.benmanes.caffeine.cache.Expiry;
+import com.github.benmanes.caffeine.cache.RemovalCause;
+import com.github.benmanes.caffeine.cache.Scheduler;
+import com.github.benmanes.caffeine.cache.Ticker;
+import lombok.Builder;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.api.common.functions.RuntimeContext;
@@ -39,14 +47,23 @@ import tech.ytsaurus.flyt.connectors.ytsaurus.common.providers.reshard.LastParti
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.providers.reshard.ReshardProvider;
 import tech.ytsaurus.flyt.connectors.ytsaurus.producer.converters.RowDataToYtListConverters;
 
+/**
+ * Keeps one writer per target table and closes writers that stayed idle for {@link #CACHE_TTL}.
+ *
+ * <p>A write runs inside the cache's compute, so it never races an eviction, and re-evaluates the expiry:
+ * a writer holding rows is pinned, an idle one expires. The writer reports when a commit made it idle.
+ * Checkpoints and finish iterate the cache without touching expiry.
+ */
 @Slf4j
 public class YtDynamicTableWriterPool implements Serializable, Closeable {
     private static final long serialVersionUID = 1L;
 
     private static final Duration CACHE_TTL = Duration.ofMinutes(2);
+    private static final Duration PINNED = Duration.ofNanos(Long.MAX_VALUE);
 
     private final transient Supplier<YTsaurusClient> clientSupplier;
-    private final transient YtDynamicTableWriterCache cache;
+    private final transient Cache<String, YtDynamicTableWriter> cache;
+    private final transient ScheduledExecutorService cacheExecutor;
 
     private final transient Map<String, MetricsSupplier> metricsSuppliers;
 
@@ -70,33 +87,31 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
     // Shared across all writers in this pool
     private final DataMetricsWriterDelegate dataMetrics;
 
-    @VisibleForTesting
+    // cacheTtl and cacheTicker are test knobs; production builds leave them unset.
+    @Builder
     @SuppressWarnings("checkstyle:ParameterNumber")
-    YtDynamicTableWriterPool(@Nullable YtDynamicTableWriterCache cache,
-                             Supplier<YTsaurusClient> clientSupplier,
-                             RowDataToYtListConverters.RowDataToYtMapConverter ytConverter,
-                             ComplexYtPath path,
-                             String ysonSchemaString,
-                             TrackableField trackableField,
-                             RetryStrategy retryStrategy,
-                             RuntimeContext context,
-                             YtTableAttributes tableAttributes,
-                             ReshardingConfig reshardingConfig,
-                             YtWriterOptions ytWriterOptions,
-                             LocksProvider locksProvider,
-                             DataType dataType,
-                             @Nullable DataMetricsConfig dataMetricsConfig) {
-        if (cache == null) {
-            cache = makeDefaultCache();
-        }
-        this.cache = cache;
+    private YtDynamicTableWriterPool(Supplier<YTsaurusClient> clientSupplier,
+                                     RowDataToYtListConverters.RowDataToYtMapConverter ytConverter,
+                                     ComplexYtPath path,
+                                     String ysonSchemaString,
+                                     @Nullable TrackableField trackableField,
+                                     RetryStrategy retryStrategy,
+                                     RuntimeContext context,
+                                     YtTableAttributes tableAttributes,
+                                     ReshardingConfig reshardingConfig,
+                                     YtWriterOptions ytWriterOptions,
+                                     LocksProvider locksProvider,
+                                     @Nullable DataType dataType,
+                                     @Nullable DataMetricsConfig dataMetricsConfig,
+                                     @Nullable Duration cacheTtl,
+                                     @Nullable Ticker cacheTicker) {
         this.clientSupplier = clientSupplier;
         this.ysonSchemaString = ysonSchemaString;
         this.path = path;
         this.trackableField = trackableField;
         this.ytConverter = ytConverter;
         this.context = context;
-        this.metricsSuppliers = new ConcurrentHashMap<>();
+        this.metricsSuppliers = new HashMap<>();
         this.tableAttributes = tableAttributes;
         this.retryStrategy = retryStrategy;
         this.reshardingConfig = reshardingConfig;
@@ -106,85 +121,75 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
         // Create and initialize delegate once for the whole pool
         this.dataMetrics = DataMetricsWriterDelegate.create(dataMetricsConfig, dataType);
         this.dataMetrics.open(context);
+
+        this.cacheExecutor = Executors.newSingleThreadScheduledExecutor(runnable -> {
+            Thread thread = new Thread(runnable, "yt-writer-cache-" + path.getBasePath());
+            thread.setDaemon(true);
+            return thread;
+        });
+        this.cache = makeCache(cacheTtl != null ? cacheTtl : CACHE_TTL, cacheTicker);
     }
 
-    @SuppressWarnings("checkstyle:ParameterNumber")
-    public YtDynamicTableWriterPool(Supplier<YTsaurusClient> clientSupplier,
-                                    RowDataToYtListConverters.RowDataToYtMapConverter ytConverter,
-                                    ComplexYtPath path,
-                                    String ysonSchemaString,
-                                    TrackableField trackableField,
-                                    RetryStrategy retryStrategy,
-                                    RuntimeContext context,
-                                    YtTableAttributes tableAttributes,
-                                    ReshardingConfig reshardingConfig,
-                                    YtWriterOptions ytWriterOptions,
-                                    LocksProvider locksProvider,
-                                    DataType dataType,
-                                    @Nullable DataMetricsConfig dataMetricsConfig) {
-        this(makeDefaultCache(),
-                clientSupplier,
-                ytConverter,
-                path,
-                ysonSchemaString,
-                trackableField,
-                retryStrategy,
-                context,
-                tableAttributes,
-                reshardingConfig,
-                ytWriterOptions,
-                locksProvider,
-                dataType,
-                dataMetricsConfig);
+    private Cache<String, YtDynamicTableWriter> makeCache(Duration ttl, @Nullable Ticker ticker) {
+        Caffeine<String, YtDynamicTableWriter> builder = Caffeine.newBuilder()
+                // A busy writer never expires; an idle one expires a TTL after the last write or idle report.
+                .expireAfter(Expiry.<String, YtDynamicTableWriter>accessing(
+                        (tableName, writer) -> writer.isBusy() ? PINNED : ttl))
+                .evictionListener(this::closeExpiredWriter);
+        if (ticker == null) {
+            builder.executor(cacheExecutor)
+                    .scheduler(Scheduler.forScheduledExecutorService(cacheExecutor));
+        } else {
+            // Tests drive time and cleanup by hand, so maintenance runs on the calling thread
+            builder.ticker(ticker).executor(Runnable::run);
+        }
+        return builder.build();
     }
 
-    @SuppressWarnings("checkstyle:ParameterNumber")
-    public YtDynamicTableWriterPool(Supplier<YTsaurusClient> clientSupplier,
-                                    RowDataToYtListConverters.RowDataToYtMapConverter ytConverter,
-                                    ComplexYtPath path,
-                                    String ysonSchemaString,
-                                    TrackableField trackableField,
-                                    RetryStrategy retryStrategy,
-                                    RuntimeContext context,
-                                    YtTableAttributes tableAttributes,
-                                    ReshardingConfig reshardingConfig,
-                                    YtWriterOptions ytWriterOptions,
-                                    LocksProvider locksProvider) {
-        this(clientSupplier,
-                ytConverter,
-                path,
-                ysonSchemaString,
-                trackableField,
-                retryStrategy,
-                context,
-                tableAttributes,
-                reshardingConfig,
-                ytWriterOptions,
-                locksProvider,
-                null,
-                null);
-    }
-
-    private static YtDynamicTableWriterCache makeDefaultCache() {
-        return new YtDynamicTableWriterCache(CACHE_TTL);
+    private void closeExpiredWriter(@Nullable String tableName,
+                                    @Nullable YtDynamicTableWriter writer,
+                                    RemovalCause cause) {
+        if (writer == null) {
+            return;
+        }
+        log.info("Closing writer for table '{}' evicted from the pool ({})", tableName, cause);
+        try {
+            writer.close();
+        } catch (Exception e) {
+            log.error("Unable to close writer for table '{}' evicted from the pool", tableName, e);
+        }
     }
 
     public void write(WriterClassifier writerClassifier, RowData record) {
-        withWriter(writerClassifier, writer -> writer.write(record));
-    }
-
-    private void withWriter(
-            WriterClassifier writerClassifier,
-            Consumer<YtDynamicTableWriter> action) {
-        String tableName = writerClassifier.getTableName();
-        cache.withWriter(tableName, () -> prepareWriter(writerClassifier), action);
+        cache.asMap().compute(writerClassifier.getTableName(), (tableName, cached) -> {
+            if (cached != null) {
+                cached.write(record);
+                return cached;
+            }
+            YtDynamicTableWriter writer = createWriter(writerClassifier);
+            try {
+                writer.write(record);
+            } catch (Exception e) {
+                // A throwing compute creates no mapping, so the new writer must be closed here.
+                try {
+                    writer.close();
+                } catch (Exception closeError) {
+                    e.addSuppressed(closeError);
+                }
+                throw e;
+            }
+            return writer;
+        });
     }
 
     @VisibleForTesting
     void initializeWriter(WriterClassifier writerClassifier) {
-        withWriter(writerClassifier, writer -> {
-            // Writer creation performs eager table initialization.
-        });
+        // Writer creation performs eager table initialization.
+        cache.asMap().computeIfAbsent(writerClassifier.getTableName(), ignored -> createWriter(writerClassifier));
+    }
+
+    private YtDynamicTableWriter createWriter(WriterClassifier writerClassifier) {
+        return prepareWriter(writerClassifier, () -> refreshExpiration(writerClassifier.getTableName()));
     }
 
     public void finish() {
@@ -198,9 +203,11 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
     @Override
     public void close() {
         try {
-            Collection<YtDynamicTableWriter> writers = cache.stopCleanup();
-            multipleOperations(writers, YtDynamicTableWriter::close, "close");
+            multipleOperations(YtDynamicTableWriter::close, "close");
         } finally {
+            // Expired writers are hidden from the iteration above and get closed by the eviction listener.
+            cache.invalidateAll();
+            cacheExecutor.shutdownNow();
             dataMetrics.close();
         }
     }
@@ -208,22 +215,7 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
     private void multipleOperations(Consumer<YtDynamicTableWriter> operation, String operationName) {
         List<Exception> writerExceptions = new ArrayList<>();
         List<String> writerPaths = new ArrayList<>();
-        cache.forEachWriter(writer -> performOperation(
-                writer,
-                operation,
-                operationName,
-                writerExceptions,
-                writerPaths));
-        throwIfOperationsFailed(operationName, writerExceptions, writerPaths);
-    }
-
-    private void multipleOperations(
-            Collection<YtDynamicTableWriter> writers,
-            Consumer<YtDynamicTableWriter> operation,
-            String operationName) {
-        List<Exception> writerExceptions = new ArrayList<>();
-        List<String> writerPaths = new ArrayList<>();
-        for (YtDynamicTableWriter writer : writers) {
+        for (YtDynamicTableWriter writer : List.copyOf(cache.asMap().values())) {
             performOperation(writer, operation, operationName, writerExceptions, writerPaths);
         }
         throwIfOperationsFailed(operationName, writerExceptions, writerPaths);
@@ -290,8 +282,23 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
         initializeWriter(WriterClassifier.plain(path.getBaseTableName()));
     }
 
+    @VisibleForTesting
+    void cleanUpCache() {
+        cache.cleanUp();
+    }
 
-    private YtDynamicTableWriter prepareWriter(WriterClassifier writerClassifier) {
+    @VisibleForTesting
+    int getCachedWritersCount() {
+        return cache.asMap().size();
+    }
+
+    // Called by the writer after a commit left it idle. A read re-evaluates the expiry
+    private void refreshExpiration(String tableName) {
+        cache.getIfPresent(tableName);
+    }
+
+    @VisibleForTesting
+    YtDynamicTableWriter prepareWriter(WriterClassifier writerClassifier, Runnable idleListener) {
         ComplexYtPath tablePath = path.copy().setTableName(writerClassifier.getTableName());
         MetricsSupplier metricsSupplier = metricsSuppliers.computeIfAbsent(
                 tablePath.getFullPath(), MetricsSupplier::new);
@@ -320,7 +327,8 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
                 resolveReshardProvider(writerClassifier.getPartitionConfig()),
                 ytWriterOptions,
                 locksProvider,
-                dataMetrics);
+                dataMetrics,
+                idleListener);
         writer.open();
         return writer;
     }
