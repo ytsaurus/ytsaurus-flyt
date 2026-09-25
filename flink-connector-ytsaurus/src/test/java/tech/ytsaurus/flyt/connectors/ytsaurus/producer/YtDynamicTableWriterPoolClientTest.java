@@ -7,6 +7,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -18,6 +19,7 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
+import com.github.benmanes.caffeine.cache.Ticker;
 import lombok.Builder;
 import lombok.SneakyThrows;
 import lombok.Value;
@@ -62,7 +64,6 @@ import tech.ytsaurus.flyt.connectors.ytsaurus.test.TestYtClient;
 import tech.ytsaurus.flyt.connectors.ytsaurus.test.YtClientPool;
 import tech.ytsaurus.flyt.connectors.ytsaurus.test.component.BasicEmulatingNodeComponent;
 import tech.ytsaurus.flyt.connectors.ytsaurus.test.component.StubFailingCountingTransactionComponent;
-import tech.ytsaurus.flyt.connectors.ytsaurus.utils.TemporalCache;
 
 @Slf4j
 // Enable logging if in need to investigate.
@@ -154,15 +155,10 @@ public class YtDynamicTableWriterPoolClientTest {
         CountDownLatch foreverTransactionBegan = new CountDownLatch(1);
         CountDownLatch cacheCleanupFinished = new CountDownLatch(1);
         AtomicReference<String> failMessage = new AtomicReference<>();
+        AtomicLong cacheTime = new AtomicLong();
+        Duration cacheTtl = Duration.ofSeconds(1);
+        int rowsCount = ytWriterOptions.getRowsInTransactionLimit() + 1;
 
-        var defaultCache = YtDynamicTableWriterPool.makeDefaultCache();
-        var cache = Mockito.spy(defaultCache.toBuilder()
-                .ttl(Duration.ZERO, defaultCache.getExpirationCondition())
-                .cleanupPeriod(Integer.MAX_VALUE, TimeUnit.DAYS)
-                .removalListener(entry -> failMessage.set(
-                        entry.getKey() + " must not have been evicted from the cache! " +
-                                "This is a data loss"))
-                .build());
         var client = new TestYtClient<>(
                 new BasicEmulatingNodeComponent(),
                 new StubFailingCountingTransactionComponent(
@@ -185,32 +181,36 @@ public class YtDynamicTableWriterPoolClientTest {
 
         try (var pool = makePool(TestPoolSettings.builder()
                 .clientPool(CountingTestYtClientPool.ofSingle(client))
-                .customCache(cache))) {
+                .cacheTtl(cacheTtl)
+                .cacheTicker(cacheTime::get))) {
             service.submit(() -> {
                 try {
                     foreverTransactionBegan.await();
                     log.debug("Cache cleanup began");
                     // this must not evict current writer (even though its expired)
                     // because it holds an uncommitted transaction
-                    cache.cleanup();
+                    cacheTime.addAndGet(cacheTtl.toNanos());
+                    pool.cleanUpCache();
+                    if (pool.getCachedWritersCount() != 1) {
+                        failMessage.set("Writer must not have been evicted from the cache! This is a data loss");
+                    }
                     log.debug("Cache cleanup finished");
                     cacheCleanupFinished.countDown();
                 } catch (InterruptedException e) {
                     throw new RuntimeException(e);
                 }
             });
-            for (int i = 0; i < ytWriterOptions.getRowsInTransactionLimit(); i++) {
+            for (int i = 0; i < rowsCount; i++) {
                 GenericRowData genericRowData = new GenericRowData(2);
                 genericRowData.setField(0, (long) i);
                 genericRowData.setField(1, TimestampData.fromInstant(OffsetDateTime.now().toInstant()));
-                pool.getOrAcquire(longCommit).write(genericRowData);
+                pool.write(longCommit, genericRowData);
             }
         }
 
         Assertions.assertNull(failMessage.get());
-        Mockito.verify(cache, Mockito.times(1)).cleanup();
         Assertions.assertEquals(
-                ytWriterOptions.getRowsInTransactionLimit(),
+                rowsCount,
                 client.transactions().getCommittedRows());
     }
 
@@ -234,7 +234,7 @@ public class YtDynamicTableWriterPoolClientTest {
         AtomicLong total = new AtomicLong(0);
         try (var pool = makePool(clientPool)) {
             data.forEach(pair -> {
-                pool.getOrAcquire(pair.getKey()).write(pair.getValue());
+                pool.write(pair.getKey(), pair.getValue());
                 total.getAndIncrement();
             });
         }
@@ -330,70 +330,55 @@ public class YtDynamicTableWriterPoolClientTest {
         }
         TestPoolSettings settings = builder.build();
         RowDataToYtListConverters ytConverter = new RowDataToYtListConverters(TimestampFormat.ISO_8601);
-        return new YtDynamicTableWriterPool(
-                settings.getCustomCache(),
-                settings.getClientPool()::produce,
-                ytConverter.createConverter(settings.getLogicalType(),
-                        YTreeTextSerializer.deserialize(settings.getSchema())),
-                ComplexYtPath.builder().basePath("//home/ytsaurus/flink").tableName("tests").build(),
-                settings.getSchema(),
-                null,
-                retryStrategy,
-                context,
-                YtTableAttributes.empty(),
-                ReshardingConfig.builder()
+        return YtDynamicTableWriterPool.builder()
+                .cacheTtl(settings.getCacheTtl())
+                .cacheTicker(settings.getCacheTicker())
+                .clientSupplier(settings.getClientPool()::produce)
+                .ytConverter(ytConverter.createConverter(settings.getLogicalType(),
+                        YTreeTextSerializer.deserialize(settings.getSchema())))
+                .path(ComplexYtPath.builder().basePath("//home/ytsaurus/flink").tableName("tests").build())
+                .ysonSchemaString(settings.getSchema())
+                .retryStrategy(retryStrategy)
+                .context(context)
+                .tableAttributes(YtTableAttributes.empty())
+                .reshardingConfig(ReshardingConfig.builder()
                         .reshardStrategy(ReshardStrategy.NONE)
-                        .build(),
-                YtWriterOptions.builder().build(),
-                new NoopLocksProvider(),
-                null,
-                null);
+                        .build())
+                .ytWriterOptions(YtWriterOptions.builder().build())
+                .locksProvider(new NoopLocksProvider())
+                .build();
     }
 
     @Test
-    void testMultipleOperationsErrorReporting() throws Exception {
-        var pool = makePool(TestPoolSettings.builder()
-                .clientPool(CountingTestYtClientPool.ofSingle(makeTestClient())));
-
-        WriterClassifier classifier1 = WriterClassifier.plain("table1");
-        WriterClassifier classifier2 = WriterClassifier.plain("table2");
-
-        var writer1 = pool.getOrAcquire(classifier1);
-        var writer2 = pool.getOrAcquire(classifier2);
-
-        var failingWriter1 = Mockito.spy(writer1);
-        var failingWriter2 = Mockito.spy(writer2);
+    void testMultipleOperationsErrorReporting() {
+        var failingWriter1 = Mockito.mock(YtDynamicTableWriter.class);
+        var failingWriter2 = Mockito.mock(YtDynamicTableWriter.class);
+        Mockito.when(failingWriter1.getPath()).thenReturn("table1");
+        Mockito.when(failingWriter2.getPath()).thenReturn("table2");
         Mockito.doThrow(new RuntimeException("Test error 1")).when(failingWriter1).close();
         Mockito.doThrow(new RuntimeException("Test error 2")).when(failingWriter2).close();
 
-        var method = YtDynamicTableWriterPool.class.getDeclaredMethod(
-                "multipleOperations", java.util.function.Consumer.class, String.class);
-        method.setAccessible(true);
+        var pool = Mockito.spy(makePool(TestPoolSettings.builder()
+                .clientPool(CountingTestYtClientPool.ofSingle(makeTestClient()))));
+        Mockito.doReturn(failingWriter1).when(pool)
+                .prepareWriter(Mockito.eq(WriterClassifier.plain("table1")), Mockito.any());
+        Mockito.doReturn(failingWriter2).when(pool)
+                .prepareWriter(Mockito.eq(WriterClassifier.plain("table2")), Mockito.any());
+        pool.initializeWriter(WriterClassifier.plain("table1"));
+        pool.initializeWriter(WriterClassifier.plain("table2"));
 
-        var writersList = new ArrayList<YtDynamicTableWriter>(List.of(failingWriter1, failingWriter2));
-        var poolSpy = Mockito.spy(pool);
-        Mockito.when(poolSpy.getWriters()).thenReturn(writersList);
-
-        RuntimeException exception = Assertions.assertThrows(RuntimeException.class, () -> {
-            try {
-                method.invoke(poolSpy,
-                        (java.util.function.Consumer<YtDynamicTableWriter>) YtDynamicTableWriter::close, "close");
-            } catch (java.lang.reflect.InvocationTargetException e) {
-                Throwable cause = e.getCause();
-                if (cause instanceof RuntimeException) {
-                    throw (RuntimeException) cause;
-                }
-                throw new RuntimeException(cause);
-            }
-        });
+        RuntimeException exception = Assertions.assertThrows(RuntimeException.class, pool::close);
 
         Assertions.assertTrue(exception.getMessage().contains("Failure to close 2 writer(-s)"));
         Assertions.assertTrue(exception.getMessage().contains("Writer at '"));
         Assertions.assertTrue(exception.getMessage().contains("Test error 1"));
         Assertions.assertTrue(exception.getMessage().contains("Test error 2"));
         Assertions.assertEquals(2, exception.getSuppressed().length);
-        Assertions.assertEquals("Test error 1", exception.getSuppressed()[0].getMessage());
-        Assertions.assertEquals("Test error 2", exception.getSuppressed()[1].getMessage());
+        Assertions.assertEquals(
+                Set.of("Test error 1", "Test error 2"),
+                Stream.of(exception.getSuppressed())
+                        .map(Throwable::getMessage)
+                        .collect(Collectors.toSet()));
     }
 
     @Builder
@@ -402,6 +387,8 @@ public class YtDynamicTableWriterPoolClientTest {
         String schema;
         LogicalType logicalType;
         YtClientPool<?> clientPool;
-        TemporalCache<String, YtDynamicTableWriter> customCache;
+        @Builder.Default
+        Duration cacheTtl = Duration.ofMinutes(2);
+        Ticker cacheTicker;
     }
 }
