@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "wordcount-example"
 version = "0.0.1"
 description = "Minimal ytsaurus-flyt PyFlink example"
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 
 [tool.setuptools]
 py-modules = ["pipeline"]

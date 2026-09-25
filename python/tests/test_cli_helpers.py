@@ -43,14 +43,12 @@ def test_split_job_command_tokens_unquoted_args() -> None:
 
 
 def test_resolve_proxy_pool_cli_env_profile_order(monkeypatch) -> None:
-    monkeypatch.delenv("FLYT_PROXY", raising=False)
     monkeypatch.delenv("YT_PROXY", raising=False)
-    monkeypatch.delenv("FLYT_POOL", raising=False)
     monkeypatch.delenv("YT_POOL", raising=False)
     assert resolve_proxy_pool("http://prof", "pool-prof", None, None) == ("http://prof", "pool-prof")
 
-    monkeypatch.setenv("FLYT_PROXY", "http://env")
-    monkeypatch.setenv("FLYT_POOL", "pool-env")
+    monkeypatch.setenv("YT_PROXY", "http://env")
+    monkeypatch.setenv("YT_POOL", "pool-env")
     assert resolve_proxy_pool("http://prof", "pool-prof", None, None) == ("http://env", "pool-env")
 
     assert resolve_proxy_pool("http://prof", "pool-prof", "http://cli", "pool-cli") == (

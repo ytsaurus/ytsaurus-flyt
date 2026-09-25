@@ -6,8 +6,7 @@ import yaml
 from click.testing import CliRunner
 
 from ytsaurus_flyt.__main__ import cli
-from ytsaurus_flyt.profiles import default_cypress_base_path
-from ytsaurus_flyt.yt_client import env_yt_token
+from ytsaurus_flyt.submit.yt_client import env_yt_token
 
 
 def test_env_yt_token_ignores_empty_string(monkeypatch) -> None:
@@ -165,12 +164,70 @@ def test_jobshell_requires_yt_binary(monkeypatch, tmp_path: Path) -> None:
     assert "yt" in result.output.lower()
 
 
+def _write_build_profile(tmp_path: Path) -> None:
+    profiles = tmp_path / "profiles"
+    profiles.mkdir(parents=True)
+    (profiles / "p1.yaml").write_text(
+        "proxy: http://cluster.example:80\npool: default\n"
+        "squashfs_layer_delivery: layer_paths\n"
+        "flink_version: 1.20.1\n"
+        'runtime_python_version: "3.9"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "active").write_text("p1\n", encoding="utf-8")
+
+
+def test_build_layer_uploads_to_explicit_path(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("FLYT_CONFIG_DIR", str(tmp_path))
+    _write_build_profile(tmp_path)
+    captured: dict = {}
+    monkeypatch.setattr("ytsaurus_flyt.__main__.build_runtime_squashfs", lambda *a, **k: None)
+    monkeypatch.setattr("ytsaurus_flyt.__main__.make_yt_client", lambda *_: object())
+    monkeypatch.setattr(
+        "ytsaurus_flyt.__main__.upload_squashfs_layer",
+        lambda _c, _local, dest, **k: captured.setdefault("dest", dest),
+    )
+
+    result = CliRunner(mix_stderr=True).invoke(
+        cli, ["build", "layer", "--upload", "//sys/flink/runtime.squashfs"], catch_exceptions=False
+    )
+    assert result.exit_code == 0
+    assert captured["dest"] == "//sys/flink/runtime.squashfs"
+    assert "uploaded" in result.output
+
+
+def test_build_layer_requires_output_or_upload(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("FLYT_CONFIG_DIR", str(tmp_path))
+    _write_build_profile(tmp_path)
+    result = CliRunner(mix_stderr=True).invoke(cli, ["build", "layer"], catch_exceptions=False)
+    assert result.exit_code != 0
+    assert "--output" in result.output and "--upload" in result.output
+
+
+def test_build_unsquashfs_uploads_to_explicit_path(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("FLYT_CONFIG_DIR", str(tmp_path))
+    _write_build_profile(tmp_path)
+    captured: dict = {}
+    monkeypatch.setattr("ytsaurus_flyt.__main__.build_unsquashfs_binary", lambda *a, **k: None)
+    monkeypatch.setattr("ytsaurus_flyt.__main__.make_yt_client", lambda *_: object())
+    monkeypatch.setattr(
+        "ytsaurus_flyt.__main__.upload_local_file",
+        lambda _c, _local, dest: captured.setdefault("dest", dest),
+    )
+
+    result = CliRunner(mix_stderr=True).invoke(
+        cli, ["build", "unsquashfs", "--upload", "//sys/flink/unsquashfs"], catch_exceptions=False
+    )
+    assert result.exit_code == 0
+    assert captured["dest"] == "//sys/flink/unsquashfs"
+
+
 def test_validate_prints_profile_line(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("FLYT_CONFIG_DIR", str(tmp_path))
     profiles = tmp_path / "profiles"
     profiles.mkdir(parents=True)
     (profiles / "myprof.yaml").write_text(
-        "proxy: http://cluster.example:80\npool: default\nruntime_python_packages: [apache-flink==1.20.1]\n",
+        "proxy: http://cluster.example:80\npool: default\nflink_version: 1.20.1\n",
         encoding="utf-8",
     )
     (tmp_path / "active").write_text("myprof\n", encoding="utf-8")
@@ -182,14 +239,14 @@ def test_validate_prints_profile_line(monkeypatch, tmp_path: Path) -> None:
     runner = CliRunner()
     result = runner.invoke(cli, ["validate"], catch_exceptions=False)
     assert result.exit_code == 0
-    assert "Profile: 'myprof'" in result.output
+    assert "myprof" in result.output  # reporter header: flyt ▸ profile 'myprof'
 
 
 def test_profile_import_writes_and_overrides(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("FLYT_CONFIG_DIR", str(tmp_path))
     src = tmp_path / "incoming.yaml"
     src.write_text(
-        "proxy: http://old.example:80\npool: oldpool\npreset: micro\nruntime_python_packages: [apache-flink==1.20.1]\n",
+        "proxy: http://old.example:80\npool: oldpool\npreset: micro\nflink_version: 1.20.1\n",
         encoding="utf-8",
     )
     runner = CliRunner()
@@ -218,7 +275,6 @@ def test_profile_import_writes_and_overrides(monkeypatch, tmp_path: Path) -> Non
     assert data["proxy"] == "http://new.example:80"
     assert data["pool"] == "newpool"
     assert data["preset"] == "micro"
-    assert data["cypress_base_path"] == default_cypress_base_path("imp1")
 
     list_result = runner.invoke(cli, ["profile", "list"], catch_exceptions=False)
     assert list_result.exit_code == 0
@@ -236,13 +292,13 @@ def test_profile_import_writes_and_overrides(monkeypatch, tmp_path: Path) -> Non
 def test_ui_prints_url_for_resolved_operation(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("FLYT_CONFIG_DIR", str(tmp_path))
     _write_profile(tmp_path, "p1")
-    monkeypatch.setattr("ytsaurus_flyt.__main__.make_yt_client", lambda _p: object())
+    monkeypatch.setattr("ytsaurus_flyt.__main__.make_yt_client", lambda _p, *_: object())
     monkeypatch.setattr(
-        "ytsaurus_flyt.jobshell_resolve.list_running_flyt_operations",
+        "ytsaurus_flyt.tracking.jobshell_resolve.list_running_flyt_operations",
         lambda _c, _n: [{"id": "op-abc"}],
     )
     monkeypatch.setattr(
-        "ytsaurus_flyt.ui_tracker.find_ui_url_for_operation",
+        "ytsaurus_flyt.tracking.ui_tracker.find_ui_url_for_operation",
         lambda _c, _o, **_kw: "http://[::1]:27050",
     )
     runner = CliRunner()
@@ -255,9 +311,9 @@ def test_ui_prints_url_for_resolved_operation(monkeypatch, tmp_path: Path) -> No
 def test_ui_fails_when_no_running_operation(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("FLYT_CONFIG_DIR", str(tmp_path))
     _write_profile(tmp_path, "p1")
-    monkeypatch.setattr("ytsaurus_flyt.__main__.make_yt_client", lambda _p: object())
+    monkeypatch.setattr("ytsaurus_flyt.__main__.make_yt_client", lambda _p, *_: object())
     monkeypatch.setattr(
-        "ytsaurus_flyt.jobshell_resolve.list_running_flyt_operations",
+        "ytsaurus_flyt.tracking.jobshell_resolve.list_running_flyt_operations",
         lambda _c, _n: [],
     )
     runner = CliRunner()
@@ -269,9 +325,9 @@ def test_ui_fails_when_no_running_operation(monkeypatch, tmp_path: Path) -> None
 def test_ui_wait_fails_on_terminal_state(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("FLYT_CONFIG_DIR", str(tmp_path))
     _write_profile(tmp_path, "p1")
-    monkeypatch.setattr("ytsaurus_flyt.__main__.make_yt_client", lambda _p: object())
+    monkeypatch.setattr("ytsaurus_flyt.__main__.make_yt_client", lambda _p, *_: object())
     monkeypatch.setattr(
-        "ytsaurus_flyt.ui_tracker.wait_ui_url_for_operation",
+        "ytsaurus_flyt.tracking.ui_tracker.wait_ui_url_for_operation",
         lambda _c, _o, **_kw: (None, "failed"),
     )
     runner = CliRunner()
@@ -289,7 +345,7 @@ def test_run_detach_short_flag_maps_to_sync_false(monkeypatch, tmp_path: Path) -
         captured.update(kwargs)
 
     monkeypatch.setattr("ytsaurus_flyt.__main__.launch_vanilla_job", fake_launch)
-    monkeypatch.setattr("ytsaurus_flyt.__main__.make_yt_client", lambda _p: object())
+    monkeypatch.setattr("ytsaurus_flyt.__main__.make_yt_client", lambda _p, *_: object())
 
     runner = CliRunner()
     # -d must reach the launcher with sync=False and no forced wheel cache,
@@ -298,6 +354,36 @@ def test_run_detach_short_flag_maps_to_sync_false(monkeypatch, tmp_path: Path) -
     assert result.exit_code == 0
     assert captured["sync"] is False
     assert captured["cache_wheel"] is False
+
+
+def test_run_passes_reporter_and_accepts_verbose_flag(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("FLYT_CONFIG_DIR", str(tmp_path))
+    _write_profile(tmp_path, "p1")
+    captured: dict = {}
+
+    def fake_launch(**kwargs):  # type: ignore[no-untyped-def]
+        captured.update(kwargs)
+
+    monkeypatch.setattr("ytsaurus_flyt.__main__.launch_vanilla_job", fake_launch)
+    monkeypatch.setattr("ytsaurus_flyt.__main__.make_yt_client", lambda _p, *_: object())
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["run", "-d", "-v", "--wheel", "svc.whl", "x.py"], catch_exceptions=False)
+    assert result.exit_code == 0
+    assert captured.get("reporter") is not None
+
+
+def test_run_debug_flag_enables_yt_debug_logging(monkeypatch, tmp_path: Path) -> None:
+    import logging
+
+    monkeypatch.setenv("FLYT_CONFIG_DIR", str(tmp_path))
+    _write_profile(tmp_path, "p1")
+    monkeypatch.setattr("ytsaurus_flyt.__main__.launch_vanilla_job", lambda **_: None)
+    monkeypatch.setattr("ytsaurus_flyt.__main__.make_yt_client", lambda _p, *_: object())
+
+    result = CliRunner().invoke(cli, ["run", "--debug", "--wheel", "svc.whl", "x.py"], catch_exceptions=False)
+    assert result.exit_code == 0
+    assert logging.getLogger("Yt").level == logging.DEBUG
 
 
 def test_run_detach_with_cache_wheel_opts_into_persistent(monkeypatch, tmp_path: Path) -> None:
@@ -309,7 +395,7 @@ def test_run_detach_with_cache_wheel_opts_into_persistent(monkeypatch, tmp_path:
         captured.update(kwargs)
 
     monkeypatch.setattr("ytsaurus_flyt.__main__.launch_vanilla_job", fake_launch)
-    monkeypatch.setattr("ytsaurus_flyt.__main__.make_yt_client", lambda _p: object())
+    monkeypatch.setattr("ytsaurus_flyt.__main__.make_yt_client", lambda _p, *_: object())
 
     runner = CliRunner()
     result = runner.invoke(cli, ["run", "-d", "--cache-wheel", "--wheel", "svc.whl", "x.py"], catch_exceptions=False)

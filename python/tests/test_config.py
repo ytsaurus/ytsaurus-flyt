@@ -5,23 +5,21 @@ import tempfile
 
 import pytest
 
-from ytsaurus_flyt.config import DEFAULT_JAVA_HOME, FlytConfig, require_squashfs_runtime_config
+from ytsaurus_flyt.config.config import FlytConfig, require_squashfs_runtime_config
 
 
 class TestFlytConfig:
     def test_defaults(self):
         config = FlytConfig()
         assert config.jar_scan_folder == ""
-        assert config.embed_squashfs_layer_jar_basenames == []
         assert config.runtime_jar_basenames == []
-        assert config.java_home == DEFAULT_JAVA_HOME
-        assert config.python_bin == "/usr/bin/python3"
-        assert config.runtime_python_packages == []
+        assert config.java_version == "11"
+        assert config.flink_version == "1.20.1"
         assert config.runtime_python_version == ""
-        assert config.squashfs_layer_cache_prefix == ""
+        assert config.squashfs_layer_paths == []
         assert config.squashfs_compression == "gzip"
         assert config.squashfs_layer_delivery == "layer_paths"
-        assert config.squashfs_tools_cache_prefix == ""
+        assert config.unsquashfs_path == ""
         assert config.network_project is None
         assert config.max_failed_job_count == 10
 
@@ -37,11 +35,10 @@ class TestFlytConfig:
         yaml_content = """
 jar_scan_folder: "//home/flink/libs"
 service_name: "my_service"
-embed_squashfs_layer_jar_basenames:
+runtime_jar_basenames:
   - flink-connector-yt
   - flink-yson
-runtime_python_packages:
-  - "apache-flink==1.20.1"
+flink_version: "1.20.1"
 runtime_python_version: "3.10"
 """
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
@@ -53,21 +50,22 @@ runtime_python_version: "3.10"
 
         assert config.jar_scan_folder == "//home/flink/libs"
         assert config.service_name == "my_service"
-        assert config.embed_squashfs_layer_jar_basenames == ["flink-connector-yt", "flink-yson"]
-        assert config.runtime_python_packages == ["apache-flink==1.20.1"]
+        assert config.runtime_jar_basenames == ["flink-connector-yt", "flink-yson"]
+        assert config.flink_version == "1.20.1"
+        assert config.flink_requirements == ["apache-flink==1.20.1"]
         assert config.runtime_python_version == "3.10"
 
     def test_extra_environment(self):
         config = FlytConfig(extra_environment={"MY_VAR": "value"})
         assert config.extra_environment == {"MY_VAR": "value"}
 
-    def test_squashfs_delivery_and_tools_prefix(self):
+    def test_squashfs_delivery_and_unsquashfs_path(self):
         config = FlytConfig(
             squashfs_layer_delivery="sandbox_unpack",
-            squashfs_tools_cache_prefix="//home/flyt/tools",
+            unsquashfs_path="//sys/flink/unsquashfs",
         )
         assert config.squashfs_layer_delivery == "sandbox_unpack"
-        assert config.squashfs_tools_cache_prefix == "//home/flyt/tools"
+        assert config.unsquashfs_path == "//sys/flink/unsquashfs"
 
     def test_invalid_squashfs_delivery(self):
         with pytest.raises(ValueError, match="squashfs_layer_delivery"):
@@ -77,23 +75,16 @@ runtime_python_version: "3.10"
         with pytest.raises(ValueError, match="squashfs_compression"):
             FlytConfig(squashfs_compression="brotli")
 
-    def test_overlapping_embed_and_runtime_jar_basenames(self):
-        with pytest.raises(ValueError, match="embed_squashfs_layer_jar_basenames"):
-            FlytConfig(
-                embed_squashfs_layer_jar_basenames=["same"],
-                runtime_jar_basenames=["same"],
-            )
-
-    def test_normalize_embed_jar_list_from_string(self):
-        cfg = FlytConfig(embed_squashfs_layer_jar_basenames="flink-connector-yt")  # type: ignore[arg-type]
-        assert cfg.embed_squashfs_layer_jar_basenames == ["flink-connector-yt"]
+    def test_normalize_runtime_jar_list_from_string(self):
+        cfg = FlytConfig(runtime_jar_basenames="flink-connector-yt")  # type: ignore[arg-type]
+        assert cfg.runtime_jar_basenames == ["flink-connector-yt"]
 
     def test_to_dict_roundtrip_fields(self):
         cfg = FlytConfig(service_name="s", max_failed_job_count=3)
         d = cfg.to_dict()
         assert d["service_name"] == "s"
         assert d["max_failed_job_count"] == 3
-        assert "runtime_python_packages" in d
+        assert "flink_version" in d
 
     def test_from_yaml_warns_unknown_keys(self):
         yaml_content = """
@@ -113,33 +104,34 @@ jar_scan_folder: "//x"
 
     def test_from_yaml_squashfs_fields(self):
         yaml_content = """
-squashfs_layer_delivery: layer_paths
-squashfs_tools_cache_prefix: "//tmp/tools"
+squashfs_layer_delivery: sandbox_unpack
+squashfs_layer_paths:
+  - "//sys/flink/runtime.squashfs"
+unsquashfs_path: "//sys/flink/unsquashfs"
 """
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             f.write(yaml_content)
             f.flush()
             config = FlytConfig.from_yaml(f.name)
         os.unlink(f.name)
-        assert config.squashfs_layer_delivery == "layer_paths"
-        assert config.squashfs_tools_cache_prefix == "//tmp/tools"
+        assert config.squashfs_layer_delivery == "sandbox_unpack"
+        assert config.squashfs_layer_paths == ["//sys/flink/runtime.squashfs"]
+        assert config.unsquashfs_path == "//sys/flink/unsquashfs"
 
 
 def test_require_squashfs_runtime_config_ok():
     cfg = FlytConfig(
-        runtime_python_packages=["apache-flink==1.20.1"],
+        flink_version="1.20.1",
         runtime_python_version="3.10",
     )
     require_squashfs_runtime_config(cfg)
 
 
-def test_require_squashfs_runtime_config_missing_packages():
-    with pytest.raises(ValueError, match="runtime_python_packages"):
-        require_squashfs_runtime_config(FlytConfig(runtime_python_packages=[]))
+def test_require_squashfs_runtime_config_missing_flink_version():
+    with pytest.raises(ValueError, match="flink_version"):
+        require_squashfs_runtime_config(FlytConfig(flink_version=""))
 
 
 def test_require_squashfs_runtime_config_missing_version():
     with pytest.raises(ValueError, match="runtime_python_version"):
-        require_squashfs_runtime_config(
-            FlytConfig(runtime_python_packages=["apache-flink==1.20.1"], runtime_python_version="")
-        )
+        require_squashfs_runtime_config(FlytConfig(flink_version="1.20.1", runtime_python_version=""))

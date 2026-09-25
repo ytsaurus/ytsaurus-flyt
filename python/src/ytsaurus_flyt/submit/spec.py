@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import shlex
 from pathlib import Path
+from typing import List, Optional
 
 from yt.wrapper.spec_builders import VanillaSpecBuilder
 
-from ytsaurus_flyt.config import FlytConfig
-from ytsaurus_flyt.models import JobmanagerParams, OperationParams
+from ytsaurus_flyt.config.config import FlytConfig
+from ytsaurus_flyt.config.models import JobmanagerParams, OperationParams
 
 FLINK_STANDALONE_FLAG = "FLINK_STANDALONE"
 
@@ -43,8 +44,11 @@ def _build_run_script(
     service_name: str,
     *,
     use_squashfs_sandbox_unpack: bool = False,
+    sandbox_unpack_layers: Optional[List[str]] = None,
+    unsquashfs_basename: str = "",
 ) -> str:
-    scripts_dir = Path(__file__).parent / "run_scripts"
+    # run_scripts/ ships at the package root (ytsaurus_flyt/), one level up from submit/.
+    scripts_dir = Path(__file__).parent.parent / "run_scripts"
     result_script = ["#!/bin/bash", "set -e"]
 
     if use_squashfs_sandbox_unpack:
@@ -65,6 +69,8 @@ def _build_run_script(
             "40_run_job.sh",
         ]
     script_paths = [scripts_dir / name for name in ordered]
+    # Ordered, space-separated layer basenames for sandbox_unpack; empty falls back to the glob.
+    unpack_basenames = " ".join(sandbox_unpack_layers or [])
 
     for script_path in script_paths:
         result_script.append(f"echo 'Running {script_path.name}...' 1>&2")
@@ -74,7 +80,8 @@ def _build_run_script(
                 script_text.format(
                     job_args=_job_args_for_shell(job_command),
                     service_name=service_name,
-                    python_bin=config.python_bin,
+                    squashfs_unpack_basenames=unpack_basenames,
+                    unsquashfs_basename=unsquashfs_basename,
                 )
             )
 
@@ -103,6 +110,8 @@ def build_vanilla_operation_spec(
     *,
     off_heap_size_str: str | None = None,
     use_squashfs_sandbox_unpack: bool = False,
+    sandbox_unpack_layers: Optional[List[str]] = None,
+    unsquashfs_basename: str = "",
 ) -> VanillaSpecBuilder:
     """Build a Vanilla operation spec to launch a Flink job (SquashFS runtime only)."""
     service_name = config.service_name or _extract_service_name(job_command)
@@ -116,9 +125,10 @@ def build_vanilla_operation_spec(
         # Pin the JVM's processor count to the container CPU limit.
         java_opts += f" -XX:ActiveProcessorCount={jobmanager_params.cpu}"
 
+    # JAVA_HOME / PYTHON_BIN are set in the run script (layer-relative to the bundled JRE/CPython),
+    # not here, since the layer root isn't known until runtime.
     environment = {
         **DEFAULT_ENVIRONMENT,
-        "JAVA_HOME": config.java_home,
         "FLINK_ENV_JAVA_OPTS": java_opts,
         FLINK_STANDALONE_FLAG: "True",
         **config.extra_environment,
@@ -144,6 +154,8 @@ def build_vanilla_operation_spec(
                 config,
                 service_name,
                 use_squashfs_sandbox_unpack=use_squashfs_sandbox_unpack,
+                sandbox_unpack_layers=sandbox_unpack_layers,
+                unsquashfs_basename=unsquashfs_basename,
             )
         )
         .job_count(1)

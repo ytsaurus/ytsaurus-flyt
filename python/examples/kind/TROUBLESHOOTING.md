@@ -24,12 +24,6 @@ cd python/examples/kind
 ./scripts/up.sh
 ```
 
-## FLYT SquashFS: `cannot import name 'cygrpc'` (grpc)
-
-SquashFS is built with wheels for `runtime_python_version` (e.g. cp310). The job still runs `$PYTHON_BIN` from your profile (`python_bin`), usually `/usr/bin/python3` on the exec pod. That interpreter must be the same major.minor as the layer. Kind images often ship Python 3.8 at `/usr/bin/python3`. If you set `runtime_python_version: "3.10"` but `python_bin` stays 3.8, native modules (grpc, PyFlink bits) break with errors like `cygrpc` import failure.
-
-Fix: either set `runtime_python_version` to match what `python_bin` actually is (often `3.8` on Kind), or install Python 3.10 on the exec image and set `python_bin` to that binary (e.g. `/usr/bin/python3.10`). Rebuild the SquashFS layer after changing `runtime_python_version` (`--force-rebuild` or bump cache).
-
 ## UI: ECONNREFUSED, ECONNABORTED, XSRF 503
 
 You may see `Failed to get cluster version`, `ECONNABORTED` in the browser, `connect ECONNREFUSED` to a ClusterIP, or XSRF failing with 503.

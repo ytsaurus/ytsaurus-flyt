@@ -1,11 +1,9 @@
-"""Tests for ytsaurus_flyt.profiles."""
+"""Tests for ytsaurus_flyt.config.profiles."""
 
 from pathlib import Path
 
-from ytsaurus_flyt.config import FlytConfig
-from ytsaurus_flyt.profiles import (
-    apply_cypress_base_path,
-    default_cypress_base_path,
+from ytsaurus_flyt.config.config import FlytConfig
+from ytsaurus_flyt.config.profiles import (
     merge_flyt_config,
     merge_yaml_dict,
     profile_dict_to_flyt_config,
@@ -25,30 +23,31 @@ def test_merge_flyt_config_overrides_non_empty():
     assert m.service_name == "b"
 
 
-def test_default_cypress_base_path():
-    assert default_cypress_base_path("prod") == "//home/flyt/clusters/prod"
+def test_profile_dict_to_flyt_config_warns_on_unknown_keys():
+    import pytest
 
-
-def test_apply_cypress_base_path():
-    cfg = FlytConfig()
-    out = apply_cypress_base_path(cfg, "//home/flyt/clusters/x")
-    assert out.squashfs_layer_cache_prefix == "//home/flyt/clusters/x/layers"
-    assert out.squashfs_tools_cache_prefix == "//home/flyt/clusters/x/tools"
-    assert out.wheel_cache_prefix == "//home/flyt/clusters/x/wheels"
+    with pytest.warns(UserWarning, match="pre_build_layer_paths"):
+        cfg = profile_dict_to_flyt_config(
+            {"proxy": "http://x", "pool": "p", "pre_build_layer_paths": ["//sys/flink/base.squashfs"]}
+        )
+    # the typo'd key is dropped; the correctly-spelled field stays empty
+    assert cfg.squashfs_layer_paths == []
+    assert cfg.pre_built_layer_paths == []
 
 
 def test_profile_dict_to_flyt_config():
     d = {
         "proxy": "http://localhost:1",
         "pool": "default",
-        "cypress_base_path": "//home/flyt/clusters/t",
         "squashfs_layer_delivery": "sandbox_unpack",
-        "runtime_python_packages": ["apache-flink==1.20.1"],
+        "squashfs_layer_paths": ["//sys/flink/runtime.squashfs"],
+        "flink_version": "1.20.1",
         "runtime_python_version": "3.8",
     }
     cfg = profile_dict_to_flyt_config(d)
-    assert cfg.squashfs_layer_cache_prefix == "//home/flyt/clusters/t/layers"
-    assert cfg.wheel_cache_prefix == "//home/flyt/clusters/t/wheels"
+    # meta keys are stripped; flyt fields applied verbatim (no implicit cache derivation)
+    assert cfg.squashfs_layer_delivery == "sandbox_unpack"
+    assert cfg.squashfs_layer_paths == ["//sys/flink/runtime.squashfs"]
 
 
 def test_resolve_connection_from_profile():
