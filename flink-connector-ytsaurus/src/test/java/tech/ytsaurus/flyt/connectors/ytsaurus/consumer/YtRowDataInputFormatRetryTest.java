@@ -139,13 +139,12 @@ class YtRowDataInputFormatRetryTest {
                 .hasSize(1);
     }
 
-    /** Empty batches follow the same policy as any other retry, so the first load fails fast. */
+    /** EOF can race with request completion on the first scan as well as on a cache reload. */
     @Test
-    void emptyBatchOnTheFirstLoadIsNotRetried() {
+    void emptyBatchOnTheFirstLoadIsRetried() throws Exception {
         FakeYtCluster cluster = FakeYtCluster.returningEmptyBatches(10, 1);
 
-        assertThatThrownBy(() -> readAll(cluster, IMMEDIATE_RETRIES, 1))
-                .rootCause().hasMessageContaining("not at EOF");
+        assertThat(readAll(cluster, IMMEDIATE_RETRIES, 1)).isEqualTo(cluster.expectedIds());
     }
 
     @Test
