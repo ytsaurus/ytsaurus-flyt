@@ -1,7 +1,6 @@
 package tech.ytsaurus.flyt.connectors.ytsaurus.producer;
 
 import java.io.Closeable;
-import java.io.Serializable;
 import java.time.Duration;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
@@ -11,7 +10,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
-import java.util.function.Supplier;
 
 import javax.annotation.Nullable;
 
@@ -45,16 +43,14 @@ import tech.ytsaurus.flyt.connectors.ytsaurus.producer.converters.RowDataToYtLis
 import tech.ytsaurus.flyt.connectors.ytsaurus.utils.TemporalCache;
 
 @Slf4j
-public class YtDynamicTableWriterPool implements Serializable, Closeable {
-    private static final long serialVersionUID = 1L;
-
+public class YtDynamicTableWriterPool implements Closeable {
     private static final long CACHE_TTL = TimeUnit.MINUTES.toMillis(2);
     private static final long CACHE_CLEANUP_INTERVAL = TimeUnit.MINUTES.toMillis(1);
 
-    private final transient Supplier<YTsaurusClient> clientSupplier;
-    private final transient TemporalCache<String, YtDynamicTableWriter> cache;
+    private final YTsaurusClient client;
+    private final TemporalCache<String, YtDynamicTableWriter> cache;
 
-    private final transient Map<String, MetricsSupplier> metricsSuppliers;
+    private final Map<String, MetricsSupplier> metricsSuppliers;
 
     private final String ysonSchemaString;
     private final ComplexYtPath path;
@@ -78,7 +74,7 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
 
     @SuppressWarnings("checkstyle:ParameterNumber")
     public YtDynamicTableWriterPool(@Nullable TemporalCache<String, YtDynamicTableWriter> cache,
-                                    Supplier<YTsaurusClient> clientSupplier,
+                                    YTsaurusClient client,
                                     RowDataToYtListConverters.RowDataToYtMapConverter ytConverter,
                                     ComplexYtPath path,
                                     String ysonSchemaString,
@@ -95,7 +91,7 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
             cache = makeDefaultCache();
         }
         this.cache = cache;
-        this.clientSupplier = clientSupplier;
+        this.client = client;
         this.ysonSchemaString = ysonSchemaString;
         this.path = path;
         this.trackableField = trackableField;
@@ -117,7 +113,7 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
 
 
     @SuppressWarnings("checkstyle:ParameterNumber")
-    public YtDynamicTableWriterPool(Supplier<YTsaurusClient> clientSupplier,
+    public YtDynamicTableWriterPool(YTsaurusClient client,
                                     RowDataToYtListConverters.RowDataToYtMapConverter ytConverter,
                                     ComplexYtPath path,
                                     String ysonSchemaString,
@@ -129,7 +125,7 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
                                     YtWriterOptions ytWriterOptions,
                                     LocksProvider locksProvider) {
         this(null,
-                clientSupplier,
+                client,
                 ytConverter,
                 path,
                 ysonSchemaString,
@@ -175,8 +171,20 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
     @Override
     public void close() {
         cache.cancel();
-        multipleOperations(YtDynamicTableWriter::close, "close");
-        dataMetrics.close();
+        try {
+            multipleOperations(YtDynamicTableWriter::close, "close");
+        } finally {
+            dataMetrics.close();
+            closeClient();
+        }
+    }
+
+    private void closeClient() {
+        try {
+            client.close();
+        } catch (Exception e) {
+            log.error("Error closing YT client of writer pool at '{}'", path.getBasePath(), e);
+        }
     }
 
     private void multipleOperations(Consumer<YtDynamicTableWriter> operation, String operationName) {
@@ -214,17 +222,15 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
     }
 
     public void createBasePathMapNode() {
-        try (YTsaurusClient client = clientSupplier.get()) {
-            boolean mapNodeExists = client.existsNode(path.getBasePath()).join();
-            if (!mapNodeExists) {
-                client.createNode(
-                                CreateNode.builder()
-                                        .setPath(YPath.simple(path.getBasePath()))
-                                        .setType(CypressNodeType.MAP)
-                                        .setRecursive(true)
-                                        .build())
-                        .join();
-            }
+        boolean mapNodeExists = client.existsNode(path.getBasePath()).join();
+        if (!mapNodeExists) {
+            client.createNode(
+                            CreateNode.builder()
+                                    .setPath(YPath.simple(path.getBasePath()))
+                                    .setType(CypressNodeType.MAP)
+                                    .setRecursive(true)
+                                    .build())
+                    .join();
         }
     }
 
@@ -242,7 +248,7 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
 
         WriterYtInfo ytInfo = new WriterYtInfo(
                 tablePath,
-                clientSupplier.get(),
+                client,
                 ysonSchemaString);
 
         ExponentialBackoffRetryStrategy locksRetryStrategy = new ExponentialBackoffRetryStrategy(
