@@ -1,9 +1,15 @@
 package tech.ytsaurus.flyt.connectors.ytsaurus.producer;
 
 import java.time.Duration;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
+import com.github.benmanes.caffeine.cache.Ticker;
 import org.apache.flink.api.common.functions.RuntimeContext;
 import org.apache.flink.formats.common.TimestampFormat;
 import org.apache.flink.metrics.groups.UnregisteredMetricsGroup;
@@ -43,13 +49,17 @@ class YtDynamicTableWriterPoolCacheTest {
 
     @BeforeEach
     void setUp() {
+        pool = createPool(TTL, nanos::get);
+    }
+
+    private YtDynamicTableWriterPool createPool(Duration ttl, Ticker ticker) {
         RuntimeContext context = Mockito.mock(RuntimeContext.class);
         Mockito.when(context.getMetricGroup()).thenReturn(UnregisteredMetricsGroup.createOperatorMetricGroup());
         RowType rowType = new RowType(java.util.List.of(new RowType.RowField("id", new BigIntType())));
 
-        pool = Mockito.spy(YtDynamicTableWriterPool.builder()
-                .cacheTtl(TTL)
-                .cacheTicker(nanos::get)
+        return Mockito.spy(YtDynamicTableWriterPool.builder()
+                .cacheTtl(ttl)
+                .cacheTicker(ticker)
                 .clientSupplier(() -> null)
                 .ytConverter(new RowDataToYtListConverters(TimestampFormat.ISO_8601)
                         .createConverter(rowType, YTreeTextSerializer.deserialize(SCHEMA)))
@@ -206,6 +216,59 @@ class YtDynamicTableWriterPoolCacheTest {
         Mockito.verify(mock.writer, Mockito.never()).close();
         Assertions.assertEquals(1, pool.getCachedWritersCount());
         Mockito.verify(pool, Mockito.times(1)).prepareWriter(Mockito.eq(TABLE), Mockito.any());
+    }
+
+    @Test
+    void productionSchedulerExpiresWriterAfterCommitWithoutFurtherCacheAccess() throws Exception {
+        pool.close();
+        pool = createPool(Duration.ofMillis(50), null);
+        MockWriter mock = installWriter("busy");
+        CountDownLatch closed = new CountDownLatch(1);
+        Mockito.doAnswer(invocation -> {
+            closed.countDown();
+            return null;
+        }).when(mock.writer).close();
+
+        pool.write(TABLE, row());
+        // Let initial maintenance run while the writer is pinned, well beyond the idle TTL.
+        Assertions.assertFalse(closed.await(1500, TimeUnit.MILLISECONDS));
+        mock.busy.set(false);
+        mock.idleListener().run();
+
+        // No cache reads or cleanUp calls: expiration must run on the production scheduler.
+        Assertions.assertTrue(closed.await(10, TimeUnit.SECONDS), "idle writer was not expired automatically");
+        Mockito.verify(mock.writer, Mockito.times(1)).close();
+    }
+
+    @Test
+    void idleCallbackDoesNotWaitForConcurrentWrite() throws Exception {
+        pool.close();
+        pool = createPool(TTL, null);
+        MockWriter mock = installWriter("blocked-write");
+        pool.initializeWriter(TABLE);
+        CountDownLatch writeEntered = new CountDownLatch(1);
+        CountDownLatch releaseWrite = new CountDownLatch(1);
+        Mockito.doAnswer(invocation -> {
+            mock.busy.set(true);
+            writeEntered.countDown();
+            Assertions.assertTrue(releaseWrite.await(10, TimeUnit.SECONDS));
+            return null;
+        }).when(mock.writer).write(Mockito.any());
+
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        Future<?> write = executor.submit(() -> pool.write(TABLE, row()));
+        try {
+            Assertions.assertTrue(writeEntered.await(10, TimeUnit.SECONDS));
+            // pool.write holds the cache lock; a committer's idle callback must still return.
+            executor.submit(mock.idleListener()).get(5, TimeUnit.SECONDS);
+        } finally {
+            releaseWrite.countDown();
+            try {
+                write.get(5, TimeUnit.SECONDS);
+            } finally {
+                executor.shutdownNow();
+            }
+        }
     }
 
     private void advance(Duration duration) {
