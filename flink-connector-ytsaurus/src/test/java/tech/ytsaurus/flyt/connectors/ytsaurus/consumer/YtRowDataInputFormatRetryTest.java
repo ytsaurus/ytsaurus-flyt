@@ -3,6 +3,8 @@ package tech.ytsaurus.flyt.connectors.ytsaurus.consumer;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.core.io.InputSplit;
@@ -21,6 +23,7 @@ import tech.ytsaurus.ysontree.YTreeNode;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 
 /**
  * Covers the read path that feeds a lookup 'FULL' cache: a transient YT failure while opening the
@@ -125,13 +128,9 @@ class YtRowDataInputFormatRetryTest {
                 requested -> assertThat(requested).isEqualTo(FULL_PATH));
     }
 
-    /**
-     * An empty batch on a live reader is a client-side race, not a failure: the reader is reused,
-     * so retrying it cannot duplicate a row.
-     */
     @Test
-    void emptyBatchOnALiveReaderIsRetried() throws Exception {
-        FakeYtCluster cluster = FakeYtCluster.returningEmptyBatches(10, 2);
+    void emptyBatchesDuringReloadDoNotConsumeRetryBudget() throws Exception {
+        FakeYtCluster cluster = FakeYtCluster.returningEmptyBatches(10, 4, 10);
 
         assertThat(reload(cluster, IMMEDIATE_RETRIES)).isEqualTo(cluster.expectedIds());
         assertThat(cluster.requestedPaths())
@@ -139,22 +138,67 @@ class YtRowDataInputFormatRetryTest {
                 .hasSize(1);
     }
 
-    /** Empty batches follow the same policy as any other retry, so the first load fails fast. */
     @Test
-    void emptyBatchOnTheFirstLoadIsNotRetried() {
-        FakeYtCluster cluster = FakeYtCluster.returningEmptyBatches(10, 1);
+    void emptyBatchesBeforeFirstLoadDoNotNeedRetries() throws Exception {
+        FakeYtCluster cluster = FakeYtCluster.returningEmptyBatches(3, 0, 2);
 
-        assertThatThrownBy(() -> readAll(cluster, IMMEDIATE_RETRIES, 1))
-                .rootCause().hasMessageContaining("not at EOF");
+        assertThat(readAll(cluster, NO_RETRIES, 1)).isEqualTo(cluster.expectedIds());
+        assertThat(cluster.requestedPaths()).containsExactly(FULL_PATH);
     }
 
     @Test
-    void endlessEmptyBatchesFailInsteadOfSpinning() {
-        FakeYtCluster cluster = FakeYtCluster.returningEmptyBatches(10, Integer.MAX_VALUE);
+    void emptyBatchesBeforeEofDoNotFailFirstLoad() throws Exception {
+        FakeYtCluster cluster = FakeYtCluster.returningEmptyBatches(2, 2, 2);
 
-        assertThatThrownBy(() -> reload(cluster, IMMEDIATE_RETRIES))
-                .hasMessageContaining(FULL_PATH)
-                .rootCause().hasMessageContaining("not at EOF");
+        assertThat(readAll(cluster, NO_RETRIES, 1)).containsExactly(0, 1);
+        assertThat(cluster.requestedPaths()).containsExactly(FULL_PATH);
+    }
+
+    @Test
+    void endlesslyEmptyReadyReaderWaitsAndCanBeInterrupted() throws Exception {
+        FakeYtCluster cluster = FakeYtCluster.returningEmptyBatches(1, 0, Integer.MAX_VALUE);
+        YtRowDataInputFormat format = newFormat(cluster, NO_RETRIES);
+        CompletableFuture<RowData> result = new CompletableFuture<>();
+        AtomicBoolean interrupted = new AtomicBoolean();
+        Thread readerThread = new Thread(() -> {
+            try {
+                result.complete(format.nextRecord(null));
+            } catch (Throwable error) {
+                result.completeExceptionally(error);
+            } finally {
+                interrupted.set(Thread.currentThread().isInterrupted());
+            }
+        }, "empty-batch-reader");
+        readerThread.setDaemon(true);
+
+        try {
+            format.openInputFormat();
+            format.open(format.createInputSplits(1)[0]);
+            readerThread.start();
+
+            assertTimeoutPreemptively(Duration.ofSeconds(5), () -> {
+                cluster.firstEmptyBatchRead().get();
+                while (readerThread.getState() != Thread.State.TIMED_WAITING) {
+                    assertThat(readerThread.isAlive()).isTrue();
+                    Thread.sleep(1);
+                }
+            });
+            assertThat(result).isNotDone();
+
+            readerThread.interrupt();
+            readerThread.join(5000);
+
+            assertThat(readerThread.isAlive()).isFalse();
+            assertThat(result).isCompletedWithValue(null);
+            assertThat(interrupted).isTrue();
+            assertThat(format.reachedEnd()).isTrue();
+            assertThat(cluster.requestedPaths()).containsExactly(FULL_PATH);
+        } finally {
+            readerThread.interrupt();
+            readerThread.join(5000);
+            format.close();
+            format.closeInputFormat();
+        }
     }
 
     /**
