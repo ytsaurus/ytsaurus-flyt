@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import logging
 import os
 import shlex
@@ -369,6 +370,64 @@ def validate(
     default=None,
     help="Resource preset (default: from profile or micro).",
 )
+@click.option(
+    "--mode",
+    "cluster_mode",
+    type=click.Choice(["minicluster", "application"], case_sensitive=False),
+    default=None,
+    help="minicluster: one job, in-JVM MiniCluster. application: JobManager + TaskManager tasks "
+    "(default: cluster_mode from profile, or minicluster).",
+)
+@click.option(
+    "--taskmanagers",
+    "taskmanager_count",
+    type=click.IntRange(min=1),
+    default=None,
+    help="TaskManager job count for --mode application (default: taskmanager_count from profile, "
+    "else derived from --parallelism, else 1).",
+)
+@click.option(
+    "--parallelism",
+    "parallelism",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Default job parallelism for --mode application; sizes the cluster when --taskmanagers is not set "
+    "(ceil(parallelism / slots) TaskManagers).",
+)
+@click.option(
+    "--tm-preset",
+    "taskmanager_preset",
+    type=click.Choice(["micro", "small", "large", "xlarge"], case_sensitive=False),
+    default=None,
+    help="TaskManager resource preset for --mode application (default: same as --preset).",
+)
+@click.option(
+    "--slots",
+    "taskmanager_slots",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Task slots per TaskManager for --mode application (default: taskmanager_slots from profile, or 1).",
+)
+@click.option(
+    "--tm-cpu",
+    "taskmanager_cpu",
+    type=click.IntRange(min=1),
+    default=None,
+    help="CPU per TaskManager job for --mode application (overrides --tm-preset).",
+)
+@click.option(
+    "--tm-mem",
+    "taskmanager_memory",
+    default=None,
+    help="Memory per TaskManager job, e.g. 24G, for --mode application (overrides --tm-preset).",
+)
+@click.option(
+    "--tm-off-heap",
+    "taskmanager_off_heap",
+    default=None,
+    help="TaskManager task off-heap (direct memory for connectors), e.g. 2G, for --mode application "
+    "(default: preset off_heap, else 1/8 of the TaskManager JVM).",
+)
 @click.option("--wheel", "wheel_path", default=None)
 @click.option("--source-dir", "source_dir", default=None)
 @click.option("--cache-wheel", is_flag=True)
@@ -393,6 +452,14 @@ def run(
     proxy: Optional[str],
     pool: Optional[str],
     preset: Optional[str],
+    cluster_mode: Optional[str],
+    taskmanager_count: Optional[int],
+    parallelism: Optional[int],
+    taskmanager_preset: Optional[str],
+    taskmanager_slots: Optional[int],
+    taskmanager_cpu: Optional[int],
+    taskmanager_memory: Optional[str],
+    taskmanager_off_heap: Optional[str],
     wheel_path: Optional[str],
     source_dir: Optional[str],
     cache_wheel: bool,
@@ -405,6 +472,22 @@ def run(
     _echo_profile_line(ctx)
     job_command = shlex.join(list(job_argv))
     cfg, profile_data = _load_flyt_config_from_profile(ctx)
+    cluster_overrides = {
+        "cluster_mode": cluster_mode,
+        "taskmanager_count": taskmanager_count,
+        "parallelism": parallelism,
+        "taskmanager_preset": taskmanager_preset,
+        "taskmanager_slots": taskmanager_slots,
+        "taskmanager_cpu": taskmanager_cpu,
+        "taskmanager_memory": taskmanager_memory,
+        "taskmanager_off_heap": taskmanager_off_heap,
+    }
+    cluster_overrides = {k: v for k, v in cluster_overrides.items() if v is not None}
+    if cluster_overrides:
+        try:
+            cfg = dataclasses.replace(cfg, **cluster_overrides)
+        except ValueError as e:
+            raise click.ClickException(str(e)) from e
     proxy_f, pool_f = _resolve_connection(profile_data, proxy, pool)
     _, _, pst = resolve_connection_from_profile(profile_data)
     preset_s = (preset or "").strip().lower() or (pst or "micro").strip().lower()

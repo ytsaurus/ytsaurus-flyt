@@ -42,3 +42,27 @@ def test_launch_rejects_squashfs_without_runtime_python_version(mock_yt_client):
 def test_launch_vanilla_job_accepts_cluster_params_type():
     hints = get_type_hints(launch_vanilla_job)
     assert ClusterParams in hints["preset"].__args__
+
+
+def test_make_taskmanager_params_from_config():
+    from ytsaurus_flyt.launcher import taskmanager_params_from_config as _make_taskmanager_params
+    from ytsaurus_flyt.models import ClusterPreset
+
+    micro = ClusterPreset.MICRO.params
+    same = _make_taskmanager_params(FlytConfig(taskmanager_count=3, taskmanager_slots=2), micro)
+    assert (same.cpu, same.memory, same.count, same.slots) == (micro.cpu, micro.memory_bytes(), 3, 2)
+    derived = _make_taskmanager_params(FlytConfig(parallelism=7, taskmanager_slots=2), micro)
+    assert (derived.count, derived.slots) == (4, 2)
+    assert same.off_heap is None
+    # the MiniCluster off_heap knob keeps its meaning for TaskManagers, taskmanager_off_heap overrides it
+    import dataclasses
+
+    micro_off_heap = dataclasses.replace(micro, off_heap_size="1G")
+    assert _make_taskmanager_params(FlytConfig(), micro_off_heap).off_heap == 1024**3
+    assert _make_taskmanager_params(FlytConfig(taskmanager_off_heap="512M"), micro_off_heap).off_heap == 512 * 1024**2
+    custom = _make_taskmanager_params(
+        FlytConfig(taskmanager_preset="large", taskmanager_cpu=20, taskmanager_memory="24G"), micro
+    )
+    assert (custom.cpu, custom.memory) == (20, 24 * 1024**3)
+    large = _make_taskmanager_params(FlytConfig(taskmanager_preset="large"), micro)
+    assert (large.cpu, large.memory) == (ClusterPreset.LARGE.params.cpu, ClusterPreset.LARGE.params.memory_bytes())

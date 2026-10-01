@@ -1,12 +1,16 @@
 """Configuration for ytsaurus-flyt Vanilla operations."""
 
+import math
 import warnings
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
+from ytsaurus_flyt.models import ClusterPreset
+
 _VALID_SQUASHFS_DELIVERY: Tuple[str, ...] = ("layer_paths", "sandbox_unpack")
+_VALID_CLUSTER_MODES: Tuple[str, ...] = ("minicluster", "application")
 _VALID_SQUASHFS_COMPRESSION: Tuple[str, ...] = ("gzip", "xz", "zstd", "lz4")
 
 # Typical OpenJDK 11 path on Debian/Ubuntu exec images; single source for FlytConfig default and CLI profile template.
@@ -114,6 +118,70 @@ class FlytConfig:
     is skipped entirely.
     """
 
+    # --- Cluster topology ---
+    cluster_mode: str = "minicluster"
+    """``minicluster``: one job runs the PyFlink script with an in-JVM MiniCluster (JobManager and
+    TaskManager share a single JVM). ``application``: a Flink application cluster with a
+    ``jobmanager`` task (one gang job) and a ``taskmanager`` task with :attr:`taskmanager_count` jobs.
+    """
+
+    taskmanager_count: Optional[int] = None
+    """Number of TaskManager jobs (``application`` mode only). Unset: derived from :attr:`parallelism`
+    (``ceil(parallelism / taskmanager_slots)``), or 1 when neither is set.
+    """
+
+    parallelism: Optional[int] = None
+    """Default job parallelism (``parallelism.default``) for ``application`` mode. Also sizes the cluster
+    when :attr:`taskmanager_count` is unset; with both set, ``taskmanager_count * taskmanager_slots`` must
+    cover it. The pipeline's own ``set_parallelism`` still wins over the default.
+    """
+
+    taskmanager_preset: str = ""
+    """``ClusterPreset`` name (``micro``, ``small``, ...) for TaskManager cpu/memory (``application`` mode).
+    Empty uses the same preset as the JobManager.
+    """
+
+    taskmanager_slots: int = 1
+    """``taskmanager.numberOfTaskSlots`` per TaskManager (``application`` mode)."""
+
+    taskmanager_cpu: Optional[int] = None
+    """CPU limit of one TaskManager job (``application`` mode); overrides the preset's cpu."""
+
+    taskmanager_memory: str = ""
+    """Memory limit of one TaskManager job, e.g. ``24G`` (``application`` mode); overrides the preset's memory."""
+
+    taskmanager_off_heap: str = ""
+    """``taskmanager.memory.task.off-heap.size`` (e.g. ``2G``): direct memory for connectors' netty/gRPC
+    buffers, which Flink otherwise caps at ``framework.off-heap`` (128m) in a real cluster. Empty uses
+    the preset's ``off_heap_size`` when set, else 1/8 of the TaskManager JVM process size.
+    """
+
+    restart_completed_jobs: bool = True
+    """Re-run the pipeline when it finishes successfully (streaming semantics, the operation never
+    completes on its own). ``minicluster``: passed to the Vanilla task as ``restart_completed_jobs``.
+    ``application``: the JobManager job re-runs the driver in place (gang tasks cannot use the YT
+    option). Set ``False`` for batch jobs: the operation is completed once the driver exits 0.
+    """
+
+    discovery_timeout: int = 600
+    """Seconds a TaskManager waits for the JobManager job of its incarnation to advertise its RPC
+    endpoint (``application`` mode). On timeout the TaskManager job fails and YT restarts it, so a
+    JobManager that never gets scheduled eventually fails the operation via ``max_failed_job_count``.
+    """
+
+    sidecar_command: str = ""
+    """Shell command started in the background in every ``application``-mode job (JobManager and
+    TaskManagers) right before Flink, from the service directory with the job environment and
+    ``secure_vault`` keys exported; killed when the job exits. Use it for per-container helpers
+    such as a metrics agent that every JVM must reach on ``localhost``. Ignored in ``minicluster``
+    mode (the profile may keep it while the mode is chosen per run).
+    """
+
+    flink_config: Dict[str, str] = field(default_factory=dict)
+    """Extra Flink options for ``application`` mode, passed as ``-D key=value`` to the JobManager and
+    TaskManagers after the generated ones (memory, ports, restart strategy), so they override them.
+    """
+
     def __post_init__(self) -> None:
         d = (self.squashfs_layer_delivery or "").strip()
         c = (self.squashfs_compression or "").strip().lower()
@@ -123,6 +191,45 @@ class FlytConfig:
             raise ValueError(f"squashfs_compression must be one of {list(_VALID_SQUASHFS_COMPRESSION)}, got {c!r}")
         self.squashfs_layer_delivery = d
         self.squashfs_compression = c
+        m = (self.cluster_mode or "").strip().lower()
+        if m not in _VALID_CLUSTER_MODES:
+            raise ValueError(f"cluster_mode must be one of {list(_VALID_CLUSTER_MODES)}, got {m!r}")
+        self.cluster_mode = m
+        if self.taskmanager_count is not None:
+            if int(self.taskmanager_count) < 1:
+                raise ValueError(f"taskmanager_count must be >= 1, got {self.taskmanager_count!r}")
+            self.taskmanager_count = int(self.taskmanager_count)
+        if self.parallelism is not None:
+            if int(self.parallelism) < 1:
+                raise ValueError(f"parallelism must be >= 1, got {self.parallelism!r}")
+            self.parallelism = int(self.parallelism)
+        if int(self.taskmanager_slots) < 1:
+            raise ValueError(f"taskmanager_slots must be >= 1, got {self.taskmanager_slots!r}")
+        self.taskmanager_slots = int(self.taskmanager_slots)
+        if int(self.discovery_timeout) < 1:
+            raise ValueError(f"discovery_timeout must be >= 1 second, got {self.discovery_timeout!r}")
+        self.discovery_timeout = int(self.discovery_timeout)
+        if self.taskmanager_count is not None and self.parallelism is not None:
+            capacity = self.taskmanager_count * self.taskmanager_slots
+            if capacity < self.parallelism:
+                raise ValueError(
+                    f"parallelism {self.parallelism} does not fit into taskmanager_count * taskmanager_slots "
+                    f"= {capacity}; raise taskmanager_count/taskmanager_slots or drop taskmanager_count to derive it"
+                )
+        self.taskmanager_preset = (self.taskmanager_preset or "").strip().lower()
+        self.taskmanager_off_heap = (self.taskmanager_off_heap or "").strip()
+        self.taskmanager_memory = (self.taskmanager_memory or "").strip()
+        if self.taskmanager_cpu is not None:
+            if int(self.taskmanager_cpu) < 1:
+                raise ValueError(f"taskmanager_cpu must be >= 1, got {self.taskmanager_cpu!r}")
+            self.taskmanager_cpu = int(self.taskmanager_cpu)
+        if self.taskmanager_preset and self.taskmanager_preset.upper() not in ClusterPreset.__members__:
+            raise ValueError(
+                f"taskmanager_preset must be one of {[m.lower() for m in ClusterPreset.__members__]}, "
+                f"got {self.taskmanager_preset!r}"
+            )
+        self.flink_config = {str(k): str(v) for k, v in (self.flink_config or {}).items()}
+        self.sidecar_command = (self.sidecar_command or "").strip()
         self.embed_squashfs_layer_jar_basenames = _normalize_jar_basename_list(self.embed_squashfs_layer_jar_basenames)
         self.runtime_jar_basenames = _normalize_jar_basename_list(self.runtime_jar_basenames)
         emb = set(self.embed_squashfs_layer_jar_basenames)
@@ -159,6 +266,26 @@ class FlytConfig:
                 stacklevel=2,
             )
         return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
+
+    @property
+    def is_application_cluster(self) -> bool:
+        return self.cluster_mode == "application"
+
+    @property
+    def effective_taskmanager_count(self) -> int:
+        """TaskManager jobs to start: explicit count, else enough slots for ``parallelism``, else 1."""
+        if self.taskmanager_count is not None:
+            return self.taskmanager_count
+        if self.parallelism is not None:
+            return max(1, math.ceil(self.parallelism / self.taskmanager_slots))
+        return 1
+
+    @property
+    def effective_parallelism(self) -> int:
+        """``parallelism.default`` for the cluster: explicit value, else every slot of every TaskManager."""
+        if self.parallelism is not None:
+            return self.parallelism
+        return self.effective_taskmanager_count * self.taskmanager_slots
 
 
 # Messages shared with validate_flyt_config row output
