@@ -174,7 +174,6 @@ public abstract class AbstractYtRowDataInputFormat
             if (!tableReader.canRead()) {
                 return null;
             }
-            // readyEvent() may stay completed before data or EOF reaches the stash; avoid busy polling.
             Thread.sleep(EMPTY_BATCH_POLL_INTERVAL_MILLIS);
         }
     }
