@@ -40,7 +40,7 @@ public class StubFailingCountingApiServiceTransaction extends ApiServiceTransact
 
     @Override
     public CompletableFuture<Void> modifyRows(AbstractModifyRowsRequest<?, ?> request) {
-        throw new UnsupportedOperationException("modifyRows of this type is not supported");
+        return CompletableFuture.runAsync(() -> rowCount.addAndGet(request.getRowModificationTypes().size()));
     }
 
     @Override
