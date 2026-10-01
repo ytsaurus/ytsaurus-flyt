@@ -94,21 +94,20 @@ public class YtDynamicTableWriterPoolTest {
 
     private YtDynamicTableWriterPool makePool(ComplexYtPath path, String schema, LogicalType logicalType) {
         RowDataToYtListConverters ytConverter = new RowDataToYtListConverters(TimestampFormat.ISO_8601);
-        return new YtDynamicTableWriterPool(
-                () -> mockedClient,
-                ytConverter.createConverter(logicalType, YTreeTextSerializer.deserialize(schema)),
-                path,
-                schema,
-                null,
-                retryStrategy,
-                context,
-                YtTableAttributes.empty(),
-                ReshardingConfig.builder()
+        return YtDynamicTableWriterPool.builder()
+                .clientSupplier(() -> mockedClient)
+                .ytConverter(ytConverter.createConverter(logicalType, YTreeTextSerializer.deserialize(schema)))
+                .path(path)
+                .ysonSchemaString(schema)
+                .retryStrategy(retryStrategy)
+                .context(context)
+                .tableAttributes(YtTableAttributes.empty())
+                .reshardingConfig(ReshardingConfig.builder()
                         .reshardStrategy(ReshardStrategy.NONE)
-                        .build(),
-                ytWriterOptions,
-                new NoopLocksProvider()
-        );
+                        .build())
+                .ytWriterOptions(ytWriterOptions)
+                .locksProvider(new NoopLocksProvider())
+                .build();
     }
 
     private YtDynamicTableWriterPool makePool(String basePath, String schema, LogicalType logicalType) {
@@ -120,16 +119,17 @@ public class YtDynamicTableWriterPoolTest {
         setYtPathAvailable("home", "smth", "__tests__", "tests", "sample");
         mockMountAny();
         try (var pool = makePool("//home/smth/__tests__/tests", "[]", new IntType())) {
-            var writer = pool.getOrAcquire(WriterClassifier.plain("sample"));
-            assertEquals("//home/smth/__tests__/tests/sample", writer.toString().split(" ")[3]);
+            pool.initializeWriter(WriterClassifier.plain("sample"));
         }
+        Mockito.verify(mockedClient, Mockito.atLeastOnce())
+                .existsNode("//home/smth/__tests__/tests/sample");
     }
 
     @Test
     void poolAcquireConnectionForbiddenPathSuccess() {
         setYtPathAvailable("__non_existent__");
         try (var pool = makePool("//home/smth/__tests__/tests", "[]", new IntType())) {
-            pool.getOrAcquire(WriterClassifier.plain("sample"));
+            pool.initializeWriter(WriterClassifier.plain("sample"));
             fail("No exception was thrown acquiring writer for a forbidden path");
         } catch (RuntimeException e) {
             assertTrue(e.getMessage().contains("Insufficient permissions"));
@@ -170,7 +170,7 @@ public class YtDynamicTableWriterPoolTest {
         Mockito.when(transaction.commit()).thenReturn(CompletableFuture.completedFuture(null));
 
         try (var pool = makePool("/", schema, logicalType)) {
-            var writer = pool.getOrAcquire(WriterClassifier.plain("values"));
+            var classifier = WriterClassifier.plain("values");
             for (int i = 0; i < ytWriterOptions.getRowsInModificationLimit() + 1; i++) {
                 GenericRowData genericRowData = new GenericRowData(RowKind.INSERT, 2);
                 // id
@@ -181,7 +181,7 @@ public class YtDynamicTableWriterPoolTest {
                                 .of(2022, 10, 30, 10, 10, 10)
                                 .toInstant(ZoneOffset.UTC)
                 ));
-                writer.write(genericRowData);
+                pool.write(classifier, genericRowData);
             }
             assertEquals(1, rows.get().size());
         }
@@ -355,9 +355,12 @@ public class YtDynamicTableWriterPoolTest {
                     .thenAnswer(invocation -> CompletableFuture.completedFuture(null));
 
             try (var pool = makePool(path, schema, logicalType)) {
-                pool.getOrAcquire(WriterClassifier.partition(rowInstant, partitionConfigBuilder
-                        .converter(new YtPartitioningInstantRowDataConverter(new TimestampType(3)))
-                        .build()));
+                WriterClassifier writerClassifier = WriterClassifier.partition(
+                        rowInstant,
+                        partitionConfigBuilder
+                                .converter(new YtPartitioningInstantRowDataConverter(new TimestampType(3)))
+                                .build());
+                pool.initializeWriter(writerClassifier);
             }
 
             Mockito.verify(mockedClient, Mockito.times(1))

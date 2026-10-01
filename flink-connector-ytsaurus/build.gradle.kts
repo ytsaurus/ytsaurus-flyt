@@ -17,6 +17,7 @@ dependencies {
     implementation(project(":locks-api"))
     implementation(project(":locks-noop"))
     api(project(":flink-connector-data-metrics"))
+    implementation("com.github.ben-manes.caffeine:caffeine:3.2.4")
     api("tech.ytsaurus:ytsaurus-client:1.2.12")
     implementation(project(":flink-yson-fast-adapter"))
     implementation("jakarta.annotation:jakarta.annotation-api:1.3.5")
