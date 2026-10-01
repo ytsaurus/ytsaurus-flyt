@@ -45,7 +45,7 @@ public abstract class AbstractYtRowDataInputFormat
         implements ResultTypeQueryable<RowData> {
 
     private static final Logger LOG = LoggerFactory.getLogger(AbstractYtRowDataInputFormat.class);
-    private static final long EMPTY_BATCH_POLL_INTERVAL_MILLIS = 10;
+    private static final long EMPTY_BATCH_POLL_INTERVAL_MILLIS = 100;
 
     protected final String ysonSchemaString;
     protected final long limit;
