@@ -9,8 +9,8 @@ import yaml
 _VALID_SQUASHFS_DELIVERY: Tuple[str, ...] = ("layer_paths", "sandbox_unpack")
 _VALID_SQUASHFS_COMPRESSION: Tuple[str, ...] = ("gzip", "xz", "zstd", "lz4")
 
-# Typical OpenJDK 11 path on Debian/Ubuntu exec images; single source for FlytConfig default and CLI profile template.
-DEFAULT_JAVA_HOME = "/usr/lib/jvm/java-11-openjdk-amd64"
+# Eclipse Temurin JRE feature version bundled into the layer by default.
+DEFAULT_JAVA_VERSION = "11"
 
 
 def _normalize_jar_basename_list(val: Any) -> List[str]:
@@ -37,32 +37,17 @@ class FlytConfig:
     jar_scan_folder: str = ""
     """YT path to a folder of JARs for ``flink/lib``, referenced by basename below."""
 
-    embed_squashfs_layer_jar_basenames: List[str] = field(default_factory=list)
-    """Basenames (no version; optional ``.jar`` suffix) to resolve from :attr:`jar_scan_folder` and pack
-    into the SquashFS layer. Listed together with :attr:`runtime_jar_basenames` for resolution; routing
-    uses :func:`~ytsaurus_flyt.flink_lib_jars.partition_flink_lib_jars_for_delivery`. Disjoint from
-    ``runtime_jar_basenames``.
-    """
-
     runtime_jar_basenames: List[str] = field(default_factory=list)
-    """Basenames to resolve from :attr:`jar_scan_folder` and deliver only as operation ``file_paths``
-    (staged into ``flink/lib``), not inside the SquashFS. Disjoint from ``embed_squashfs_layer_jar_basenames``.
-    """
+    """Basenames (no version; optional ``.jar`` suffix) resolved from :attr:`jar_scan_folder` and
+    delivered as ``file_paths`` into ``flink/lib`` at runtime (never baked into the layer)."""
 
     # --- Service ---
     service_name: str = ""
     """Service name (wheel cache paths, logging)."""
 
-    # --- Environment ---
-    java_home: str = DEFAULT_JAVA_HOME
-    """Path to JAVA_HOME inside the job container (matches the SquashFS layout after unpack/mount)."""
-
-    python_bin: str = "/usr/bin/python3"
-    """Path to the Python binary on the exec node. Must match the ABI of
-    ``runtime_python_version`` when using SquashFS (wheels in ``python-runtime/`` are
-    built for that interpreter). If ``runtime_python_version`` is 3.10 but this path
-    is Python 3.8, native deps (e.g. grpc) fail with import errors.
-    """
+    # --- Runtime versions (bundled into the self-contained layer) ---
+    java_version: str = DEFAULT_JAVA_VERSION
+    """Eclipse Temurin JRE feature version to bundle into the layer (e.g. ``11``, ``17``); from the official image."""
 
     # --- Optional ---
     network_project: Optional[str] = None
@@ -81,17 +66,18 @@ class FlytConfig:
     extra_file_paths: List[str] = field(default_factory=list)
     """Additional YT file paths to include in the operation (configs, etc.)."""
 
-    runtime_python_packages: List[str] = field(default_factory=list)
-    """Package specs for the SquashFS layer build only (e.g. ``apache-flink==1.20.1``)."""
+    flink_version: str = "1.20.1"
+    """Apache Flink version for the runtime layer; flyt installs ``apache-flink==<flink_version>``.
+    flyt ships the Flink runtime only — bring your own packages in a separate layer or your job wheel."""
 
     runtime_python_version: str = ""
-    """Python ABI for the SquashFS layer (e.g. ``3.10``); required when ``runtime_python_packages`` is set.
-    Wheels and ``pip install`` run in ``python:<version>-slim`` (Docker/Podman on the build machine).
-    Must match ``python_bin`` on exec nodes (same ``major.minor``).
-    """
+    """Python ``major.minor`` (e.g. ``3.10``), required to build the layer. A relocatable CPython of
+    this version is bundled in and pyflink wheels are built for it, so the job ignores the node's Python."""
 
-    squashfs_layer_cache_prefix: str = ""
-    """Cypress directory for cached SquashFS layers (e.g. under ``//home/flyt/clusters/<profile>/layers``). Empty uses ``//tmp/flyt_squashfs_layers``."""
+    squashfs_layer_paths: List[str] = field(default_factory=list)
+    """Ordered Cypress paths to pre-built ``.squashfs`` layers, used verbatim (no hash, no build) and
+    delivered per :attr:`squashfs_layer_delivery`. Build with ``flyt build layer --upload <path>``;
+    paths must already exist. Later layers overlay earlier ones."""
 
     squashfs_compression: str = "gzip"
     """``mksquashfs`` compression: ``gzip``, ``xz``, ``zstd``, or ``lz4`` (if supported)."""
@@ -99,8 +85,9 @@ class FlytConfig:
     squashfs_layer_delivery: str = "layer_paths"
     """layer_paths: mount SquashFS on exec nodes. sandbox_unpack: ship .squashfs as file_paths and unpack in the sandbox."""
 
-    squashfs_tools_cache_prefix: str = ""
-    """Cypress directory for cached ``flyt_unsquashfs`` helper binary (``sandbox_unpack``). Empty uses ``//tmp/flyt_squashfs_tools``."""
+    unsquashfs_path: str = ""
+    """Cypress path to an ``unsquashfs`` binary for ``sandbox_unpack`` (build with ``flyt build unsquashfs --upload <path>``).
+    Shipped as a file_path so the job can unpack the layer. Empty ⇒ the exec image must provide ``unsquashfs`` on PATH."""
 
     extra_environment: Dict[str, str] = field(default_factory=dict)
     """Additional environment variables to set in the Vanilla operation."""
@@ -109,9 +96,15 @@ class FlytConfig:
     """Passed to the Vanilla operation builder (``max_failed_job_count``)."""
 
     pre_built_layer_paths: List[str] = field(default_factory=list)
-    """Pre-built Cypress layer paths (e.g. Porto layers) to use as ``layer_paths``
-    instead of building a SquashFS layer.  When non-empty, ``ensure_runtime_layer``
-    is skipped entirely.
+    """Ready-made Cypress ``layer_paths`` (e.g. Porto layers) to use verbatim instead of a SquashFS layer."""
+
+    yt_client_config: Optional[Dict[str, Any]] = None
+    """Raw overrides deep-merged into the ``YtClient`` config. Use for cluster quirks,
+    e.g. a proxy that advertises unreachable internal hosts::
+
+        yt_client_config:
+          proxy:
+            enable_proxy_discovery: false
     """
 
     def __post_init__(self) -> None:
@@ -123,15 +116,13 @@ class FlytConfig:
             raise ValueError(f"squashfs_compression must be one of {list(_VALID_SQUASHFS_COMPRESSION)}, got {c!r}")
         self.squashfs_layer_delivery = d
         self.squashfs_compression = c
-        self.embed_squashfs_layer_jar_basenames = _normalize_jar_basename_list(self.embed_squashfs_layer_jar_basenames)
         self.runtime_jar_basenames = _normalize_jar_basename_list(self.runtime_jar_basenames)
-        emb = set(self.embed_squashfs_layer_jar_basenames)
-        run = set(self.runtime_jar_basenames)
-        if emb & run:
-            raise ValueError(
-                "Basenames cannot appear in both embed_squashfs_layer_jar_basenames and runtime_jar_basenames: "
-                f"{sorted(emb & run)}"
-            )
+
+    @property
+    def flink_requirements(self) -> List[str]:
+        """pip requirements for the Flink runtime layer, derived from ``flink_version``."""
+        v = (self.flink_version or "").strip()
+        return [f"apache-flink=={v}"] if v else []
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to a plain dict (dataclass fields only)."""
@@ -162,18 +153,15 @@ class FlytConfig:
 
 
 # Messages shared with validate_flyt_config row output
-SQUASHFS_VALIDATE_RUNTIME_PACKAGES_MSG = "required for SquashFS"
-SQUASHFS_VALIDATE_RUNTIME_VERSION_MSG = "required (e.g. 3.10); must match python_bin on exec nodes"
+SQUASHFS_VALIDATE_FLINK_VERSION_MSG = "required for SquashFS (e.g. 1.20.1)"
+SQUASHFS_VALIDATE_RUNTIME_VERSION_MSG = "required (e.g. 3.10); a matching CPython is bundled into the layer"
 
 
 def require_squashfs_runtime_config(config: FlytConfig) -> None:
     """Raise if SquashFS layer prerequisites are missing."""
     if config.pre_built_layer_paths:
         return
-    if not config.runtime_python_packages:
-        raise ValueError("runtime_python_packages is required (e.g. apache-flink) to build the SquashFS runtime layer.")
+    if not (config.flink_version or "").strip():
+        raise ValueError("flink_version is required (e.g. 1.20.1) to build the SquashFS runtime layer.")
     if not (config.runtime_python_version or "").strip():
-        raise ValueError(
-            'runtime_python_version is required (e.g. "3.10") for SquashFS; '
-            "it must match python_bin on exec nodes (same major.minor)."
-        )
+        raise ValueError('runtime_python_version is required (e.g. "3.10") to build the SquashFS runtime layer.')

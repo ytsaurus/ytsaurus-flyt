@@ -17,22 +17,40 @@ def env_yt_token() -> Optional[str]:
     return None
 
 
-def yt_client_config_for_proxy(proxy: str) -> Optional[Dict[str, Any]]:
+def _deep_merge(base: Dict[str, Any], overrides: Dict[str, Any]) -> Dict[str, Any]:
+    """Recursively merge ``overrides`` into ``base`` (override wins; nested dicts merge)."""
+    out = dict(base)
+    for key, value in overrides.items():
+        if isinstance(value, dict) and isinstance(out.get(key), dict):
+            out[key] = _deep_merge(out[key], value)
+        else:
+            out[key] = value
+    return out
+
+
+def yt_client_config_for_proxy(proxy: str, overrides: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    """Localhost-friendly defaults, with profile ``yt_client_config`` overrides merged on top."""
     p = (proxy or "").lower()
+    base: Dict[str, Any] = {}
     if "127.0.0.1" in p or "localhost" in p or "[::1]" in p or p.startswith("::1") or p.startswith("[::1]"):
-        return {
+        base = {
             "apply_remote_patch_at_start": False,
             "proxy": {"enable_proxy_discovery": False},
         }
-    return None
+    merged = _deep_merge(base, overrides) if overrides else base
+    return merged or None
 
 
-def make_yt_client(proxy: str) -> YtClient:
-    """Build ``YtClient`` for ``proxy`` with token from env (if set) and localhost-friendly config."""
+def make_yt_client(proxy: str, config_overrides: Optional[Dict[str, Any]] = None) -> YtClient:
+    """Build ``YtClient`` for ``proxy`` with token from env (if set) and merged config.
+
+    ``config_overrides`` (a profile's ``yt_client_config``) is deep-merged over the
+    localhost-friendly defaults.
+    """
     return YtClient(
         proxy=proxy,
         token=env_yt_token(),
-        config=yt_client_config_for_proxy(proxy),
+        config=yt_client_config_for_proxy(proxy, config_overrides),
     )
 
 

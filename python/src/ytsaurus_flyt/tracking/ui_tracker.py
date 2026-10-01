@@ -252,20 +252,11 @@ def _thread_main(
 
 
 class FlinkUIWatcher:
-    """Context manager: background thread that surfaces the Flink Web UI URL.
+    """Context manager: background thread that finds and announces the Flink Web UI URL.
 
-    Attaches to the Python logging system to capture the operation ID from the
-    yt-client 'Operation started' log line, then polls list_jobs/get_job for the
-    running job's IPv6, TCP-probes port 27050, and logs the URL when it comes up.
-    Handles job restarts. Optionally opens the URL in the default browser.
-
-    Not useful with ``sync=False`` (detach mode) since the process exits before
-    the watcher can find the job — skip it in that case.
-
-    Usage::
-
-        with FlinkUIWatcher(proxy="hahn.yt.yandex.net", open_in_browser=True):
-            launch_vanilla_job(...)
+    Captures the op ID from the yt-client 'Operation started' log line, polls for the running
+    job's IPv6, and probes port 27050. Handles restarts; optionally opens a browser. Useless in
+    detach mode (``sync=False``) — the process exits before the job is found.
     """
 
     def __init__(self, proxy: str, open_in_browser: bool = True) -> None:

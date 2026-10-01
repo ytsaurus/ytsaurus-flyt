@@ -3,7 +3,7 @@
 import hashlib
 from unittest.mock import MagicMock
 
-from ytsaurus_flyt.wheel_utils import (
+from ytsaurus_flyt.runtime.wheel_utils import (
     dedupe_file_paths_by_basename,
     upload_wheel,
 )

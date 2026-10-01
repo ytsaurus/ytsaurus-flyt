@@ -3,25 +3,16 @@
 from __future__ import annotations
 
 import os
-from dataclasses import asdict, replace
+import warnings
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 import yaml
 
-from ytsaurus_flyt.config import FlytConfig
+from ytsaurus_flyt.config.config import FlytConfig
 
-PROFILE_META_KEYS = frozenset({"proxy", "pool", "preset", "cypress_base_path"})
-
-
-def default_cypress_base_path(profile_name: str) -> str:
-    """Default Cypress prefix for a new profile (per-cluster layout).
-
-    Uses ``//home/flyt/clusters/<name>`` so team-wide assets can live under
-    ``//home/flyt/libraries/`` (e.g. ``flink-connector-ytsaurus.jar``) without
-    colliding with per-cluster cache paths.
-    """
-    return f"//home/flyt/clusters/{profile_name.strip()}"
+PROFILE_META_KEYS = frozenset({"proxy", "pool", "preset"})
 
 
 def get_config_dir() -> Path:
@@ -98,7 +89,7 @@ def save_profile_dict(name: str, data: Dict[str, Any]) -> None:
 
 
 def split_profile_meta(data: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    """Split profile YAML into meta (proxy, pool, preset, cypress_base_path) and Flyt fields."""
+    """Split profile YAML into meta (proxy, pool, preset) and Flyt fields."""
     meta: Dict[str, Any] = {}
     flyt: Dict[str, Any] = {}
     for k, v in data.items():
@@ -109,36 +100,22 @@ def split_profile_meta(data: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, 
     return meta, flyt
 
 
-def apply_cypress_base_path(cfg: FlytConfig, cypress_base_path: str) -> FlytConfig:
-    """Derive squashfs cache prefixes from cypress_base_path when not set."""
-    base = (cypress_base_path or "").strip().rstrip("/")
-    if not base:
-        return cfg
-    layers = (cfg.squashfs_layer_cache_prefix or "").strip()
-    tools = (cfg.squashfs_tools_cache_prefix or "").strip()
-    if not layers:
-        cfg = replace(cfg, squashfs_layer_cache_prefix=f"{base}/layers")
-    if not tools:
-        cfg = replace(cfg, squashfs_tools_cache_prefix=f"{base}/tools")
-    wheels = (cfg.wheel_cache_prefix or "").strip()
-    if not wheels:
-        cfg = replace(cfg, wheel_cache_prefix=f"{base}/wheels")
-    return cfg
-
-
 def dict_to_flyt_config(data: Dict[str, Any]) -> FlytConfig:
     """Build FlytConfig from a dict (only known fields)."""
     return FlytConfig(**{k: v for k, v in data.items() if k in FlytConfig.__dataclass_fields__})
 
 
 def profile_dict_to_flyt_config(data: Dict[str, Any]) -> FlytConfig:
-    """Full profile YAML dict to FlytConfig (meta keys stripped, cypress_base_path applied)."""
+    """Full profile YAML dict to FlytConfig (meta keys stripped); warns on unknown keys."""
     meta, flyt = split_profile_meta(data)
-    cfg = dict_to_flyt_config(flyt)
-    cbp = meta.get("cypress_base_path")
-    if isinstance(cbp, str) and cbp.strip():
-        cfg = apply_cypress_base_path(cfg, cbp)
-    return cfg
+    unknown = set(flyt) - set(FlytConfig.__dataclass_fields__)
+    if unknown:
+        warnings.warn(
+            f"Ignoring unknown profile keys (typo?): {sorted(unknown)}",
+            UserWarning,
+            stacklevel=2,
+        )
+    return dict_to_flyt_config(flyt)
 
 
 def _is_empty_value(v: Any) -> bool:

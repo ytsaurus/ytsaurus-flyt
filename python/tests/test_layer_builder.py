@@ -1,43 +1,73 @@
-"""Tests for SquashFS layer hashing and helpers."""
+"""Tests for SquashFS layer build helpers."""
 
-from ytsaurus_flyt.config import FlytConfig
-from ytsaurus_flyt.layer_builder import compute_layer_hash
+from unittest import mock
 
-
-def test_compute_layer_hash_stable():
-    c1 = FlytConfig(
-        runtime_python_packages=["apache-flink==1.20.1"],
-        runtime_python_version="3.10",
-        squashfs_compression="gzip",
-    )
-    c2 = FlytConfig(
-        runtime_python_packages=["apache-flink==1.20.1"],
-        runtime_python_version="3.10",
-        squashfs_compression="gzip",
-    )
-    h1 = compute_layer_hash(c1, ["//x/a.jar"])
-    h2 = compute_layer_hash(c2, ["//x/a.jar"])
-    assert h1 == h2
-    assert len(h1) == 16
+from ytsaurus_flyt.runtime.layer_builder import (
+    _copy_jre_from_temurin,
+    _install_python_via_uv,
+    _run_mksquashfs,
+    upload_local_file,
+)
 
 
-def test_compute_layer_hash_order_independent():
-    c = FlytConfig(
-        runtime_python_packages=["apache-flink==1.20.1"],
-        squashfs_compression="gzip",
-    )
-    h1 = compute_layer_hash(c, ["//a.jar", "//b.jar"])
-    h2 = compute_layer_hash(c, ["//b.jar", "//a.jar"])
-    assert h1 == h2
+def test_install_python_via_uv_runs_uv_image(tmp_path):
+    captured = {}
+    with (
+        mock.patch("ytsaurus_flyt.runtime.layer_builder.get_container_runtime_command", return_value=["docker"]),
+        mock.patch(
+            "ytsaurus_flyt.runtime.layer_builder.run_expect_zero", side_effect=lambda cmd, **k: captured.update(cmd=cmd)
+        ),
+        mock.patch("os.path.isfile", return_value=True),
+    ):
+        _install_python_via_uv("3.10", str(tmp_path / "python-dist"))
+    cmd = " ".join(captured["cmd"])
+    assert "ghcr.io/astral-sh/uv:bookworm-slim" in cmd  # glibc, has a shell (not the distroless :latest)
+    assert "uv python install" in cmd and "3.10" in cmd
+    assert "UV_CACHE_DIR=/uvcache" in cmd  # cache mounted from host
 
 
-def test_compute_layer_hash_changes_when_config_changes():
-    c1 = FlytConfig(
-        runtime_python_packages=["apache-flink==1.20.1"],
-        squashfs_compression="gzip",
-    )
-    c2 = FlytConfig(
-        runtime_python_packages=["apache-flink==1.20.2"],
-        squashfs_compression="gzip",
-    )
-    assert compute_layer_hash(c1, []) != compute_layer_hash(c2, [])
+def test_copy_jre_from_temurin_runs_temurin_image(tmp_path):
+    captured = {}
+    with (
+        mock.patch("ytsaurus_flyt.runtime.layer_builder.get_container_runtime_command", return_value=["docker"]),
+        mock.patch(
+            "ytsaurus_flyt.runtime.layer_builder.run_expect_zero", side_effect=lambda cmd, **k: captured.update(cmd=cmd)
+        ),
+        mock.patch("os.path.isfile", return_value=True),
+    ):
+        _copy_jre_from_temurin("11", str(tmp_path / "java"))
+    cmd = " ".join(captured["cmd"])
+    assert "eclipse-temurin:11-jre" in cmd
+    assert "/opt/java/openjdk" in cmd
+
+
+def test_run_mksquashfs_uses_host_when_available():
+    with (
+        mock.patch("ytsaurus_flyt.runtime.layer_builder.shutil.which", return_value="/usr/bin/mksquashfs"),
+        mock.patch("ytsaurus_flyt.runtime.layer_builder._run_mksquashfs_host") as host,
+        mock.patch("ytsaurus_flyt.runtime.layer_builder._run_mksquashfs_container") as container,
+    ):
+        _run_mksquashfs("/root", "/out/runtime.squashfs", "GZIP")
+    host.assert_called_once_with("/root", "/out/runtime.squashfs", "gzip")
+    container.assert_not_called()
+
+
+def test_run_mksquashfs_falls_back_to_container_without_host_tool():
+    with (
+        mock.patch("ytsaurus_flyt.runtime.layer_builder.shutil.which", return_value=None),
+        mock.patch("ytsaurus_flyt.runtime.layer_builder._run_mksquashfs_host") as host,
+        mock.patch("ytsaurus_flyt.runtime.layer_builder._run_mksquashfs_container") as container,
+    ):
+        _run_mksquashfs("/root", "/out/runtime.squashfs", "zstd")
+    container.assert_called_once_with("/root", "/out/runtime.squashfs", "zstd")
+    host.assert_not_called()
+
+
+def test_upload_local_file_creates_parent_and_writes(tmp_path):
+    local = tmp_path / "artifact.bin"
+    local.write_bytes(b"data")
+    yt = mock.MagicMock()
+    yt.exists.return_value = False
+    upload_local_file(yt, str(local), "//sys/flink/artifact.bin")
+    yt.mkdir.assert_called_once_with("//sys/flink", recursive=True)
+    assert yt.write_file.call_args[0][0] == "//sys/flink/artifact.bin"

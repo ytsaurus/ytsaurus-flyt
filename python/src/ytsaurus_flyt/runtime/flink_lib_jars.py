@@ -6,12 +6,12 @@ import logging
 import os
 import posixpath
 from dataclasses import dataclass
-from typing import AbstractSet, List, Optional, Set, Tuple
+from typing import List, Optional, Set
 
 from yt.wrapper import YtClient
 
-from ytsaurus_flyt.config import FlytConfig
-from ytsaurus_flyt.jar_utils import JarInfoExtractionError, extract_jar_info
+from ytsaurus_flyt.config.config import FlytConfig
+from ytsaurus_flyt.runtime.jar_utils import JarInfoExtractionError, extract_jar_info
 
 logger = logging.getLogger(__name__)
 
@@ -43,9 +43,7 @@ def _basenames_from_config_list(items: List[str], field_name: str) -> Set[str]:
 
 
 def _collect_config_jar_basenames(config: FlytConfig) -> Set[str]:
-    b_run = _basenames_from_config_list(config.runtime_jar_basenames, "runtime_jar_basenames")
-    b_emb = _basenames_from_config_list(config.embed_squashfs_layer_jar_basenames, "embed_squashfs_layer_jar_basenames")
-    return b_run | b_emb
+    return _basenames_from_config_list(config.runtime_jar_basenames, "runtime_jar_basenames")
 
 
 def resolve_flink_lib_jars(
@@ -75,6 +73,14 @@ def resolve_flink_lib_jars(
         return empty
 
     logger.info("Resolving Flink lib JARs: %s", sorted(basenames_to_resolve))
+
+    if not yt_client.exists(jar_scan_folder):
+        logger.warning(
+            "jar_scan_folder %s does not exist on the cluster; no JARs resolved. Create it and upload your JARs (%s).",
+            jar_scan_folder,
+            ", ".join(sorted(basenames_to_resolve)),
+        )
+        return FlinkLibJarsResolveResult([], frozenset(extra_runtime))
 
     resolved_paths = []
     all_jars_in_folder = list(yt_client.list(jar_scan_folder))
@@ -108,65 +114,6 @@ def resolve_flink_lib_jars(
         resolved_paths.append(resolved_path)
 
     return FlinkLibJarsResolveResult(resolved_paths, frozenset(extra_runtime))
-
-
-def _resolved_jar_basename_key(yt_path: str) -> str:
-    base_name = posixpath.basename(yt_path.rstrip("/"))
-    try:
-        return extract_jar_info(base_name).basename
-    except (ValueError, JarInfoExtractionError):
-        return base_name.rsplit(".", 1)[0] if "." in base_name else base_name
-
-
-def partition_flink_lib_jars_for_delivery(
-    config: FlytConfig,
-    all_yt_paths: List[str],
-    *,
-    extra_runtime_basenames: Optional[AbstractSet[str]] = None,
-) -> Tuple[List[str], List[str]]:
-    """Return ``(squashfs_paths, file_paths_paths)``. ``extra_runtime_basenames`` always go to ``file_paths``."""
-    extra_runtime = frozenset(extra_runtime_basenames or ())
-
-    embed = _basenames_from_config_list(
-        list(config.embed_squashfs_layer_jar_basenames or []),
-        "embed_squashfs_layer_jar_basenames",
-    )
-    runtime_only = _basenames_from_config_list(
-        list(config.runtime_jar_basenames or []),
-        "runtime_jar_basenames",
-    )
-
-    if not embed and not runtime_only:
-        if not extra_runtime:
-            return (list(all_yt_paths), [])
-        squashfs_paths: List[str] = []
-        file_paths_paths: List[str] = []
-        for yt_path in all_yt_paths:
-            bkey = _resolved_jar_basename_key(yt_path)
-            if bkey in extra_runtime:
-                file_paths_paths.append(yt_path)
-            else:
-                squashfs_paths.append(yt_path)
-        return (squashfs_paths, file_paths_paths)
-
-    squashfs_paths = []
-    file_paths_paths = []
-    for yt_path in all_yt_paths:
-        bkey = _resolved_jar_basename_key(yt_path)
-        if bkey in extra_runtime:
-            file_paths_paths.append(yt_path)
-        elif bkey in runtime_only:
-            file_paths_paths.append(yt_path)
-        elif bkey in embed:
-            squashfs_paths.append(yt_path)
-        else:
-            # Unlisted basename: if embed list non-empty use file_paths; else layer
-            if embed:
-                file_paths_paths.append(yt_path)
-            else:
-                squashfs_paths.append(yt_path)
-
-    return (squashfs_paths, file_paths_paths)
 
 
 def download_flink_lib_jars(yt_client: YtClient, yt_paths: List[str], output_dir: str) -> List[str]:
