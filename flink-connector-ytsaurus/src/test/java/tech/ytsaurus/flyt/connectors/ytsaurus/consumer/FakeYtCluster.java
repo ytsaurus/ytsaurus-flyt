@@ -29,9 +29,11 @@ final class FakeYtCluster {
     private final List<YTreeNode> rows;
     private final long failAtRow;
     private final List<String> requestedPaths = new ArrayList<>();
+    private final CompletableFuture<Void> firstEmptyBatchRead = new CompletableFuture<>();
 
     private int openFailuresLeft;
     private int readFailuresLeft;
+    private int emptyBatchRowIndex;
     private int emptyBatchesLeft;
 
     private FakeYtCluster(int rowCount, long failAtRow, int openFailures, int readFailures) {
@@ -58,13 +60,18 @@ final class FakeYtCluster {
     }
 
     /**
-     * Returns {@code emptyBatches} empty batches before any data, without reaching EOF — the race
-     * where readyEvent() fires because the request completed but the stash has nothing yet.
+     * Returns {@code emptyBatches} alternating empty lists and nulls at {@code rowIndex}, without
+     * reaching EOF, even though readyEvent() is already completed.
      */
-    static FakeYtCluster returningEmptyBatches(int rowCount, int emptyBatches) {
+    static FakeYtCluster returningEmptyBatches(int rowCount, int rowIndex, int emptyBatches) {
         FakeYtCluster cluster = new FakeYtCluster(rowCount, 0, 0, 0);
+        cluster.emptyBatchRowIndex = rowIndex;
         cluster.emptyBatchesLeft = emptyBatches;
         return cluster;
+    }
+
+    CompletableFuture<Void> firstEmptyBatchRead() {
+        return firstEmptyBatchRead;
     }
 
     List<Integer> expectedIds() {
@@ -121,9 +128,10 @@ final class FakeYtCluster {
             int index = next.get();
             failIfArmed(index);
             synchronized (this) {
-                if (emptyBatchesLeft > 0) {
+                if (index == emptyBatchRowIndex && emptyBatchesLeft > 0) {
                     emptyBatchesLeft--;
-                    return List.of();
+                    firstEmptyBatchRead.complete(null);
+                    return emptyBatchesLeft % 2 == 0 ? null : List.of();
                 }
             }
             if (index >= rows.size()) {
