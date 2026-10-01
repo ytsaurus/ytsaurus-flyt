@@ -35,7 +35,6 @@ class YtRowDataInputFormatRetryTest {
     private static final String TABLE = "table";
     private static final String FULL_PATH = BASE_PATH + "/" + TABLE;
 
-    /** No backoff, so the tests do not sleep; the retry count is what matters here. */
     private static final SerializableSupplier<RetryStrategy> IMMEDIATE_RETRIES =
             () -> new FixedRetryStrategy(5, Duration.ZERO);
 
