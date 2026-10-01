@@ -149,7 +149,7 @@ public abstract class AbstractYtRowDataInputFormat
      *
      * <p>A read that fails is never retried, because row index selectors are not supported for sorted dynamic tables,
      * while re-reading everything before failed row looks like an overkill. Empty batches are polled until a row or EOF
-     * is available, without consuming the retry budget for failures.
+     * is available.
      */
     @Nullable
     private YTreeNode pollRow() throws Exception {
