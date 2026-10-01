@@ -214,6 +214,22 @@ public class YtDynamicTableWriterPoolClientTest {
                 client.transactions().getCommittedRows());
     }
 
+    /**
+     * Writers share the pool's client and never close it; the pool closes it exactly once.
+     */
+    @SneakyThrows
+    @Test
+    void testClientClosedOnceByPool() {
+        var client = Mockito.spy(makeTestClient());
+        try (var pool = makePool(CountingTestYtClientPool.ofSingle(client))) {
+            partitionedData(10_000, 20).forEach(pair -> pool.getOrAcquire(pair.getKey()).write(pair.getValue()));
+            Assertions.assertEquals(20, pool.getWriters().size());
+            Mockito.verify(client, Mockito.never()).close();
+        }
+        Mockito.verify(client, Mockito.times(1)).close();
+        Assertions.assertEquals(10_000, client.transactions().getCommittedRows());
+    }
+
     @SneakyThrows
     @Disabled("slow, manual only")
     @Test
@@ -332,7 +348,7 @@ public class YtDynamicTableWriterPoolClientTest {
         RowDataToYtListConverters ytConverter = new RowDataToYtListConverters(TimestampFormat.ISO_8601);
         return new YtDynamicTableWriterPool(
                 settings.getCustomCache(),
-                settings.getClientPool()::produce,
+                settings.getClientPool().produce(),
                 ytConverter.createConverter(settings.getLogicalType(),
                         YTreeTextSerializer.deserialize(settings.getSchema())),
                 ComplexYtPath.builder().basePath("//home/ytsaurus/flink").tableName("tests").build(),

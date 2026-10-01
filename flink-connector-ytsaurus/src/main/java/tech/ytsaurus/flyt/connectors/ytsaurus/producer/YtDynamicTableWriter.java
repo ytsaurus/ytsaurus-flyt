@@ -116,6 +116,7 @@ public class YtDynamicTableWriter implements Serializable {
 
     private final transient WriterClassifier writerClassifier;
 
+    // Shared with the other writers of the pool; the pool owns and closes it.
     private final transient YTsaurusClient client;
 
     private transient TableSchema schemaToCreate;
@@ -337,16 +338,6 @@ public class YtDynamicTableWriter implements Serializable {
     private List<Exception> closeResources() {
         log.info("Close resources for: {}", path.getFullPath());
         List<Exception> errors = new ArrayList<>();
-
-        try {
-            if (client != null) {
-                client.close();
-                log.info("Client closed successfully: {}", path.getFullPath());
-            }
-        } catch (Exception e) {
-            log.error("Error closing client {} ", path.getFullPath());
-            errors.add(e);
-        }
 
         try {
             releaseLock();

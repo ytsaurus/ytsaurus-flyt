@@ -52,13 +52,13 @@ public class YtRowDataSinkFunction extends RichSinkFunction<RowData> implements 
     private int partitionKeyColumnIndex;
     private OAuthCredentialsConfig credentialsConfig;
     private TrackableField trackableField;
-    private YtDynamicTableWriterPool pool;
+    private transient YtDynamicTableWriterPool pool;
     private final boolean eagerInitialization;
-    private YtTableAttributes tableAttributes;
-    private SerializableSupplier<RetryStrategy> retryStrategy;
+    private final YtTableAttributes tableAttributes;
+    private final SerializableSupplier<RetryStrategy> retryStrategy;
 
-    private ReshardingConfig reshardingConfig;
-    private YtWriterOptions ytWriterOptions;
+    private final ReshardingConfig reshardingConfig;
+    private final YtWriterOptions ytWriterOptions;
 
     @Nullable
     private DataMetricsConfig dataMetricsConfig;
@@ -153,7 +153,7 @@ public class YtRowDataSinkFunction extends RichSinkFunction<RowData> implements 
 
         this.pool = new YtDynamicTableWriterPool(
                 null,  // cache - will be created by constructor
-                this::makeYtClient,
+                makeYtClient(),
                 ytConverters,
                 path,
                 ysonSchemaString,

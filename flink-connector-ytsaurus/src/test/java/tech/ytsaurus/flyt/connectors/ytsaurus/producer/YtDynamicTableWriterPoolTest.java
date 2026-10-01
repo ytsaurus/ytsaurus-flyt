@@ -95,7 +95,7 @@ public class YtDynamicTableWriterPoolTest {
     private YtDynamicTableWriterPool makePool(ComplexYtPath path, String schema, LogicalType logicalType) {
         RowDataToYtListConverters ytConverter = new RowDataToYtListConverters(TimestampFormat.ISO_8601);
         return new YtDynamicTableWriterPool(
-                () -> mockedClient,
+                mockedClient,
                 ytConverter.createConverter(logicalType, YTreeTextSerializer.deserialize(schema)),
                 path,
                 schema,
