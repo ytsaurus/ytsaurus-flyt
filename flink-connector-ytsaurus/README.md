@@ -81,23 +81,6 @@ cd ytsaurus-flyt
 ls flink-connector-ytsaurus/build/libs
 ```
 
-### Testing
-
-Run the unit tests with `./gradlew :flink-connector-ytsaurus:test`.
-The dynamic table integration test requires JDK 11 and a running local YTsaurus
-cluster with authentication disabled and a reachable RPC proxy:
-
-```bash
-YT_TEST_PROXY=127.0.0.1:18000 \
-  ./gradlew :flink-connector-ytsaurus:dynamicTableIntegrationTest --console=plain
-```
-
-It writes nine rows through Flink SQL to a sorted dynamic table and reads them back
-through the YTsaurus API, checking multiple modification batches and the final
-partial batch. The test creates a unique path under `//tmp` and removes it afterwards.
-It uses the local credentials `root` / `local-test` and accepts only a local proxy.
-The ordinary `test` task excludes this integration test.
-
 ## Quick Start Guide
 
 ### Step 1 - Installing YTsaurus

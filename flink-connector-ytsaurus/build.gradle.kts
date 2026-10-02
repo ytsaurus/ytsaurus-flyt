@@ -43,9 +43,6 @@ dependencies {
     testImplementation("org.apache.flink:flink-format-common:1.20.1")
     testImplementation("org.apache.flink:flink-table-common:1.20.1")
     testImplementation("org.apache.flink:flink-table-runtime:1.20.1")
-    testImplementation("org.apache.flink:flink-table-api-java-bridge:1.20.1")
-    testRuntimeOnly("org.apache.flink:flink-clients:1.20.1")
-    testRuntimeOnly("org.apache.flink:flink-table-planner-loader:1.20.1")
     testImplementation("org.apache.flink:flink-shaded-guava:31.1-jre-17.0")
 
     testImplementation("org.slf4j:slf4j-log4j12:2.0.17")
@@ -74,30 +71,6 @@ gversion {
 
 tasks.compileJava {
     dependsOn(tasks.createVersionFile)
-}
-
-tasks.test {
-    useJUnitPlatform {
-        excludeTags("integration")
-    }
-}
-
-tasks.register<Test>("dynamicTableIntegrationTest") {
-    description = "Runs a Flink SQL dynamic table sink test against an explicitly configured local YTsaurus."
-    group = "verification"
-    testClassesDirs = sourceSets.test.get().output.classesDirs
-    classpath = sourceSets.test.get().runtimeClasspath
-    useJUnitPlatform {
-        includeTags("integration")
-    }
-    systemProperty("java.net.preferIPv4Stack", "true")
-    shouldRunAfter(tasks.test)
-    outputs.upToDateWhen { false }
-    doFirst {
-        require(!System.getenv("YT_TEST_PROXY").isNullOrBlank()) {
-            "Set YT_TEST_PROXY to a local HTTP proxy, for example localhost:18000."
-        }
-    }
 }
 
 tasks.shadowJar {
