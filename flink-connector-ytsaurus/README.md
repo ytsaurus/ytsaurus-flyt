@@ -51,7 +51,7 @@ Maven
 <dependency>
     <groupId>tech.ytsaurus.flyt.connectors.ytsaurus</groupId>
     <artifactId>flink-connector-ytsaurus</artifactId>
-    <version>1.10.0</version>
+    <version>1.13.0</version>
     <classifier>all</classifier>
 </dependency>
 ```
@@ -59,7 +59,7 @@ Maven
 Gradle
 
 ```kotlin
-implementation("tech.ytsaurus.flyt.connectors.ytsaurus:flink-connector-ytsaurus:1.10.0:all")
+implementation("tech.ytsaurus.flyt.connectors.ytsaurus:flink-connector-ytsaurus:1.13.0:all")
 ```
 
 ## Building from Source

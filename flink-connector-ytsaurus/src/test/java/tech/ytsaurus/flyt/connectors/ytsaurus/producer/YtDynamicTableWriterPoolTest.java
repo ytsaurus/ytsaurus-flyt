@@ -185,6 +185,9 @@ public class YtDynamicTableWriterPoolTest {
             }
             assertEquals(1, rows.get().size());
         }
+        assertEquals(ytWriterOptions.getRowsInModificationLimit() + 1,
+                rows.get().stream().mapToLong(request -> request.getRowModificationTypes().size()).sum());
+        Mockito.verify(transaction).commit();
     }
 
     @Test
