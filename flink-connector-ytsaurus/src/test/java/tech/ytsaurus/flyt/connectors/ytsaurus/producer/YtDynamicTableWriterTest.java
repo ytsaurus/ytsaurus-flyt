@@ -1,8 +1,14 @@
 package tech.ytsaurus.flyt.connectors.ytsaurus.producer;
 
+import java.time.Duration;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 
 import org.apache.flink.api.common.functions.RuntimeContext;
+import org.apache.flink.metrics.groups.UnregisteredMetricsGroup;
+import org.apache.flink.table.data.GenericRowData;
+import org.apache.flink.table.data.RowData;
+import org.apache.flink.util.concurrent.FixedRetryStrategy;
 import org.apache.flink.util.concurrent.RetryStrategy;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -11,18 +17,25 @@ import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mock;
 import org.mockito.Mockito;
 import org.mockito.MockitoAnnotations;
+import tech.ytsaurus.client.ApiServiceTransaction;
 import tech.ytsaurus.client.YTsaurusClient;
+import tech.ytsaurus.client.request.ModifyRowsRequest;
+import tech.ytsaurus.client.request.StartTransaction;
+import tech.ytsaurus.flyt.connectors.datametrics.DataMetricsWriterDelegate;
 import tech.ytsaurus.flyt.connectors.datametrics.NoopDataMetricsWriterDelegate;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.ComplexYtPath;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.YtTableAttributes;
 import tech.ytsaurus.flyt.connectors.ytsaurus.producer.converters.RowDataToYtListConverters;
 import tech.ytsaurus.flyt.locks.noop.NoopLocksProvider;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.atLeast;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -190,5 +203,66 @@ class YtDynamicTableWriterTest {
         ytDynamicTableWriter.waitUntilMounted(4100);
         // Assert
         verify(ytDynamicTableWriter, atLeast(4)).getTableState();
+    }
+
+    @Test
+    void delegatesBuffersAndPreservesCheckpointCloseFlushAndCommitMetrics() {
+        when(path.getFullPath()).thenReturn("//tmp/table");
+        when(path.getClusterName()).thenReturn("test");
+        when(runtimeContext.getMetricGroup()).thenReturn(UnregisteredMetricsGroup.createOperatorMetricGroup());
+        ApiServiceTransaction transaction = mock(ApiServiceTransaction.class);
+        when(ytClient.startTransaction(any(StartTransaction.class)))
+                .thenReturn(CompletableFuture.completedFuture(transaction));
+        when(transaction.modifyRows(any(ModifyRowsRequest.Builder.class)))
+                .thenReturn(CompletableFuture.completedFuture(null));
+        when(transaction.commit()).thenReturn(CompletableFuture.completedFuture(null));
+        DataMetricsWriterDelegate dataMetrics = mock(DataMetricsWriterDelegate.class);
+        MetricsSupplier recordedMetrics = new MetricsSupplier("test");
+        YtWriterOptions options = YtWriterOptions.builder()
+                .rowsInModificationLimit(2)
+                .rowsInTransactionLimit(5)
+                .commitTransactionPeriod(Duration.ofHours(1))
+                .flushModificationPeriod(Duration.ofHours(1))
+                .transactionTimeout(Duration.ofSeconds(3))
+                .build();
+        YtDynamicTableWriter writer = Mockito.spy(new YtDynamicTableWriter(
+                (reuse, value) -> Map.of("id", ((RowData) value).getLong(0)),
+                new WriterYtInfo(path, ytClient, "[{name=id;type=int64;sort_order=ascending;}]"),
+                null,
+                WriterClassifier.plain("table"),
+                new FixedRetryStrategy(0, Duration.ZERO),
+                new FixedRetryStrategy(0, Duration.ZERO),
+                runtimeContext,
+                recordedMetrics,
+                YtTableAttributes.empty(),
+                null,
+                options,
+                new NoopLocksProvider(),
+                dataMetrics));
+        doNothing().when(writer).createAndMountTableIfNeeded();
+        writer.open();
+        try {
+            writer.write(GenericRowData.of(1L));
+            writer.write(GenericRowData.of(2L));
+            verify(transaction, never()).modifyRows(any(ModifyRowsRequest.Builder.class));
+            verify(transaction, never()).commit();
+            assertThat(writer.isBusy()).isTrue();
+
+            writer.snapshotState(1);
+            verify(dataMetrics).onCommit();
+            assertThat(recordedMetrics.getMetric("sumCommittedRows").get()).isEqualTo(2);
+            assertThat(writer.isBusy()).isFalse();
+            writer.write(GenericRowData.of(3L));
+        } finally {
+            writer.close();
+        }
+
+        verify(dataMetrics, times(3)).onRecord(any(RowData.class));
+        verify(dataMetrics, times(2)).onCommit();
+        verify(transaction, times(2)).commit();
+        verify(ytClient).close();
+        assertThat(recordedMetrics.getMetric("sumCommittedRows").get()).isEqualTo(3);
+        assertThat(recordedMetrics.getMetric("sumFailedRows").get()).isZero();
+        assertThat(recordedMetrics.getMetric("lastCommitTimestamp").get()).isEqualTo(-1);
     }
 }

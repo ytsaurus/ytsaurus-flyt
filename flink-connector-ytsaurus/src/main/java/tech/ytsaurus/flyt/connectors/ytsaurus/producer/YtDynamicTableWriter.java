@@ -10,16 +10,8 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.concurrent.locks.Lock;
-import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Supplier;
 
 import javax.annotation.Nullable;
@@ -32,15 +24,10 @@ import org.apache.flink.metrics.MetricGroup;
 import org.apache.flink.runtime.metrics.groups.AbstractMetricGroup;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.util.concurrent.RetryStrategy;
-import tech.ytsaurus.client.ApiServiceTransaction;
 import tech.ytsaurus.client.YTsaurusClient;
 import tech.ytsaurus.client.request.CreateNode;
-import tech.ytsaurus.client.request.ModifyRowsRequest;
 import tech.ytsaurus.client.request.MountTable;
 import tech.ytsaurus.client.request.ReshardTable;
-import tech.ytsaurus.client.request.StartTransaction;
-import tech.ytsaurus.client.request.TransactionType;
-import tech.ytsaurus.core.GUID;
 import tech.ytsaurus.core.common.YTsaurusError;
 import tech.ytsaurus.core.cypress.CypressNodeType;
 import tech.ytsaurus.core.cypress.YPath;
@@ -54,7 +41,6 @@ import tech.ytsaurus.flyt.connectors.ytsaurus.common.metrics.GaugeLong;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.partition.PartitionConfig;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.providers.reshard.ReshardProvider;
 import tech.ytsaurus.flyt.connectors.ytsaurus.producer.converters.RowDataToYtListConverters;
-import tech.ytsaurus.flyt.connectors.ytsaurus.utils.FutureUtils;
 import tech.ytsaurus.flyt.connectors.ytsaurus.utils.PartitionScaleUtils;
 import tech.ytsaurus.flyt.locks.api.LockMode;
 import tech.ytsaurus.flyt.locks.api.LocksProvider;
@@ -120,51 +106,17 @@ public class YtDynamicTableWriter implements Serializable {
 
     private transient TableSchema schemaToCreate;
 
-    private transient TableSchema schemaToWrite;
-
-    private transient List<CompletableFuture<Void>> transactionDataBuffer;
-
-    private transient List<Map<String, ? extends Serializable>> uncommittedRows;
-
-    private transient List<Map<String, ? extends Serializable>> unflushedRows;
-
-    private transient ApiServiceTransaction currentTransaction;
-
-    private transient ModifyRowsRequest.Builder modificationBuffer;
-
-    private transient Lock commitTransactionLock;
-
-    private transient Lock flushModificationLock;
-
-    private transient ScheduledExecutorService transactionCommitter;
-
-    private transient ScheduledExecutorService modificationFlusher;
-
-    private transient AtomicLong lastTransactionCommit;
-
-    private transient AtomicLong lastModificationFlush;
-
-    private transient AtomicInteger rowsInTransaction;
-
-    private transient AtomicInteger rowsInBuffer;
-
-    private transient AtomicReference<Throwable> error;
+    private transient YtBufferedTransactionWriter bufferedWriter;
 
     private transient RuntimeContext context;
 
     private transient MetricGroup ytMetricGroup;
-
-    private transient AtomicLong lastCommitTimestamp;
 
     private transient AtomicLong lastNonCommittedTrackableField;
 
     private transient AtomicLong maxCommittedTrackableField;
 
     private transient AtomicLong lastCommittedTrackableField;
-
-    private transient AtomicLong sumCommittedRows;
-
-    private transient AtomicLong sumFailedRows;
 
     private final transient MetricsSupplier metricsSupplier;
 
@@ -210,7 +162,6 @@ public class YtDynamicTableWriter implements Serializable {
             log.info("Open writer for table: {}", path.getFullPath());
 
             schemaToCreate = TableSchema.fromYTree(YTreeTextSerializer.deserialize(ysonSchemaString));
-            schemaToWrite = schemaToCreate.toWrite();
 
             createAndMountTableIfNeeded();
 
@@ -218,56 +169,31 @@ public class YtDynamicTableWriter implements Serializable {
 
             log.info("Lock for write acquired. {}", path.getFullPath());
 
-            transactionDataBuffer = new ArrayList<>();
-            uncommittedRows =
-                    new ArrayList<>(ytWriterOptions.getRowsInTransactionLimit() +
-                            ytWriterOptions.getRowsInModificationLimit());
-            unflushedRows = new ArrayList<>(ytWriterOptions.getRowsInModificationLimit());
-            error = new AtomicReference<>();
-            lastTransactionCommit = new AtomicLong(System.currentTimeMillis());
-            lastModificationFlush = new AtomicLong(System.currentTimeMillis());
-            rowsInTransaction = new AtomicInteger(0);
-            rowsInBuffer = new AtomicInteger(0);
-            lastCommitTimestamp = new AtomicLong(0);
             lastNonCommittedTrackableField = new AtomicLong(0);
             maxCommittedTrackableField = new AtomicLong(0);
             lastCommittedTrackableField = new AtomicLong(0);
-            sumCommittedRows = new AtomicLong(0);
-            sumFailedRows = new AtomicLong(0);
-            resetModificationBuffer();
-            commitTransactionLock = new ReentrantLock();
-            flushModificationLock = new ReentrantLock();
-            transactionCommitter = Executors.newSingleThreadScheduledExecutor();
-            modificationFlusher = Executors.newSingleThreadScheduledExecutor();
-
+            bufferedWriter = YtBufferedTransactionWriter.builder()
+                    .client(client)
+                    .path(path.getFullPath())
+                    .schema(schemaToCreate.toWrite())
+                    .rowsInModificationLimit(ytWriterOptions.getRowsInModificationLimit())
+                    .rowsInTransactionLimit(ytWriterOptions.getRowsInTransactionLimit())
+                    .commitTransactionPeriod(ytWriterOptions.getCommitTransactionPeriod())
+                    .flushModificationPeriod(ytWriterOptions.getFlushModificationPeriod())
+                    .transactionTimeout(ytWriterOptions.getTransactionTimeout())
+                    .atomicity(ytWriterOptions.getAtomicity())
+                    .retryStrategy(retryStrategy)
+                    .onCommitSuccess(this::onCommitSuccess)
+                    .onTransactionCommitted(() -> {
+                        lastCommittedTrackableField = lastNonCommittedTrackableField;
+                        maxCommittedTrackableField.set(Math.max(
+                                maxCommittedTrackableField.get(),
+                                lastNonCommittedTrackableField.get()));
+                    })
+                    .build();
             addMetrics();
 
-            transactionCommitter.scheduleAtFixedRate(() -> {
-                if (lastTransactionCommit.get() + ytWriterOptions.getCommitTransactionPeriod().toMillis()
-                        < System.currentTimeMillis()) {
-                    commitTransactionLock.lock();
-                    try {
-                        commitTransaction();
-                    } catch (Exception e) {
-                        error.set(e);
-                    } finally {
-                        commitTransactionLock.unlock();
-                    }
-                }
-            }, 0L, ytWriterOptions.getCommitTransactionPeriod().toMillis(), TimeUnit.MILLISECONDS);
-            modificationFlusher.scheduleAtFixedRate(() -> {
-                if (lastModificationFlush.get() + ytWriterOptions.getFlushModificationPeriod().toMillis()
-                        < System.currentTimeMillis()) {
-                    flushModificationLock.lock();
-                    try {
-                        flushModification();
-                    } catch (Exception e) {
-                        error.set(e);
-                    } finally {
-                        flushModificationLock.unlock();
-                    }
-                }
-            }, 0L, ytWriterOptions.getFlushModificationPeriod().toMillis(), TimeUnit.MILLISECONDS);
+            bufferedWriter.open();
             log.info("YT writer options to {} : {}", path.getFullPath(), ytWriterOptions);
             log.info("YT connection to {} started with schema: {}", path.getFullPath(), schemaToCreate);
 
@@ -285,53 +211,7 @@ public class YtDynamicTableWriter implements Serializable {
     }
 
     private List<Exception> closeAsyncTasks() {
-        log.info("Close async tasks: {}", path.getFullPath());
-        List<Exception> errors = new ArrayList<>();
-
-        if (transactionCommitter != null) {
-            try {
-                transactionCommitter.shutdown();
-                boolean terminated = transactionCommitter
-                        .awaitTermination(ytWriterOptions.getTransactionTimeout().toMillis(), TimeUnit.MILLISECONDS);
-                if (!terminated) {
-                    log.warn("Failed to terminate committer for writer {}", path.getFullPath());
-                    transactionCommitter.shutdownNow();
-                } else {
-                    log.info("Transaction commiter closed successfully for writer {}", path.getFullPath());
-                }
-            } catch (InterruptedException e) {
-                log.error("Writer {} closure interrupted", path.getFullPath(), e);
-                transactionCommitter.shutdownNow();
-                Thread.currentThread().interrupt();
-                errors.add(e);
-            } catch (Exception e) {
-                log.error("Error closing transactionCommitter tasks: {}.", path.getFullPath(), e);
-                errors.add(e);
-            }
-        }
-
-        if (modificationFlusher != null) {
-            try {
-                modificationFlusher.shutdown();
-                boolean terminated = modificationFlusher
-                        .awaitTermination(ytWriterOptions.getTransactionTimeout().toMillis(), TimeUnit.MILLISECONDS);
-                if (!terminated) {
-                    log.warn("Failed to terminate flusher for writer {}", path.getFullPath());
-                    modificationFlusher.shutdownNow();
-                } else {
-                    log.info("Modification flusher closed successfully for writer {}", path.getFullPath());
-                }
-            } catch (InterruptedException e) {
-                log.error("Writer {} closure interrupted", path.getFullPath(), e);
-                modificationFlusher.shutdownNow();
-                Thread.currentThread().interrupt();
-                errors.add(e);
-            } catch (Exception e) {
-                log.error("Error closing modificationFlusher tasks: {}.", path.getFullPath(), e);
-                errors.add(e);
-            }
-        }
-        return errors;
+        return bufferedWriter == null ? Collections.emptyList() : bufferedWriter.closeAsyncTasks();
     }
 
     private List<Exception> closeResources() {
@@ -377,9 +257,9 @@ public class YtDynamicTableWriter implements Serializable {
         }
 
         log.info("Metric group created: {}, {}", path.getFullPath(), ytMetricGroup);
-        introduceGauge(SUM_COMMITTED_ROWS_NAME, () -> sumCommittedRows.get());
-        introduceGauge(SUM_FAILED_ROWS_NAME, () -> sumFailedRows.get());
-        introduceGauge(LAST_COMMIT_TIMESTAMP_NAME, () -> lastCommitTimestamp.get());
+        introduceGauge(SUM_COMMITTED_ROWS_NAME, () -> bufferedWriter.getCommittedRowCount());
+        introduceGauge(SUM_FAILED_ROWS_NAME, () -> bufferedWriter.getFailedRowCount());
+        introduceGauge(LAST_COMMIT_TIMESTAMP_NAME, () -> bufferedWriter.getLastCommitTimestamp());
 
         if (trackableField != null) {
             log.info("Field to track: {}", trackableField.getName());
@@ -399,34 +279,7 @@ public class YtDynamicTableWriter implements Serializable {
 
     public void write(RowData record) {
         dataMetrics.onRecord(record);
-
-        if (modificationSize() == ytWriterOptions.getRowsInModificationLimit()) {
-            flushModificationLock.lock();
-            try {
-                flushModification();
-            } finally {
-                flushModificationLock.unlock();
-            }
-        }
-        if (rowsInTransaction.get() >= ytWriterOptions.getRowsInTransactionLimit()) {
-            commitTransactionLock.lock();
-            try {
-                if (rowsInTransaction.get() >= ytWriterOptions.getRowsInTransactionLimit()) {
-                    commitTransaction();
-                }
-            } finally {
-                commitTransactionLock.unlock();
-            }
-        }
-        flushModificationLock.lock();
-        try {
-            final Map<String, ? extends Serializable> row = createRow(record);
-            modificationBuffer.addInsert(row);
-            unflushedRows.add(row);
-            rowsInBuffer.incrementAndGet();
-        } finally {
-            flushModificationLock.unlock();
-        }
+        bufferedWriter.write(() -> createRow(record));
     }
 
     public void finish() {
@@ -467,7 +320,7 @@ public class YtDynamicTableWriter implements Serializable {
     }
 
     private void clearMetrics() {
-        lastCommitTimestamp.set(VALUE_METRIC_CLOSED);
+        bufferedWriter.clearMetrics();
         lastCommittedTrackableField.set(VALUE_METRIC_CLOSED);
         maxCommittedTrackableField.set(VALUE_METRIC_CLOSED);
         log.info("Cleared metrics for path: {}", path.getFullPath());
@@ -480,16 +333,7 @@ public class YtDynamicTableWriter implements Serializable {
     }
 
     private void flushData() {
-        checkError();
-        flushModificationLock.lock();
-        commitTransactionLock.lock();
-        try {
-            flushModification();
-            commitTransaction();
-        } finally {
-            commitTransactionLock.unlock();
-            flushModificationLock.unlock();
-        }
+        bufferedWriter.flush();
     }
 
     public String getPath() {
@@ -735,109 +579,12 @@ public class YtDynamicTableWriter implements Serializable {
                 YTree.stringNode(PartitionScaleUtils.formatYt(expireAt))).join();
     }
 
-    private int modificationSize() {
-        return rowsInBuffer.get();
-    }
-
-    private ApiServiceTransaction createTransaction() {
-        return client.startTransaction(
-                StartTransaction
-                        .builder()
-                        .setType(TransactionType.Tablet)
-                        .setSticky(true)
-                        .setAtomicity(ytWriterOptions.getAtomicity())
-                        .build()
-        ).join();
-    }
-
-    @SneakyThrows
-    private void commitTransaction() {
-        checkError();
-        if (currentTransaction != null && rowsInTransaction.get() != 0) {
-            FutureUtils.allOf(transactionDataBuffer).get(ytWriterOptions.getTransactionTimeout().getSeconds(),
-                    TimeUnit.SECONDS);
-            transactionDataBuffer = new ArrayList<>();
-
-            commitWithRetry();
-
-            final GUID currentTransactionId = currentTransaction.getId();
-            currentTransaction = null;
-            lastTransactionCommit.set(System.currentTimeMillis());
-            uncommittedRows.clear();
-            int committedRows = rowsInTransaction.getAndSet(0);
-            sumCommittedRows.getAndAdd(committedRows);
-            lastCommittedTrackableField = lastNonCommittedTrackableField;
-            maxCommittedTrackableField.set(Math.max(
-                    maxCommittedTrackableField.get(),
-                    lastNonCommittedTrackableField.get()));
-            log.info("Commit successful transaction {} with {} rows for table {}",
-                    currentTransactionId, committedRows, getPath());
-        } else {
-            log.info("No data to commit in writer for {}", getPath());
-        }
-        long current = System.currentTimeMillis();
-        if (lastCommitTimestamp.get() == VALUE_METRIC_CLOSED) {
-            log.error("Preventing reset of last commit timestamp: was=-1, now={} (we're closed)", current);
-            return;
-        }
-        lastCommitTimestamp.set(current);
-    }
-
-    private void commitWithRetry() throws InterruptedException {
-        RetryStrategy backoffRetryStrategy = retryStrategy;
-        while (backoffRetryStrategy.getNumRemainingRetries() >= 0) {
-            try {
-                currentTransaction.commit().join();
-                onCommitSuccess();
-                break;
-            } catch (Exception e) {
-                log.error("Unable to commit transaction {} for table {}", currentTransaction.getId(), getPath(), e);
-                sumFailedRows.getAndAdd(rowsInTransaction.get());
-                if (backoffRetryStrategy.getNumRemainingRetries() == 0) {
-                    log.error("Unable to retry commit transaction {} for table {}",
-                            currentTransaction.getId(), getPath(), e);
-                    throw e;
-                }
-                backoffRetryStrategy = backoffRetryStrategy.getNextRetryStrategy();
-                Thread.sleep(backoffRetryStrategy.getRetryDelay().toMillis());
-
-                currentTransaction = createTransaction();
-                log.info("Start retry transaction {} for table {}", currentTransaction.getId(), getPath());
-
-                ModifyRowsRequest.Builder modifyRowRequestBuilder = createModifyRowRequestBuilder();
-                uncommittedRows.forEach(modifyRowRequestBuilder::addInsert);
-                currentTransaction.modifyRows(modifyRowRequestBuilder).join();
-            }
-        }
-    }
-
     /**
      * Hook called after successful transaction commit.
      * Can be overridden by subclasses to add custom logic.
      */
     protected void onCommitSuccess() {
         dataMetrics.onCommit();
-    }
-
-    private void flushModification() {
-        commitTransactionLock.lock();
-        try {
-            if (rowsInBuffer.get() != 0) {
-                if (currentTransaction == null) {
-                    currentTransaction = createTransaction();
-                    log.info("Start transaction {} for table {}", currentTransaction.getId(), getPath());
-                }
-                CompletableFuture<Void> future = currentTransaction.modifyRows(modificationBuffer);
-                transactionDataBuffer.add(future);
-                lastModificationFlush.set(System.currentTimeMillis());
-                rowsInTransaction.updateAndGet(v -> v + modificationSize());
-                uncommittedRows.addAll(unflushedRows);
-                unflushedRows.clear();
-                resetModificationBuffer();
-            }
-        } finally {
-            commitTransactionLock.unlock();
-        }
     }
 
     private Map<String, ? extends Serializable> createRow(RowData record) {
@@ -848,24 +595,6 @@ public class YtDynamicTableWriter implements Serializable {
         return (Map<String, ? extends Serializable>) ytConverter.convert(null, record);
     }
 
-    private void resetModificationBuffer() {
-        rowsInBuffer.set(0);
-        modificationBuffer = createModifyRowRequestBuilder();
-    }
-
-    private ModifyRowsRequest.Builder createModifyRowRequestBuilder() {
-        return ModifyRowsRequest.builder()
-                .setPath(path.getFullPath())
-                .setSchema(schemaToWrite);
-    }
-
-    private void checkError() {
-        Throwable e = this.error.get();
-        if (e != null) {
-            throw new RuntimeException("Error while writing to YT", e);
-        }
-    }
-
     private YTsaurusError unwrapYTSaurusError(CompletionException e) {
         if (!(e.getCause() instanceof YTsaurusError)) {
             throw e;
@@ -874,7 +603,7 @@ public class YtDynamicTableWriter implements Serializable {
     }
 
     public boolean isBusy() {
-        return rowsInBuffer.get() != 0 || rowsInTransaction.get() != 0;
+        return bufferedWriter.isBusy();
     }
 
     @Override
