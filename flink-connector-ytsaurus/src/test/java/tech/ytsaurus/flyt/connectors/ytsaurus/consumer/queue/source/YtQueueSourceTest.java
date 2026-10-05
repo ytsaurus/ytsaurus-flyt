@@ -115,6 +115,46 @@ class YtQueueSourceTest {
     }
 
     @Test
+    void consumerPathSurvivesFlinkSerialization() throws Exception {
+        YtQueueSource<String> source = sourceBuilder()
+                .consumerPath("//home/test/consumer")
+                .build();
+
+        YtQueueSource<String> restored = InstantiationUtil.clone(
+                source,
+                getClass().getClassLoader());
+
+        assertThat(restored).extracting("consumerPath")
+                .isEqualTo("//home/test/consumer");
+    }
+
+    @Test
+    void rejectsExplicitStartupOptionsWithConsumerPath() {
+        assertThatThrownBy(() -> sourceBuilder()
+                .consumerPath("//home/test/consumer")
+                .startupMode(YtQueueStartupMode.EARLIEST)
+                .build())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("must not be configured with consumerPath");
+
+        assertThatThrownBy(() -> sourceBuilder()
+                .consumerPath("//home/test/consumer")
+                .specificOffsets(List.of(10L))
+                .build())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("must not be configured with consumerPath");
+    }
+
+    @Test
+    void rejectsBlankConsumerPath() {
+        assertThatThrownBy(() -> sourceBuilder()
+                .consumerPath(" ")
+                .build())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("consumerPath must not be blank");
+    }
+
+    @Test
     void trimmedOffsetPolicySurvivesFlinkSerialization() throws Exception {
         YtQueueSource<String> source = sourceBuilder()
                 .trimmedOffsetPolicy(YtQueueTrimmedOffsetPolicy.SKIP)

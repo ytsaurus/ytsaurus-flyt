@@ -99,7 +99,7 @@ public final class YtQueueSourceReader<T>
         );
     }
 
-    private YtQueueSourceReader(
+    public YtQueueSourceReader(
             YtQueuePullerFactory pullerFactory,
             YtQueueRecordDeserializer<T> deserializer,
             YtQueueReaderOptions options,

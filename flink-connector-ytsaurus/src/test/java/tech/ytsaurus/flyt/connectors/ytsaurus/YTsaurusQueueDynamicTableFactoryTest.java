@@ -30,6 +30,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.config.YtQueueReadMode;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.config.YtQueueStartupMode;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.config.YtQueueTrimmedOffsetPolicy;
+import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.YtQueueSource;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.table.YtQueueColumnValueDeserializer;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.table.YtQueueDynamicTableSource;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.table.YtQueueRowDataDeserializer;
@@ -41,6 +42,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.CREDENTIALS_SOURCE;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.CONSUMER_PATH;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.PARTITION_DISCOVERY_INTERVAL;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.SPECIFIC_OFFSETS;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.CODEC_COLUMN;
@@ -86,6 +88,61 @@ class YTsaurusQueueDynamicTableFactoryTest {
 
         assertThat(source).extracting("startupMode")
                 .isEqualTo(YtQueueStartupMode.LATEST);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"ROW", "COLUMN"})
+    void passesConsumerPathToRuntimeAndCopiedSource(String readMode) {
+        Map<String, String> options = validSqlOptions();
+        options.put("consumer-path", "//home/test/consumer");
+        options.put("scan.read-mode", readMode);
+
+        DynamicTableSource source = createSource(options);
+
+        for (DynamicTableSource current : List.of(source, source.copy())) {
+            assertThat(current).extracting("consumerPath")
+                    .isEqualTo("//home/test/consumer");
+            assertThat(runtimeProvider(current).createSource())
+                    .isInstanceOf(YtQueueSource.class)
+                    .extracting("consumerPath")
+                    .isEqualTo("//home/test/consumer");
+        }
+    }
+
+    @Test
+    void rejectsStartupOptionsWithConsumerPath() {
+        Map<String, String> startupModeOptions = validSqlOptions();
+        startupModeOptions.put("consumer-path", "//home/test/consumer");
+        startupModeOptions.put("scan.startup.mode", "EARLIEST");
+
+        ValidationException startupModeFailure = assertThrows(
+                ValidationException.class,
+                () -> createSource(startupModeOptions));
+        assertThat(startupModeFailure.getCause())
+                .hasMessageContaining("must not be configured with 'consumer-path'");
+
+        Map<String, String> specificOffsetOptions = validSqlOptions();
+        specificOffsetOptions.put("consumer-path", "//home/test/consumer");
+        specificOffsetOptions.put("scan.startup.specific-offsets", "10;20");
+
+        ValidationException specificOffsetFailure = assertThrows(
+                ValidationException.class,
+                () -> createSource(specificOffsetOptions));
+        assertThat(specificOffsetFailure.getCause())
+                .hasMessageContaining("must not be configured with 'consumer-path'");
+    }
+
+    @Test
+    void rejectsBlankConsumerPath() {
+        Configuration options = new Configuration();
+        options.setString("proxy", "hahn");
+        options.setString("path", "//tmp/queue");
+        options.setString("credentials-source", "env");
+        options.set(CONSUMER_PATH, " ");
+
+        assertThrows(
+                ValidationException.class,
+                () -> YTsaurusQueueDynamicTableFactory.validateRequiredOptions(options));
     }
 
     @Test

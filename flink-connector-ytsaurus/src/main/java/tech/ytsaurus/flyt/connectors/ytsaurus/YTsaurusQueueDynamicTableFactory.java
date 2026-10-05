@@ -2,6 +2,7 @@ package tech.ytsaurus.flyt.connectors.ytsaurus;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import javax.annotation.Nullable;
@@ -34,6 +35,7 @@ import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.Y
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.ASYNC_BUFFER_CAPACITY;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.ASYNC_WORKER_COUNT;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.CODEC_COLUMN;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.CONSUMER_PATH;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.IGNORE_DECOMPRESSION_ERRORS;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.MAX_DATA_WEIGHT;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.MAX_ROW_COUNT;
@@ -61,6 +63,7 @@ public class YTsaurusQueueDynamicTableFactory implements DynamicTableSourceFacto
         helper.validate();
         validateChangelogMode(decodingFormat);
         validateRequiredOptions(options);
+        validateConsumerOptions(options, context.getCatalogTable().getOptions());
         validateScanOptions(options);
         validateCredentialsOptions(options);
         CredentialsProvider credentialsProvider = getAndValidateCredentialsProvider(options);
@@ -70,6 +73,7 @@ public class YTsaurusQueueDynamicTableFactory implements DynamicTableSourceFacto
         return YtQueueDynamicTableSource.builder()
                 .proxy(options.get(PROXY))
                 .queuePath(options.get(PATH))
+                .consumerPath(options.getOptional(CONSUMER_PATH).orElse(null))
                 .credentialsProvider(credentialsProvider)
                 .decodingFormat(decodingFormat)
                 .physicalRowDataType(context.getPhysicalRowDataType())
@@ -99,6 +103,7 @@ public class YTsaurusQueueDynamicTableFactory implements DynamicTableSourceFacto
         return Set.of(
                 YT_USERNAME_OPTION,
                 YT_TOKEN_OPTION,
+                CONSUMER_PATH,
                 STARTUP_MODE,
                 SPECIFIC_OFFSETS,
                 TRIMMED_OFFSET_POLICY,
@@ -120,11 +125,27 @@ public class YTsaurusQueueDynamicTableFactory implements DynamicTableSourceFacto
         validateNonBlank(options.get(PATH), "path");
         options.getOptional(CREDENTIALS_SOURCE)
                 .ifPresent(credentialsSource -> validateNonBlank(credentialsSource, "credentials-source"));
+        options.getOptional(CONSUMER_PATH)
+                .ifPresent(consumerPath -> validateNonBlank(consumerPath, "consumer-path"));
         options.getOptional(FactoryUtil.SOURCE_PARALLELISM).ifPresent(parallelism -> {
             if (parallelism <= 0) {
                 throw new ValidationException("'scan.parallelism' must be greater than zero");
             }
         });
+    }
+
+    static void validateConsumerOptions(
+            ReadableConfig options,
+            Map<String, String> rawOptions) {
+        if (options.getOptional(CONSUMER_PATH).isEmpty()) {
+            return;
+        }
+        if (rawOptions.containsKey(STARTUP_MODE.key())
+                || rawOptions.containsKey(SPECIFIC_OFFSETS.key())) {
+            throw new ValidationException(
+                    "'scan.startup.mode' and 'scan.startup.specific-offsets' " +
+                            "must not be configured with 'consumer-path'");
+        }
     }
 
     static void validateScanOptions(ReadableConfig options) {
