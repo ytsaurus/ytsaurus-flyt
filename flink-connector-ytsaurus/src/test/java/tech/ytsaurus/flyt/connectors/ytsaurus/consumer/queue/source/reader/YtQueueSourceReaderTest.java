@@ -78,6 +78,10 @@ class YtQueueSourceReaderTest {
                     "record-4",
                     "record-5",
                     "record-6");
+            reader.notifyCheckpointComplete(6);
+            reader.notifyCheckpointAborted(5);
+            assertThat(committer.completedCheckpoints).containsExactly(6L);
+            assertThat(committer.abortedCheckpoints).containsExactly(5L);
         } finally {
             reader.close();
         }
@@ -193,6 +197,8 @@ class YtQueueSourceReaderTest {
 
     private static final class RecordingCommitter implements YtQueueOffsetCommitter {
         private List<YtQueueSplit> lastSnapshot = List.of();
+        private final List<Long> completedCheckpoints = new CopyOnWriteArrayList<>();
+        private final List<Long> abortedCheckpoints = new CopyOnWriteArrayList<>();
         private boolean closed;
 
         @Override
@@ -202,10 +208,12 @@ class YtQueueSourceReaderTest {
 
         @Override
         public void notifyCheckpointComplete(long checkpointId) {
+            completedCheckpoints.add(checkpointId);
         }
 
         @Override
         public void notifyCheckpointAborted(long checkpointId) {
+            abortedCheckpoints.add(checkpointId);
         }
 
         @Override

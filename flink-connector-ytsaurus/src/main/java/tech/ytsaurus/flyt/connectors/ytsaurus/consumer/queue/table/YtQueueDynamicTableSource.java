@@ -32,6 +32,9 @@ public class YtQueueDynamicTableSource implements ScanTableSource {
 
     private final String queuePath;
 
+    @Nullable
+    private final String consumerPath;
+
     private final CredentialsProvider credentialsProvider;
 
     private final DecodingFormat<DeserializationSchema<RowData>> decodingFormat;
@@ -68,18 +71,22 @@ public class YtQueueDynamicTableSource implements ScanTableSource {
                 decodingFormat.createRuntimeDecoder(context, physicalRowDataType);
         TypeInformation<RowData> producedType = context.createTypeInformation(physicalRowDataType);
 
-        YtQueueSource<RowData> source = YtQueueSource.<RowData>builder()
+        YtQueueSource.Builder<RowData> sourceBuilder = YtQueueSource.<RowData>builder()
                 .proxy(proxy)
                 .queuePath(queuePath)
+                .consumerPath(consumerPath)
                 .credentialsProvider(credentialsProvider)
                 .recordDeserializer(createRecordDeserializer(deserializer))
                 .producedType(producedType)
-                .startupMode(startupMode)
-                .specificOffsets(specificOffsets)
                 .trimmedOffsetPolicy(trimmedOffsetPolicy)
                 .readerOptions(readerOptions)
-                .discoveryInterval(partitionDiscoveryInterval)
-                .build();
+                .discoveryInterval(partitionDiscoveryInterval);
+        if (consumerPath == null) {
+            sourceBuilder
+                    .startupMode(startupMode)
+                    .specificOffsets(specificOffsets);
+        }
+        YtQueueSource<RowData> source = sourceBuilder.build();
         return SourceProvider.of(source, parallelism);
     }
 
@@ -107,6 +114,7 @@ public class YtQueueDynamicTableSource implements ScanTableSource {
         return YtQueueDynamicTableSource.builder()
                 .proxy(proxy)
                 .queuePath(queuePath)
+                .consumerPath(consumerPath)
                 .credentialsProvider(credentialsProvider)
                 .decodingFormat(decodingFormat)
                 .physicalRowDataType(physicalRowDataType)
