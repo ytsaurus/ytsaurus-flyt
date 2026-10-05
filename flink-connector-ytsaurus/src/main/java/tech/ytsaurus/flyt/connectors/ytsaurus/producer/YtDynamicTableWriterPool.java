@@ -8,7 +8,6 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.function.Consumer;
@@ -65,7 +64,6 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
     private final transient Supplier<YTsaurusClient> clientSupplier;
     private final transient Cache<String, YtDynamicTableWriter> cache;
     private final transient ScheduledExecutorService cacheExecutor;
-    private final transient Executor expirationExecutor;
 
     private final transient Map<String, MetricsSupplier> metricsSuppliers;
 
@@ -129,7 +127,6 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
             thread.setDaemon(true);
             return thread;
         });
-        this.expirationExecutor = cacheTicker == null ? cacheExecutor : Runnable::run;
         this.cache = makeCache(cacheTtl != null ? cacheTtl : CACHE_TTL, cacheTicker);
     }
 
@@ -295,10 +292,10 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
         return cache.asMap().size();
     }
 
-    // Use a write to reschedule expiry: read maintenance may be delayed or dropped by Caffeine.
-    // Run outside the committer: eviction holds the cache lock while close waits for the committer.
+    // Called by the writer after a commit left it idle. A compute (not a read) re-evaluates the expiry and
+    // always schedules the maintenance that removes expired writer.
     private void refreshExpiration(String tableName) {
-        expirationExecutor.execute(() -> cache.asMap().computeIfPresent(tableName, (key, writer) -> writer));
+        cache.asMap().computeIfPresent(tableName, (key, writer) -> writer);
     }
 
     @VisibleForTesting

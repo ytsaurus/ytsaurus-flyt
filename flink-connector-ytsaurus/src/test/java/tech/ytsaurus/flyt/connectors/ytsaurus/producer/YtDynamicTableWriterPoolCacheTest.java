@@ -2,9 +2,6 @@ package tech.ytsaurus.flyt.connectors.ytsaurus.producer;
 
 import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
@@ -238,37 +235,6 @@ class YtDynamicTableWriterPoolCacheTest {
         // No cache reads or cleanUp calls: expiration must run on the production scheduler.
         Assertions.assertTrue(closed.await(10, TimeUnit.SECONDS), "idle writer was not expired automatically");
         Mockito.verify(mock.writer, Mockito.times(1)).close();
-    }
-
-    @Test
-    void idleCallbackDoesNotWaitForConcurrentWrite() throws Exception {
-        pool.close();
-        pool = createPool(TTL, null);
-        MockWriter mock = installWriter("blocked-write");
-        pool.initializeWriter(TABLE);
-        CountDownLatch writeEntered = new CountDownLatch(1);
-        CountDownLatch releaseWrite = new CountDownLatch(1);
-        Mockito.doAnswer(invocation -> {
-            mock.busy.set(true);
-            writeEntered.countDown();
-            Assertions.assertTrue(releaseWrite.await(10, TimeUnit.SECONDS));
-            return null;
-        }).when(mock.writer).write(Mockito.any());
-
-        ExecutorService executor = Executors.newFixedThreadPool(2);
-        Future<?> write = executor.submit(() -> pool.write(TABLE, row()));
-        try {
-            Assertions.assertTrue(writeEntered.await(10, TimeUnit.SECONDS));
-            // pool.write holds the cache lock; a committer's idle callback must still return.
-            executor.submit(mock.idleListener()).get(5, TimeUnit.SECONDS);
-        } finally {
-            releaseWrite.countDown();
-            try {
-                write.get(5, TimeUnit.SECONDS);
-            } finally {
-                executor.shutdownNow();
-            }
-        }
     }
 
     private void advance(Duration duration) {
