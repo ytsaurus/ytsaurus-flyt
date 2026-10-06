@@ -47,9 +47,6 @@ import tech.ytsaurus.flyt.connectors.ytsaurus.common.providers.reshard.LastParti
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.providers.reshard.ReshardProvider;
 import tech.ytsaurus.flyt.connectors.ytsaurus.producer.converters.RowDataToYtListConverters;
 
-/**
- * Keeps one writer per target table and closes writers that stayed idle for {@link #CACHE_TTL}.
- */
 @Slf4j
 public class YtDynamicTableWriterPool implements Serializable, Closeable {
     private static final long serialVersionUID = 1L;
