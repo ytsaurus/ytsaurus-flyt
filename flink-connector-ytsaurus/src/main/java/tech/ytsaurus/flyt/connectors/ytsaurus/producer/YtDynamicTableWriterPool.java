@@ -49,10 +49,6 @@ import tech.ytsaurus.flyt.connectors.ytsaurus.producer.converters.RowDataToYtLis
 
 /**
  * Keeps one writer per target table and closes writers that stayed idle for {@link #CACHE_TTL}.
- *
- * <p>A write runs inside the cache's compute, so it never races an eviction, and re-evaluates the expiry:
- * a writer holding rows is pinned, an idle one expires. The writer reports when a commit made it idle.
- * Checkpoints and finish iterate the cache without touching expiry.
  */
 @Slf4j
 public class YtDynamicTableWriterPool implements Serializable, Closeable {
@@ -289,14 +285,13 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
         return cache.asMap().size();
     }
 
-    // Called by the writer after a commit left it idle. A compute (not a read) re-evaluates the expiry and
-    // always schedules the maintenance that removes expired writer.
+    // Called after a commit outside a cache operation. A compute re-evaluates the expiry and schedules maintenance.
     private void refreshExpiration(String tableName) {
         cache.asMap().computeIfPresent(tableName, (key, writer) -> writer);
     }
 
     @VisibleForTesting
-    YtDynamicTableWriter prepareWriter(WriterClassifier writerClassifier, Runnable idleListener) {
+    YtDynamicTableWriter prepareWriter(WriterClassifier writerClassifier, Runnable commitListener) {
         ComplexYtPath tablePath = path.copy().setTableName(writerClassifier.getTableName());
         MetricsSupplier metricsSupplier = metricsSuppliers.computeIfAbsent(
                 tablePath.getFullPath(), MetricsSupplier::new);
@@ -326,7 +321,7 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
                 ytWriterOptions,
                 locksProvider,
                 dataMetrics,
-                idleListener);
+                commitListener);
         writer.open();
         return writer;
     }

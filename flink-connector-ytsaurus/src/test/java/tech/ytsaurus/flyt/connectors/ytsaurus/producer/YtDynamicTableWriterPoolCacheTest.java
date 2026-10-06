@@ -100,7 +100,7 @@ class YtDynamicTableWriterPoolCacheTest {
         Mockito.verify(mock.writer, Mockito.never()).close();
 
         mock.busy.set(false);
-        mock.idleListener().run();
+        mock.commitListener().run();
         advance(TTL.minusNanos(1));
         pool.cleanUpCache();
         Mockito.verify(mock.writer, Mockito.never()).close();
@@ -223,7 +223,7 @@ class YtDynamicTableWriterPoolCacheTest {
         // Let initial maintenance run while the writer is pinned, well beyond the idle TTL.
         Assertions.assertFalse(closed.await(1500, TimeUnit.MILLISECONDS));
         mock.busy.set(false);
-        mock.idleListener().run();
+        mock.commitListener().run();
 
         // No cache reads or cleanUp calls: expiration must run on the production scheduler.
         Assertions.assertTrue(closed.await(10, TimeUnit.SECONDS), "idle writer was not expired automatically");
@@ -243,7 +243,7 @@ class YtDynamicTableWriterPoolCacheTest {
     private MockWriter installWriter(String name) {
         MockWriter mock = new MockWriter(name);
         Mockito.doAnswer(invocation -> {
-            mock.idleListener = invocation.getArgument(1);
+            mock.commitListener = invocation.getArgument(1);
             return mock.writer;
         }).when(pool).prepareWriter(Mockito.any(), Mockito.any());
         return mock;
@@ -252,7 +252,7 @@ class YtDynamicTableWriterPoolCacheTest {
     private static final class MockWriter {
         private final YtDynamicTableWriter writer = Mockito.mock(YtDynamicTableWriter.class);
         private final AtomicBoolean busy = new AtomicBoolean();
-        private Runnable idleListener;
+        private Runnable commitListener;
 
         private MockWriter(String name) {
             Mockito.when(writer.getPath()).thenReturn(name);
@@ -263,15 +263,15 @@ class YtDynamicTableWriterPoolCacheTest {
             }).when(writer).write(Mockito.any());
             Mockito.doAnswer(invocation -> {
                 if (busy.getAndSet(false)) {
-                    idleListener().run();
+                    commitListener().run();
                 }
                 return null;
             }).when(writer).snapshotState(Mockito.anyLong());
         }
 
-        private Runnable idleListener() {
-            Assertions.assertNotNull(idleListener, "writer was not created through the pool");
-            return idleListener;
+        private Runnable commitListener() {
+            Assertions.assertNotNull(commitListener, "writer was not created through the pool");
+            return commitListener;
         }
     }
 }

@@ -29,10 +29,10 @@ import tech.ytsaurus.flyt.connectors.ytsaurus.test.TestYtClient;
 import tech.ytsaurus.flyt.connectors.ytsaurus.test.component.BasicEmulatingNodeComponent;
 import tech.ytsaurus.flyt.connectors.ytsaurus.test.component.StubFailingCountingTransactionComponent;
 
-class YtDynamicTableWriterIdleListenerTest {
+class YtDynamicTableWriterCommitListenerTest {
     private static final String SCHEMA = "[{\"name\"=\"id\";\"type\"=\"int64\";}]";
 
-    private final AtomicInteger idleReports = new AtomicInteger();
+    private final AtomicInteger commitReports = new AtomicInteger();
     private StubFailingCountingTransactionComponent transactions;
     private YtDynamicTableWriter writer;
 
@@ -64,7 +64,7 @@ class YtDynamicTableWriterIdleListenerTest {
                         .build(),
                 new NoopLocksProvider(),
                 NoopDataMetricsWriterDelegate.INSTANCE,
-                idleReports::incrementAndGet);
+                commitReports::incrementAndGet);
         writer.open();
     }
 
@@ -74,21 +74,21 @@ class YtDynamicTableWriterIdleListenerTest {
     }
 
     @Test
-    void checkpointReportsIdleOnlyWhenItCommittedRows() {
+    void checkpointNotifiesListenerOnlyWhenItCommittedRows() {
         writeRows(5);
         Assertions.assertTrue(writer.isBusy());
 
         writer.snapshotState(1);
         Assertions.assertFalse(writer.isBusy());
         Assertions.assertEquals(5, transactions.getCommittedRows());
-        Assertions.assertEquals(1, idleReports.get());
+        Assertions.assertEquals(1, commitReports.get());
 
         writer.snapshotState(2);
-        Assertions.assertEquals(1, idleReports.get(), "an empty checkpoint is not an idle transition");
+        Assertions.assertEquals(1, commitReports.get(), "an empty checkpoint does not commit");
 
         writeRows(3);
         writer.finish();
-        Assertions.assertEquals(2, idleReports.get());
+        Assertions.assertEquals(2, commitReports.get());
     }
 
     private void writeRows(int count) {

@@ -172,7 +172,7 @@ public class YtDynamicTableWriter implements Serializable {
     private transient String acquiredLock;
 
     @Nullable
-    private final transient Runnable idleListener;
+    private final transient Runnable commitListener;
 
     private final AtomicBoolean closed = new AtomicBoolean();
 
@@ -193,7 +193,7 @@ public class YtDynamicTableWriter implements Serializable {
                                 YtWriterOptions ytWriterOptions,
                                 LocksProvider locksProvider,
                                 DataMetricsWriterDelegate dataMetrics,
-                                @Nullable Runnable idleListener) {
+                                @Nullable Runnable commitListener) {
         this.ytConverter = ytConverter;
         this.path = ytInfo.getPath();
         this.ysonSchemaString = ytInfo.getYsonSchemaString();
@@ -209,7 +209,7 @@ public class YtDynamicTableWriter implements Serializable {
         this.ytWriterOptions = ytWriterOptions;
         this.locksProvider = locksProvider;
         this.dataMetrics = dataMetrics;
-        this.idleListener = idleListener;
+        this.commitListener = commitListener;
     }
 
 
@@ -263,7 +263,7 @@ public class YtDynamicTableWriter implements Serializable {
                         commitTransactionLock.unlock();
                     }
                     if (committed) {
-                        notifyIdle();
+                        notifyCommit();
                     }
                 }
             }, 0L, ytWriterOptions.getCommitTransactionPeriod().toMillis(), TimeUnit.MILLISECONDS);
@@ -507,7 +507,7 @@ public class YtDynamicTableWriter implements Serializable {
             flushModificationLock.unlock();
         }
         if (committed) {
-            notifyIdle();
+            notifyCommit();
         }
     }
 
@@ -899,9 +899,9 @@ public class YtDynamicTableWriter implements Serializable {
         return rowsInBuffer.get() != 0 || rowsInTransaction.get() != 0;
     }
 
-    private void notifyIdle() {
-        if (idleListener != null) {
-            idleListener.run();
+    private void notifyCommit() {
+        if (commitListener != null) {
+            commitListener.run();
         }
     }
 
