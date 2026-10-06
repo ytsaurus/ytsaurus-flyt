@@ -29,9 +29,6 @@ import tech.ytsaurus.flyt.connectors.ytsaurus.test.TestYtClient;
 import tech.ytsaurus.flyt.connectors.ytsaurus.test.component.BasicEmulatingNodeComponent;
 import tech.ytsaurus.flyt.connectors.ytsaurus.test.component.StubFailingCountingTransactionComponent;
 
-/**
- * The pool relies on the writer reporting exactly when a commit made it idle.
- */
 class YtDynamicTableWriterIdleListenerTest {
     private static final String SCHEMA = "[{\"name\"=\"id\";\"type\"=\"int64\";}]";
 

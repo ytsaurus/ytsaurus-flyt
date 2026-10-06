@@ -29,11 +29,6 @@ import tech.ytsaurus.flyt.connectors.ytsaurus.common.ReshardingConfig;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.YtTableAttributes;
 import tech.ytsaurus.flyt.connectors.ytsaurus.producer.converters.RowDataToYtListConverters;
 
-/**
- * Covers when the pool closes a cached writer: only after it stayed idle for the TTL, never while it holds
- * rows, and without the TTL being restarted by checkpoint visits. The mock writer reports the idle
- * transition the way the real one does: once, when a checkpoint commits its rows.
- */
 class YtDynamicTableWriterPoolCacheTest {
     private static final Duration TTL = Duration.ofMinutes(2);
     // Caffeine's timer wheel finds an expired entry within about a minute after its deadline.
@@ -104,7 +99,6 @@ class YtDynamicTableWriterPoolCacheTest {
         pool.cleanUpCache();
         Mockito.verify(mock.writer, Mockito.never()).close();
 
-        // The committer reports the idle transition after a background commit.
         mock.busy.set(false);
         mock.idleListener().run();
         advance(TTL.minusNanos(1));
@@ -129,7 +123,6 @@ class YtDynamicTableWriterPoolCacheTest {
             Mockito.verify(writer, Mockito.never()).close();
         }
 
-        // Keep checkpointing past the TTL: the visits must not keep the idle writer alive.
         for (int checkpoint = 4; checkpoint <= 12; checkpoint++) {
             advance(checkpointInterval);
             pool.snapshotState(checkpoint);
@@ -247,9 +240,6 @@ class YtDynamicTableWriterPoolCacheTest {
         return row;
     }
 
-    /**
-     * Makes writer creation for any table return a fresh mock from now on.
-     */
     private MockWriter installWriter(String name) {
         MockWriter mock = new MockWriter(name);
         Mockito.doAnswer(invocation -> {

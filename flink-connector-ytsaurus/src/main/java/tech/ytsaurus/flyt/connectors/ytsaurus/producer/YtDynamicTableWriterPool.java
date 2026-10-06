@@ -87,7 +87,6 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
     // Shared across all writers in this pool
     private final DataMetricsWriterDelegate dataMetrics;
 
-    // cacheTtl and cacheTicker are test knobs; production builds leave them unset.
     @Builder
     @SuppressWarnings("checkstyle:ParameterNumber")
     private YtDynamicTableWriterPool(Supplier<YTsaurusClient> clientSupplier,
@@ -132,7 +131,6 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
 
     private Cache<String, YtDynamicTableWriter> makeCache(Duration ttl, @Nullable Ticker ticker) {
         Caffeine<String, YtDynamicTableWriter> builder = Caffeine.newBuilder()
-                // A busy writer never expires; an idle one expires a TTL after the last write or idle report.
                 .expireAfter(Expiry.<String, YtDynamicTableWriter>accessing(
                         (tableName, writer) -> writer.isBusy() ? PINNED : ttl))
                 .evictionListener(this::closeExpiredWriter);
@@ -184,7 +182,6 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
 
     @VisibleForTesting
     void initializeWriter(WriterClassifier writerClassifier) {
-        // Writer creation performs eager table initialization.
         cache.asMap().computeIfAbsent(writerClassifier.getTableName(), ignored -> createWriter(writerClassifier));
     }
 

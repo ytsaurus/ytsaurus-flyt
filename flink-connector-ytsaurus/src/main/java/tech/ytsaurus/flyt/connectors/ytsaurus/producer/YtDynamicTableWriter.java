@@ -171,7 +171,6 @@ public class YtDynamicTableWriter implements Serializable {
 
     private transient String acquiredLock;
 
-    // Notified after a commit left the writer with no buffered or uncommitted rows.
     @Nullable
     private final transient Runnable idleListener;
 
