@@ -195,7 +195,7 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
         try {
             multipleOperations(YtDynamicTableWriter::close, "close");
         } finally {
-            // Expired writers are hidden from the iteration above and get closed by the eviction listener.
+            // Close hidden expired writers before stopping cache maintenance.
             cache.invalidateAll();
             cacheExecutor.shutdownNow();
             dataMetrics.close();
@@ -282,7 +282,6 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
         return cache.asMap().size();
     }
 
-    // Called after a commit outside a cache operation. A compute re-evaluates the expiry and schedules maintenance.
     private void refreshExpiration(String tableName) {
         cache.asMap().computeIfPresent(tableName, (key, writer) -> writer);
     }
