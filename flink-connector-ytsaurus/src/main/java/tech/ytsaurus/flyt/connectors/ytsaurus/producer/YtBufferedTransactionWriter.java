@@ -36,10 +36,8 @@ import tech.ytsaurus.flyt.connectors.ytsaurus.utils.FutureUtils;
 public final class YtBufferedTransactionWriter {
     private static final int VALUE_METRIC_CLOSED = -1;
 
-    // Close does not abort the open transaction; it expires on the server once the client stops pinging.
-    // A short expiration keeps row locks from stalling a restarted job, and pings run well within it.
-    private static final Duration TRANSACTION_EXPIRATION = Duration.ofSeconds(6);
-    private static final Duration TRANSACTION_PING_PERIOD = Duration.ofSeconds(2);
+    private static final Duration TRANSACTION_EXPIRATION = Duration.ofSeconds(10);
+    private static final Duration TRANSACTION_PING_PERIOD = Duration.ofSeconds(3);
 
     private final YTsaurusClient client;
     private final String path;
@@ -60,8 +58,7 @@ public final class YtBufferedTransactionWriter {
     private List<CompletableFuture<Void>> transactionDataBuffer;
     private final List<Map<String, ?>> uncommittedRows;
     private final List<Map<String, ?>> unflushedRows;
-    // Written under commitTransactionLock, but close reads it from another thread without the lock.
-    private volatile ApiServiceTransaction currentTransaction;
+    private ApiServiceTransaction currentTransaction;
     private ModifyRowsRequest.Builder modificationBuffer;
     private final Lock commitTransactionLock;
     private final Lock flushModificationLock;
@@ -156,9 +153,8 @@ public final class YtBufferedTransactionWriter {
         }, 0L, flushModificationPeriod.toMillis(), TimeUnit.MILLISECONDS);
     }
 
-    // Interrupt rather than drain: a pending flush or commit is not worth waiting for on close,
-    // and not waiting keeps close instant regardless of YT's health.
     public void closeAsyncTasks() {
+        // interrupt committer thread, ongoing transaction will be automatically aborted after TRANSACTION_EXPIRATION ttl
         log.info("Close async tasks: {}", path);
         if (transactionCommitter != null) {
             transactionCommitter.shutdownNow();
