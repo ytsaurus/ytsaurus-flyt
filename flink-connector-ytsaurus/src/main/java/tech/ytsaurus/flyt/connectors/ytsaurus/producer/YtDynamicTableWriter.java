@@ -297,12 +297,6 @@ public class YtDynamicTableWriter implements Serializable {
         log.info("Successful finish writer for table {}", path.getFullPath());
     }
 
-    /**
-     * Releases resources only; nothing is flushed or committed here.
-     * Durability belongs to {@link #finish()} (graceful stop) and {@link #snapshotState(long)} (checkpoints):
-     * Flink also calls close on failure and cancel, where everything past the last checkpoint is replayed anyway.
-     * Never throws and is bounded in time, so a stuck YT cannot turn a close into a TaskManager kill.
-     */
     public void close() {
         if (!closed.compareAndSet(false, true)) {
             return;

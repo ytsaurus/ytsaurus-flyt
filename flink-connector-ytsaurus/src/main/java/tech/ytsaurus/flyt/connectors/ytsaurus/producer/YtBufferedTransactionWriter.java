@@ -36,8 +36,7 @@ import tech.ytsaurus.flyt.connectors.ytsaurus.utils.FutureUtils;
 public final class YtBufferedTransactionWriter {
     private static final int VALUE_METRIC_CLOSED = -1;
 
-    // Every blocking step of close is bounded by this, so a stuck YT cannot hold close for minutes
-    // and trip Flink's task cancellation watchdog (180s by default), which kills the whole TaskManager.
+    // Close timeout have to be less than Flink's task cancellation watchdog (180s by default).
     private static final Duration CLOSE_STEP_TIMEOUT = Duration.ofSeconds(10);
 
     private final YTsaurusClient client;
