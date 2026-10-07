@@ -193,7 +193,7 @@ public class YtDynamicTableWriter implements Serializable {
                     .retryStrategy(retryStrategy)
                     .onCommitSuccess(this::onCommitSuccess)
                     .onTransactionCommitted(() -> {
-                        lastCommittedTrackableField = lastNonCommittedTrackableField;
+                        lastCommittedTrackableField.set(lastNonCommittedTrackableField.get());
                         maxCommittedTrackableField.set(Math.max(
                                 maxCommittedTrackableField.get(),
                                 lastNonCommittedTrackableField.get()));

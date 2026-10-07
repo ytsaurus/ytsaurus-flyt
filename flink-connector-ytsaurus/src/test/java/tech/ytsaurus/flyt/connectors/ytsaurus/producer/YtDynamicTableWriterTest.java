@@ -8,6 +8,8 @@ import org.apache.flink.api.common.functions.RuntimeContext;
 import org.apache.flink.metrics.groups.UnregisteredMetricsGroup;
 import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.RowData;
+import org.apache.flink.table.data.TimestampData;
+import org.apache.flink.table.types.logical.TimestampType;
 import org.apache.flink.util.concurrent.FixedRetryStrategy;
 import org.apache.flink.util.concurrent.RetryStrategy;
 import org.junit.jupiter.api.BeforeEach;
@@ -24,8 +26,10 @@ import tech.ytsaurus.client.request.StartTransaction;
 import tech.ytsaurus.flyt.connectors.datametrics.DataMetricsWriterDelegate;
 import tech.ytsaurus.flyt.connectors.datametrics.NoopDataMetricsWriterDelegate;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.ComplexYtPath;
+import tech.ytsaurus.flyt.connectors.ytsaurus.common.TrackableField;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.YtTableAttributes;
 import tech.ytsaurus.flyt.connectors.ytsaurus.producer.converters.RowDataToYtListConverters;
+import tech.ytsaurus.flyt.connectors.ytsaurus.producer.converters.TrackableFieldDataConverter;
 import tech.ytsaurus.flyt.locks.noop.NoopLocksProvider;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -266,5 +270,67 @@ class YtDynamicTableWriterTest {
         assertThat(recordedMetrics.getMetric("sumCommittedRows").get()).isEqualTo(3);
         assertThat(recordedMetrics.getMetric("sumFailedRows").get()).isZero();
         assertThat(recordedMetrics.getMetric("lastCommitTimestamp").get()).isEqualTo(-1);
+    }
+
+    @Test
+    void lastTrackedFieldChangesOnlyAfterCommitAndClosesWithMetrics() {
+        when(path.getFullPath()).thenReturn("//tmp/table");
+        when(path.getClusterName()).thenReturn("test");
+        when(runtimeContext.getMetricGroup()).thenReturn(UnregisteredMetricsGroup.createOperatorMetricGroup());
+        ApiServiceTransaction transaction = mock(ApiServiceTransaction.class);
+        when(ytClient.startTransaction(any(StartTransaction.class)))
+                .thenReturn(CompletableFuture.completedFuture(transaction));
+        when(transaction.modifyRows(any(ModifyRowsRequest.Builder.class)))
+                .thenReturn(CompletableFuture.completedFuture(null));
+        when(transaction.commit()).thenReturn(CompletableFuture.completedFuture(null));
+        MetricsSupplier recordedMetrics = new MetricsSupplier("test");
+        TimestampType timestampType = new TimestampType(3);
+        TrackableField trackableField = new TrackableField("event_time", 1, timestampType.getTypeRoot(),
+                new TrackableFieldDataConverter(timestampType));
+        YtWriterOptions options = YtWriterOptions.builder()
+                .rowsInModificationLimit(100)
+                .rowsInTransactionLimit(100)
+                .commitTransactionPeriod(Duration.ofHours(1))
+                .flushModificationPeriod(Duration.ofHours(1))
+                .transactionTimeout(Duration.ofSeconds(3))
+                .build();
+        YtDynamicTableWriter writer = Mockito.spy(new YtDynamicTableWriter(
+                (reuse, value) -> Map.of("id", ((RowData) value).getLong(0),
+                        "event_time", ((RowData) value).getTimestamp(1, 3).getMillisecond()),
+                new WriterYtInfo(path, ytClient,
+                        "[{name=id;type=int64;sort_order=ascending;};{name=event_time;type=int64;}]"),
+                trackableField,
+                WriterClassifier.plain("table"),
+                new FixedRetryStrategy(0, Duration.ZERO),
+                new FixedRetryStrategy(0, Duration.ZERO),
+                runtimeContext,
+                recordedMetrics,
+                YtTableAttributes.empty(),
+                null,
+                options,
+                new NoopLocksProvider(),
+                NoopDataMetricsWriterDelegate.INSTANCE,
+                null));
+        doNothing().when(writer).createAndMountTableIfNeeded();
+        writer.open();
+        try {
+            writer.write(GenericRowData.of(1L, TimestampData.fromEpochMillis(100L)));
+            writer.snapshotState(1);
+            assertThat(recordedMetrics.getMetric("lastTrackedField").get()).isEqualTo(100L);
+
+            writer.write(GenericRowData.of(2L, TimestampData.fromEpochMillis(200L)));
+            verify(transaction).commit();
+            assertThat(recordedMetrics.getMetric("lastTrackedField").get()).isEqualTo(100L);
+            assertThat(recordedMetrics.getMetric("trackedField").get()).isEqualTo(100L);
+
+            writer.snapshotState(2);
+            assertThat(recordedMetrics.getMetric("lastTrackedField").get()).isEqualTo(200L);
+        } finally {
+            writer.close();
+        }
+
+        assertThat(recordedMetrics.getMetric("lastTrackedField").get()).isEqualTo(-1L);
+        assertThat(recordedMetrics.getMetric("trackedField").get()).isEqualTo(-1L);
+        assertThat(recordedMetrics.getMetric("lastCommitTimestamp").get()).isEqualTo(-1L);
     }
 }

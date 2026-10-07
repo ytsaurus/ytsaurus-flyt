@@ -17,6 +17,7 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Collectors;
 
 import org.apache.flink.util.concurrent.FixedRetryStrategy;
@@ -43,6 +44,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
@@ -75,7 +77,13 @@ class YtBufferedTransactionWriterTest {
 
     @Test
     void thresholdsFlushAndCommitBeforePreparingTheNextRow() throws Exception {
-        YtBufferedTransactionWriter writer = newWriter(2, 3, noRetry(), () -> { }, () -> { });
+        Runnable commitListener = mock(Runnable.class);
+        YtBufferedTransactionWriter writer = newWriter(2, 3, noRetry(), () -> { }, () -> { }, commitListener);
+        doAnswer(invocation -> {
+            assertLocksReleased(writer);
+            assertThat(writer.getCommittedRowCount()).isEqualTo(5);
+            return null;
+        }).when(commitListener).run();
         writer.write(() -> row(1));
         writer.write(() -> row(2));
         verify(client, never()).startTransaction(any(StartTransaction.class));
@@ -97,6 +105,7 @@ class YtBufferedTransactionWriterTest {
         assertThat(writer.getCommittedRowCount()).isEqualTo(4);
         assertThat(writer.isBusy()).isTrue();
         verify(transaction).commit();
+        verify(commitListener, never()).run();
 
         writer.flush();
 
@@ -106,6 +115,11 @@ class YtBufferedTransactionWriterTest {
         assertThat(writer.isBusy()).isFalse();
         verify(client, times(2)).startTransaction(any(StartTransaction.class));
         verify(transaction, times(2)).commit();
+        verify(commitListener).run();
+
+        writer.flush();
+
+        verify(commitListener).run();
     }
 
     @Test
@@ -258,7 +272,13 @@ class YtBufferedTransactionWriterTest {
         ScheduledExecutorService flusher = mock(ScheduledExecutorService.class);
         when(committer.awaitTermination(TRANSACTION_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).thenReturn(true);
         when(flusher.awaitTermination(TRANSACTION_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).thenReturn(true);
-        YtBufferedTransactionWriter writer = newWriter(2, 10, noRetry(), () -> { }, () -> { });
+        Runnable commitListener = mock(Runnable.class);
+        YtBufferedTransactionWriter writer = newWriter(2, 10, noRetry(), () -> { }, () -> { }, commitListener);
+        doAnswer(invocation -> {
+            assertLocksReleased(writer);
+            assertThat(writer.getCommittedRowCount()).isEqualTo(1);
+            return null;
+        }).when(commitListener).run();
 
         try (MockedStatic<Executors> executors = mockStatic(Executors.class)) {
             executors.when(Executors::newSingleThreadScheduledExecutor).thenReturn(committer, flusher);
@@ -277,10 +297,16 @@ class YtBufferedTransactionWriterTest {
             flushCallback.run();
             assertThat(rowIds(requests(transaction))).containsExactly(1L);
             verify(transaction, never()).commit();
+            verify(commitListener, never()).run();
             commitCallback.run();
             verify(transaction).commit();
             assertThat(writer.getCommittedRowCount()).isEqualTo(1);
             assertThat(writer.isBusy()).isFalse();
+            verify(commitListener).run();
+
+            setTimerTimestamps(writer, 0);
+            commitCallback.run();
+            verify(commitListener).run();
             writer.write(() -> row(2));
 
             assertThat(writer.closeAsyncTasks()).isEmpty();
@@ -330,6 +356,43 @@ class YtBufferedTransactionWriterTest {
 
             RuntimeException propagated = assertThrows(RuntimeException.class, writer::flush);
             assertThat(propagated.getCause()).isSameAs(failure);
+            for (int tick = 0; tick < 2; tick++) {
+                setTimerTimestamps(writer, 0);
+                commitCallback.run();
+                RuntimeException repeated = assertThrows(RuntimeException.class, writer::flush);
+                assertThat(repeated.getCause()).isSameAs(failure);
+            }
+            assertThat(writer.closeAsyncTasks()).isEmpty();
+        }
+    }
+
+    @Test
+    void scheduledFlusherPreservesFirstFailureWhenNextFlushFails() throws Exception {
+        ScheduledExecutorService committer = mock(ScheduledExecutorService.class);
+        ScheduledExecutorService flusher = mock(ScheduledExecutorService.class);
+        when(committer.awaitTermination(TRANSACTION_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).thenReturn(true);
+        when(flusher.awaitTermination(TRANSACTION_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).thenReturn(true);
+        IllegalStateException firstFailure = new IllegalStateException("first flush failed");
+        IllegalStateException laterFailure = new IllegalStateException("later flush failed");
+        when(transaction.modifyRows(any(ModifyRowsRequest.Builder.class))).thenThrow(firstFailure, laterFailure);
+        YtBufferedTransactionWriter writer = newWriter(2, 10, noRetry(), () -> { }, () -> { });
+
+        try (MockedStatic<Executors> executors = mockStatic(Executors.class)) {
+            executors.when(Executors::newSingleThreadScheduledExecutor).thenReturn(committer, flusher);
+            writer.open();
+            Runnable flushCallback = scheduledCallback(flusher, FLUSH_PERIOD);
+            writer.write(() -> row(1));
+            setTimerTimestamps(writer, 0);
+
+            flushCallback.run();
+            RuntimeException propagated = assertThrows(RuntimeException.class, writer::flush);
+            assertThat(propagated.getCause()).isSameAs(firstFailure);
+            setTimerTimestamps(writer, 0);
+            flushCallback.run();
+
+            RuntimeException repeated = assertThrows(RuntimeException.class, writer::flush);
+            assertThat(repeated.getCause()).isSameAs(firstFailure);
+            verify(transaction, times(2)).modifyRows(any(ModifyRowsRequest.Builder.class));
             assertThat(writer.closeAsyncTasks()).isEmpty();
         }
     }
@@ -371,6 +434,12 @@ class YtBufferedTransactionWriterTest {
     private YtBufferedTransactionWriter newWriter(int modificationLimit, int transactionLimit,
                                                  RetryStrategy retries, Runnable onCommitSuccess,
                                                  Runnable onTransactionCommitted) {
+        return newWriter(modificationLimit, transactionLimit, retries, onCommitSuccess, onTransactionCommitted, null);
+    }
+
+    private YtBufferedTransactionWriter newWriter(int modificationLimit, int transactionLimit,
+                                                 RetryStrategy retries, Runnable onCommitSuccess,
+                                                 Runnable onTransactionCommitted, Runnable commitListener) {
         return YtBufferedTransactionWriter.builder()
                 .client(client)
                 .path(PATH)
@@ -384,6 +453,7 @@ class YtBufferedTransactionWriterTest {
                 .retryStrategy(retries)
                 .onCommitSuccess(onCommitSuccess)
                 .onTransactionCommitted(onTransactionCommitted)
+                .commitListener(commitListener)
                 .build();
     }
 
@@ -408,6 +478,14 @@ class YtBufferedTransactionWriterTest {
             Field field = YtBufferedTransactionWriter.class.getDeclaredField(fieldName);
             field.setAccessible(true);
             ((AtomicLong) field.get(writer)).set(timestamp);
+        }
+    }
+
+    private static void assertLocksReleased(YtBufferedTransactionWriter writer) throws ReflectiveOperationException {
+        for (String fieldName : List.of("commitTransactionLock", "flushModificationLock")) {
+            Field field = YtBufferedTransactionWriter.class.getDeclaredField(fieldName);
+            field.setAccessible(true);
+            assertThat(((ReentrantLock) field.get(writer)).isLocked()).as(fieldName).isFalse();
         }
     }
 

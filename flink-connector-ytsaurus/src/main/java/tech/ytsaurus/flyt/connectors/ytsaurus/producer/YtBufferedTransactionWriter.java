@@ -20,6 +20,7 @@ import javax.annotation.Nullable;
 import lombok.Builder;
 import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.util.concurrent.RetryStrategy;
 import tech.ytsaurus.client.ApiServiceTransaction;
 import tech.ytsaurus.client.YTsaurusClient;
@@ -126,7 +127,7 @@ public final class YtBufferedTransactionWriter {
                 try {
                     committed = commitTransaction();
                 } catch (Exception e) {
-                    error.set(e);
+                    error.compareAndSet(null, e);
                 } finally {
                     commitTransactionLock.unlock();
                 }
@@ -141,7 +142,7 @@ public final class YtBufferedTransactionWriter {
                 try {
                     flushModification();
                 } catch (Exception e) {
-                    error.set(e);
+                    error.compareAndSet(null, e);
                 } finally {
                     flushModificationLock.unlock();
                 }
@@ -238,6 +239,7 @@ public final class YtBufferedTransactionWriter {
         }
     }
 
+    @VisibleForTesting
     void commit() {
         commitTransactionLock.lock();
         try {
