@@ -36,8 +36,10 @@ import tech.ytsaurus.flyt.connectors.ytsaurus.utils.FutureUtils;
 public final class YtBufferedTransactionWriter {
     private static final int VALUE_METRIC_CLOSED = -1;
 
-    // Close timeout have to be less than Flink's task cancellation watchdog (180s by default).
-    private static final Duration CLOSE_STEP_TIMEOUT = Duration.ofSeconds(10);
+    // Close does not abort the open transaction; it expires on the server once the client stops pinging.
+    // A short expiration keeps row locks from stalling a restarted job, and pings run well within it.
+    private static final Duration TRANSACTION_EXPIRATION = Duration.ofSeconds(6);
+    private static final Duration TRANSACTION_PING_PERIOD = Duration.ofSeconds(2);
 
     private final YTsaurusClient client;
     private final String path;
@@ -154,54 +156,15 @@ public final class YtBufferedTransactionWriter {
         }, 0L, flushModificationPeriod.toMillis(), TimeUnit.MILLISECONDS);
     }
 
-    public List<Exception> closeAsyncTasks() {
+    // Interrupt rather than drain: a pending flush or commit is not worth waiting for on close,
+    // and not waiting keeps close instant regardless of YT's health.
+    public void closeAsyncTasks() {
         log.info("Close async tasks: {}", path);
-        List<Exception> errors = new ArrayList<>();
-        shutdownExecutor(transactionCommitter, "transaction committer", errors);
-        shutdownExecutor(modificationFlusher, "modification flusher", errors);
-        return errors;
-    }
-
-    private void shutdownExecutor(@Nullable ScheduledExecutorService executor, String name, List<Exception> errors) {
-        if (executor == null) {
-            return;
+        if (transactionCommitter != null) {
+            transactionCommitter.shutdownNow();
         }
-        try {
-            // Interrupt rather than drain: a pending flush or commit is not worth waiting for on close.
-            executor.shutdownNow();
-            if (executor.awaitTermination(CLOSE_STEP_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)) {
-                log.info("Stopped {} for writer {}", name, path);
-            } else {
-                log.warn("{} for writer {} did not stop within {}", name, path, CLOSE_STEP_TIMEOUT);
-            }
-        } catch (InterruptedException e) {
-            log.warn("Interrupted while stopping {} for writer {}", name, path, e);
-            Thread.currentThread().interrupt();
-            errors.add(e);
-        } catch (Exception e) {
-            log.error("Error stopping {} for writer {}", name, path, e);
-            errors.add(e);
-        }
-    }
-
-    // Frees the YT transaction and its row locks right away instead of leaving them to expire server-side.
-    public void abortCurrentTransaction() {
-        ApiServiceTransaction transaction = currentTransaction;
-        if (transaction == null) {
-            return;
-        }
-        currentTransaction = null;
-        int droppedRows = rowsInTransaction.get() + rowsInBuffer.get();
-        try {
-            CompletableFuture<Void> abort = transaction.abort();
-            if (abort != null) {
-                abort.get(CLOSE_STEP_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
-            }
-            log.info("Aborted transaction {} with {} uncommitted rows for table {}",
-                    transaction.getId(), droppedRows, path);
-        } catch (Exception e) {
-            log.warn("Unable to abort transaction {} with {} uncommitted rows for table {}; it will expire on its own",
-                    transaction.getId(), droppedRows, path, e);
+        if (modificationFlusher != null) {
+            modificationFlusher.shutdownNow();
         }
     }
 
@@ -288,6 +251,8 @@ public final class YtBufferedTransactionWriter {
                         .setType(TransactionType.Tablet)
                         .setSticky(true)
                         .setAtomicity(atomicity)
+                        .setTransactionTimeout(TRANSACTION_EXPIRATION)
+                        .setPingPeriod(TRANSACTION_PING_PERIOD)
                         .build()
         ).join();
     }

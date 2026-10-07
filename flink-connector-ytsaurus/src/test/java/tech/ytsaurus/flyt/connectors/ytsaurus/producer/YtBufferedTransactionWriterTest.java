@@ -61,8 +61,6 @@ class YtBufferedTransactionWriterTest {
             .addValue("payload", ColumnValueType.STRING)
             .build();
     private static final Duration TRANSACTION_TIMEOUT = Duration.ofSeconds(5);
-    // Mirrors YtBufferedTransactionWriter.CLOSE_STEP_TIMEOUT
-    private static final Duration CLOSE_STEP_TIMEOUT = Duration.ofSeconds(10);
     private static final Duration COMMIT_PERIOD = Duration.ofSeconds(7);
     private static final Duration FLUSH_PERIOD = Duration.ofSeconds(3);
 
@@ -272,8 +270,6 @@ class YtBufferedTransactionWriterTest {
     void scheduledCallbacksFlushAndCommitWhenDueAndStopPromptly() throws Exception {
         ScheduledExecutorService committer = mock(ScheduledExecutorService.class);
         ScheduledExecutorService flusher = mock(ScheduledExecutorService.class);
-        when(committer.awaitTermination(CLOSE_STEP_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).thenReturn(true);
-        when(flusher.awaitTermination(CLOSE_STEP_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).thenReturn(true);
         Runnable commitListener = mock(Runnable.class);
         YtBufferedTransactionWriter writer = newWriter(2, 10, noRetry(), () -> { }, () -> { }, commitListener);
         doAnswer(invocation -> {
@@ -311,7 +307,7 @@ class YtBufferedTransactionWriterTest {
             verify(commitListener).run();
             writer.write(() -> row(2));
 
-            assertThat(writer.closeAsyncTasks()).isEmpty();
+            writer.closeAsyncTasks();
             assertThat(writer.isBusy()).isTrue();
             assertThat(writer.getCommittedRowCount()).isEqualTo(1);
             verify(transaction).modifyRows(any(ModifyRowsRequest.Builder.class));
@@ -319,9 +315,7 @@ class YtBufferedTransactionWriterTest {
 
             InOrder shutdown = inOrder(committer, flusher);
             shutdown.verify(committer).shutdownNow();
-            shutdown.verify(committer).awaitTermination(CLOSE_STEP_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
             shutdown.verify(flusher).shutdownNow();
-            shutdown.verify(flusher).awaitTermination(CLOSE_STEP_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
             verify(committer, never()).shutdown();
             verify(flusher, never()).shutdown();
             verify(client, never()).close();
@@ -333,8 +327,6 @@ class YtBufferedTransactionWriterTest {
     void scheduledCallbackPreservesFailureForTheNextFlush(boolean failCommit) throws Exception {
         ScheduledExecutorService committer = mock(ScheduledExecutorService.class);
         ScheduledExecutorService flusher = mock(ScheduledExecutorService.class);
-        when(committer.awaitTermination(CLOSE_STEP_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).thenReturn(true);
-        when(flusher.awaitTermination(CLOSE_STEP_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).thenReturn(true);
         IllegalStateException failure = new IllegalStateException("timer write failed");
         if (failCommit) {
             when(transaction.commit()).thenThrow(failure);
@@ -364,7 +356,7 @@ class YtBufferedTransactionWriterTest {
                 RuntimeException repeated = assertThrows(RuntimeException.class, writer::flush);
                 assertThat(repeated.getCause()).isSameAs(failure);
             }
-            assertThat(writer.closeAsyncTasks()).isEmpty();
+            writer.closeAsyncTasks();
         }
     }
 
@@ -372,8 +364,6 @@ class YtBufferedTransactionWriterTest {
     void scheduledFlusherPreservesFirstFailureWhenNextFlushFails() throws Exception {
         ScheduledExecutorService committer = mock(ScheduledExecutorService.class);
         ScheduledExecutorService flusher = mock(ScheduledExecutorService.class);
-        when(committer.awaitTermination(CLOSE_STEP_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).thenReturn(true);
-        when(flusher.awaitTermination(CLOSE_STEP_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).thenReturn(true);
         IllegalStateException firstFailure = new IllegalStateException("first flush failed");
         IllegalStateException laterFailure = new IllegalStateException("later flush failed");
         when(transaction.modifyRows(any(ModifyRowsRequest.Builder.class))).thenThrow(firstFailure, laterFailure);
@@ -395,39 +385,30 @@ class YtBufferedTransactionWriterTest {
             RuntimeException repeated = assertThrows(RuntimeException.class, writer::flush);
             assertThat(repeated.getCause()).isSameAs(firstFailure);
             verify(transaction, times(2)).modifyRows(any(ModifyRowsRequest.Builder.class));
-            assertThat(writer.closeAsyncTasks()).isEmpty();
+            writer.closeAsyncTasks();
         }
     }
 
     @Test
-    void partialOpenCleanupContinuesAfterInterruptionAndReportsIt() throws Exception {
+    void partialOpenCleanupStopsBothExecutors() throws Exception {
         ScheduledExecutorService committer = mock(ScheduledExecutorService.class);
         ScheduledExecutorService flusher = mock(ScheduledExecutorService.class);
         IllegalStateException launchFailure = new IllegalStateException("flusher scheduling failed");
         when(flusher.scheduleAtFixedRate(any(Runnable.class), eq(0L),
                 eq(FLUSH_PERIOD.toMillis()), eq(TimeUnit.MILLISECONDS))).thenThrow(launchFailure);
-        InterruptedException interruption = new InterruptedException("interrupted during shutdown");
-        when(committer.awaitTermination(CLOSE_STEP_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS))
-                .thenThrow(interruption);
-        when(flusher.awaitTermination(CLOSE_STEP_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)).thenReturn(false);
         YtBufferedTransactionWriter writer = newWriter(2, 10, noRetry(), () -> { }, () -> { });
 
         try (MockedStatic<Executors> executors = mockStatic(Executors.class)) {
             executors.when(Executors::newSingleThreadScheduledExecutor).thenReturn(committer, flusher);
             assertThat(assertThrows(IllegalStateException.class, writer::open)).isSameAs(launchFailure);
             scheduledCallback(committer, COMMIT_PERIOD);
-            try {
-                assertThat(writer.closeAsyncTasks()).containsExactly(interruption);
-                assertThat(Thread.currentThread().isInterrupted()).isTrue();
+            writer.closeAsyncTasks();
 
-                InOrder shutdown = inOrder(committer, flusher);
-                shutdown.verify(committer).shutdownNow();
-                shutdown.verify(committer).awaitTermination(CLOSE_STEP_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
-                shutdown.verify(flusher).shutdownNow();
-                shutdown.verify(flusher).awaitTermination(CLOSE_STEP_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
-            } finally {
-                Thread.interrupted();
-            }
+            InOrder shutdown = inOrder(committer, flusher);
+            shutdown.verify(committer).shutdownNow();
+            shutdown.verify(flusher).shutdownNow();
+            verify(committer, never()).shutdown();
+            verify(flusher, never()).shutdown();
         }
     }
 

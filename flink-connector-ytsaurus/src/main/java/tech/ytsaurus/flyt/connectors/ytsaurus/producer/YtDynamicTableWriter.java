@@ -209,8 +209,7 @@ public class YtDynamicTableWriter implements Serializable {
         } catch (Exception e) {
             log.error("Error open yt writer: {}", path.getFullPath(), e);
 
-            List<Exception> errorsAsync = closeAsyncTasks();
-            errorsAsync.forEach(e::addSuppressed);
+            closeAsyncTasks();
 
             List<Exception> errorsResources = closeResources();
             errorsResources.forEach(e::addSuppressed);
@@ -219,8 +218,10 @@ public class YtDynamicTableWriter implements Serializable {
         }
     }
 
-    private List<Exception> closeAsyncTasks() {
-        return bufferedWriter == null ? Collections.emptyList() : bufferedWriter.closeAsyncTasks();
+    private void closeAsyncTasks() {
+        if (bufferedWriter != null) {
+            bufferedWriter.closeAsyncTasks();
+        }
     }
 
     private List<Exception> closeResources() {
@@ -303,9 +304,6 @@ public class YtDynamicTableWriter implements Serializable {
         }
         log.info("Begin closing writer {}", path.getFullPath());
         closeAsyncTasks();
-        if (bufferedWriter != null) {
-            bufferedWriter.abortCurrentTransaction();
-        }
         closeResources();
         log.info("Writer {} closed", path.getFullPath());
     }

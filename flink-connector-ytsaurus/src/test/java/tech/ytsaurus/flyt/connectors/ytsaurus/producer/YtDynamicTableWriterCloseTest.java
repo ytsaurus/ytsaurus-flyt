@@ -59,7 +59,7 @@ class YtDynamicTableWriterCloseTest {
     }
 
     @Test
-    void close_abortsOpenTransactionWithoutCommitting() {
+    void close_leavesOpenTransactionUncommitted() {
         RecordingTransactions transactions = new RecordingTransactions(alwaysTrue());
         writer = openWriter(retries(5), transactions);
 
@@ -69,7 +69,6 @@ class YtDynamicTableWriterCloseTest {
 
         writer.close();
 
-        Assertions.assertTrue(transactions.started.get(0).isAborted(), "open transaction is aborted");
         Assertions.assertEquals(1, transactions.started.size(), "no retry transaction on close");
         Assertions.assertEquals(0, transactions.committedRows.get(), "close never commits");
     }
