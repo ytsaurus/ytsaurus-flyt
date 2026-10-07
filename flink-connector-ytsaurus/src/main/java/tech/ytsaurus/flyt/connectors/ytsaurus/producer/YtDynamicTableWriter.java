@@ -15,6 +15,7 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -170,6 +171,11 @@ public class YtDynamicTableWriter implements Serializable {
 
     private transient String acquiredLock;
 
+    @Nullable
+    private final transient Runnable commitListener;
+
+    private final AtomicBoolean closed = new AtomicBoolean();
+
     // Shared data metrics delegate (managed by pool, not by individual writers)
     private final DataMetricsWriterDelegate dataMetrics;
 
@@ -186,7 +192,8 @@ public class YtDynamicTableWriter implements Serializable {
                                 @Nullable ReshardProvider reshardProvider,
                                 YtWriterOptions ytWriterOptions,
                                 LocksProvider locksProvider,
-                                DataMetricsWriterDelegate dataMetrics) {
+                                DataMetricsWriterDelegate dataMetrics,
+                                @Nullable Runnable commitListener) {
         this.ytConverter = ytConverter;
         this.path = ytInfo.getPath();
         this.ysonSchemaString = ytInfo.getYsonSchemaString();
@@ -202,6 +209,7 @@ public class YtDynamicTableWriter implements Serializable {
         this.ytWriterOptions = ytWriterOptions;
         this.locksProvider = locksProvider;
         this.dataMetrics = dataMetrics;
+        this.commitListener = commitListener;
     }
 
 
@@ -245,13 +253,17 @@ public class YtDynamicTableWriter implements Serializable {
             transactionCommitter.scheduleAtFixedRate(() -> {
                 if (lastTransactionCommit.get() + ytWriterOptions.getCommitTransactionPeriod().toMillis()
                         < System.currentTimeMillis()) {
+                    boolean committed = false;
                     commitTransactionLock.lock();
                     try {
-                        commitTransaction();
+                        committed = commitTransaction();
                     } catch (Exception e) {
                         error.set(e);
                     } finally {
                         commitTransactionLock.unlock();
+                    }
+                    if (committed) {
+                        notifyCommit();
                     }
                 }
             }, 0L, ytWriterOptions.getCommitTransactionPeriod().toMillis(), TimeUnit.MILLISECONDS);
@@ -436,6 +448,9 @@ public class YtDynamicTableWriter implements Serializable {
     }
 
     public void close() {
+        if (!closed.compareAndSet(false, true)) {
+            return;
+        }
         log.info("Begin closing writer {}", path.getFullPath());
         List<Exception> errors = new ArrayList<>();
 
@@ -481,14 +496,18 @@ public class YtDynamicTableWriter implements Serializable {
 
     private void flushData() {
         checkError();
+        boolean committed;
         flushModificationLock.lock();
         commitTransactionLock.lock();
         try {
             flushModification();
-            commitTransaction();
+            committed = commitTransaction();
         } finally {
             commitTransactionLock.unlock();
             flushModificationLock.unlock();
+        }
+        if (committed) {
+            notifyCommit();
         }
     }
 
@@ -751,8 +770,9 @@ public class YtDynamicTableWriter implements Serializable {
     }
 
     @SneakyThrows
-    private void commitTransaction() {
+    private boolean commitTransaction() {
         checkError();
+        boolean committedData = false;
         if (currentTransaction != null && rowsInTransaction.get() != 0) {
             FutureUtils.allOf(transactionDataBuffer).get(ytWriterOptions.getTransactionTimeout().getSeconds(),
                     TimeUnit.SECONDS);
@@ -772,15 +792,17 @@ public class YtDynamicTableWriter implements Serializable {
                     lastNonCommittedTrackableField.get()));
             log.info("Commit successful transaction {} with {} rows for table {}",
                     currentTransactionId, committedRows, getPath());
+            committedData = true;
         } else {
             log.info("No data to commit in writer for {}", getPath());
         }
         long current = System.currentTimeMillis();
         if (lastCommitTimestamp.get() == VALUE_METRIC_CLOSED) {
             log.error("Preventing reset of last commit timestamp: was=-1, now={} (we're closed)", current);
-            return;
+            return false;
         }
         lastCommitTimestamp.set(current);
+        return committedData;
     }
 
     private void commitWithRetry() throws InterruptedException {
@@ -875,6 +897,12 @@ public class YtDynamicTableWriter implements Serializable {
 
     public boolean isBusy() {
         return rowsInBuffer.get() != 0 || rowsInTransaction.get() != 0;
+    }
+
+    private void notifyCommit() {
+        if (commitListener != null) {
+            commitListener.run();
+        }
     }
 
     @Override

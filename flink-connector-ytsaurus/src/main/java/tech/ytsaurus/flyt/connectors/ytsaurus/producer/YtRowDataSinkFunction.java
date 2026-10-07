@@ -5,7 +5,6 @@ import java.time.Instant;
 import javax.annotation.Nullable;
 
 import org.apache.flink.util.Preconditions;
-import lombok.SneakyThrows;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.runtime.state.FunctionInitializationContext;
@@ -133,9 +132,7 @@ public class YtRowDataSinkFunction extends RichSinkFunction<RowData> implements 
 
     @Override
     public void snapshotState(FunctionSnapshotContext context) {
-        for (YtDynamicTableWriter writer : pool.getWriters()) {
-            writer.snapshotState(context.getCheckpointId());
-        }
+        pool.snapshotState(context.getCheckpointId());
     }
 
     @Override
@@ -151,21 +148,21 @@ public class YtRowDataSinkFunction extends RichSinkFunction<RowData> implements 
                 ytWriterOptions.getLocksConfig().getLocksProviderName(),
                 ytWriterOptions.getLocksConfig().getConfig());
 
-        this.pool = new YtDynamicTableWriterPool(
-                null,  // cache - will be created by constructor
-                this::makeYtClient,
-                ytConverters,
-                path,
-                ysonSchemaString,
-                trackableField,
-                retryStrategy.get(),
-                getRuntimeContext(),
-                tableAttributes,
-                reshardingConfig,
-                ytWriterOptions,
-                locksProvider,
-                originalType,
-                dataMetricsConfig);
+        this.pool = YtDynamicTableWriterPool.builder()
+                .clientSupplier(this::makeYtClient)
+                .ytConverter(ytConverters)
+                .path(path)
+                .ysonSchemaString(ysonSchemaString)
+                .trackableField(trackableField)
+                .retryStrategy(retryStrategy.get())
+                .context(getRuntimeContext())
+                .tableAttributes(tableAttributes)
+                .reshardingConfig(reshardingConfig)
+                .ytWriterOptions(ytWriterOptions)
+                .locksProvider(locksProvider)
+                .dataType(originalType)
+                .dataMetricsConfig(dataMetricsConfig)
+                .build();
         if (eagerInitialization) {
             if (partitionConfig != null) {
                 log.info("Eager initialize map node for partition tables at {}", path.getBasePath());
@@ -180,17 +177,16 @@ public class YtRowDataSinkFunction extends RichSinkFunction<RowData> implements 
                 () -> getRuntimeContext().getMetricGroup());
     }
 
-    @SneakyThrows
     @Override
     public void invoke(RowData value, Context context) {
         if (value == null) {
             return;
         }
-        pool.getOrAcquire(dispatchQuery(value)).write(value);
+        pool.write(dispatchQuery(value), value);
     }
 
     @Override
-    public void finish() throws Exception {
+    public void finish() {
         log.info("Finish sink function for table: {}", path);
         pool.finish();
     }
