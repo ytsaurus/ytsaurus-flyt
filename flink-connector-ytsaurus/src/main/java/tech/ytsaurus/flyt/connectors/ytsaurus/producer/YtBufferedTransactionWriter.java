@@ -379,7 +379,11 @@ public final class YtBufferedTransactionWriter {
                 .setSchema(schema);
     }
 
-    private void checkError() {
+    public void recordError(Throwable failure) {
+        error.compareAndSet(null, failure);
+    }
+
+    public void checkError() {
         Throwable e = this.error.get();
         if (e != null) {
             throw new RuntimeException("Error while writing to YT", e);
