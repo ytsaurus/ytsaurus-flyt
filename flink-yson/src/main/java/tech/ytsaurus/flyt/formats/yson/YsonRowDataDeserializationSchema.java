@@ -2,13 +2,14 @@ package tech.ytsaurus.flyt.formats.yson;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.util.List;
 
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.formats.common.TimestampFormat;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.types.logical.RowType;
+import tech.ytsaurus.ysontree.YTreeBinarySerializer;
 import tech.ytsaurus.ysontree.YTreeNode;
-import tech.ytsaurus.ysontree.YTreeTextSerializer;
 
 import tech.ytsaurus.flyt.formats.yson.adapter.YTreeNodeDeserializationSchema;
 
@@ -67,7 +68,12 @@ public class YsonRowDataDeserializationSchema implements YTreeNodeDeserializatio
     }
 
     public YTreeNode deserializeToYsonNode(byte[] message) throws IOException {
-        return YTreeTextSerializer.deserialize(new ByteArrayInputStream(message));
+        // The encoder emits a one-item list fragment, while other producers send a plain node.
+        List<YTreeNode> nodes = YTreeBinarySerializer.deserializeAll(new ByteArrayInputStream(message));
+        if (nodes.size() != 1) {
+            throw new IOException("Expected exactly one YSON record, got " + nodes.size());
+        }
+        return nodes.get(0);
     }
 
     public RowData convertToRowData(YTreeNode message) {
