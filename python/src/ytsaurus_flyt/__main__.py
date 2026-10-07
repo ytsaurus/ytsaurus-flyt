@@ -23,6 +23,7 @@ from ytsaurus_flyt.flink_lib_jars import (
     partition_flink_lib_jars_for_delivery,
     resolve_flink_lib_jars,
 )
+from ytsaurus_flyt.job_proxy import job_yt_proxy
 from ytsaurus_flyt.jobshell_resolve import flyt_profile_marker, resolve_default_jobshell_argv
 from ytsaurus_flyt.launcher import launch_vanilla_job
 from ytsaurus_flyt.layer_builder import (
@@ -45,9 +46,10 @@ from ytsaurus_flyt.profiles import (
     save_profile_dict,
     write_active_profile_name,
 )
+from ytsaurus_flyt.sql_job import SQL_JOB_COMMAND, build_sql_job_project
 from ytsaurus_flyt.validate_config import validate_flyt_config
 from ytsaurus_flyt.wheel_utils import build_wheel
-from ytsaurus_flyt.yt_client import env_yt_token, make_yt_client
+from ytsaurus_flyt.yt_client import env_yt_token, make_yt_client, proxy_url_from_client
 
 
 @click.group()
@@ -431,7 +433,7 @@ def run(
     force_rebuild_layer: bool,
     headless: bool,
 ) -> None:
-    """Launch a PyFlink job. Uses the active profile and auto wheel build."""
+    """Launch a PyFlink job, or a Flink SQL script (*.sql). Uses the active profile and auto wheel build."""
     _setup_logging()
     _echo_profile_line(ctx)
     job_command = shlex.join(list(job_argv))
@@ -455,10 +457,23 @@ def run(
         except ValueError as e:
             raise click.ClickException(str(e)) from e
     proxy_f, pool_f = _resolve_connection(profile_data, proxy, pool)
+    yt_client = make_yt_client(proxy_f)
 
     with contextlib.ExitStack() as stack:
         project_root: Optional[str] = None
-        if not wheel_path and not source_dir:
+        if job_argv[0].endswith(".sql"):
+            if wheel_path or source_dir:
+                raise click.UsageError("--wheel and --source-dir do not apply to a .sql script")
+            # The bundled SQL runner becomes the job; the arguments after the script are its own.
+            source_dir = stack.enter_context(tempfile.TemporaryDirectory(prefix="flyt_sql_job_"))
+            build_sql_job_project(job_argv[0], source_dir)
+            runner_args = list(job_argv[1:])
+            if "--result-table" in runner_args:
+                # Written from inside the job: the proxy as the jobs reach it.
+                proxy_url = proxy_url_from_client(yt_client) or proxy_f
+                runner_args += ["--yt-proxy", job_yt_proxy(yt_client, proxy_url, cfg.job_yt_proxy).split(",")[0]]
+            job_command = shlex.join([*SQL_JOB_COMMAND, *runner_args])
+        elif not wheel_path and not source_dir:
             proj = find_pyproject_for_job(job_command)
             if proj:
                 logging.getLogger(__name__).info("Building wheel from %s", proj)
@@ -488,7 +503,7 @@ def run(
             try:
                 launch_vanilla_job(
                     config=cfg,
-                    yt_client=make_yt_client(proxy_f),
+                    yt_client=yt_client,
                     job_command=job_command,
                     pool=pool_f,
                     wheel_path=wheel_path,
