@@ -1,5 +1,5 @@
 group = "tech.ytsaurus.flyt.connectors.ytsaurus"
-version = "1.12.3"
+version = "1.13.0"
 
 plugins {
     id("com.peterabeles.gversion") version "1.10.3"
@@ -44,6 +44,7 @@ dependencies {
     testImplementation("org.apache.flink:flink-table-common:1.20.1")
     testImplementation("org.apache.flink:flink-table-runtime:1.20.1")
     testImplementation("org.apache.flink:flink-shaded-guava:31.1-jre-17.0")
+    testRuntimeOnly("org.apache.flink:flink-json:1.20.1")
 
     testImplementation("org.slf4j:slf4j-log4j12:2.0.17")
     testImplementation("org.mockito:mockito-inline:5.1.1")
