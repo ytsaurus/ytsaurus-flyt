@@ -36,6 +36,10 @@ import tech.ytsaurus.flyt.connectors.ytsaurus.utils.FutureUtils;
 public final class YtBufferedTransactionWriter {
     private static final int VALUE_METRIC_CLOSED = -1;
 
+    // Every blocking step of close is bounded by this, so a stuck YT cannot hold close for minutes
+    // and trip Flink's task cancellation watchdog (180s by default), which kills the whole TaskManager.
+    private static final Duration CLOSE_STEP_TIMEOUT = Duration.ofSeconds(10);
+
     private final YTsaurusClient client;
     private final String path;
     private final TableSchema schema;
@@ -55,7 +59,8 @@ public final class YtBufferedTransactionWriter {
     private List<CompletableFuture<Void>> transactionDataBuffer;
     private final List<Map<String, ?>> uncommittedRows;
     private final List<Map<String, ?>> unflushedRows;
-    private ApiServiceTransaction currentTransaction;
+    // Written under commitTransactionLock, but close reads it from another thread without the lock.
+    private volatile ApiServiceTransaction currentTransaction;
     private ModifyRowsRequest.Builder modificationBuffer;
     private final Lock commitTransactionLock;
     private final Lock flushModificationLock;
@@ -153,51 +158,52 @@ public final class YtBufferedTransactionWriter {
     public List<Exception> closeAsyncTasks() {
         log.info("Close async tasks: {}", path);
         List<Exception> errors = new ArrayList<>();
-
-        if (transactionCommitter != null) {
-            try {
-                transactionCommitter.shutdown();
-                boolean terminated = transactionCommitter
-                        .awaitTermination(transactionTimeout.toMillis(), TimeUnit.MILLISECONDS);
-                if (!terminated) {
-                    log.warn("Failed to terminate committer for writer {}", path);
-                    transactionCommitter.shutdownNow();
-                } else {
-                    log.info("Transaction commiter closed successfully for writer {}", path);
-                }
-            } catch (InterruptedException e) {
-                log.error("Writer {} closure interrupted", path, e);
-                transactionCommitter.shutdownNow();
-                Thread.currentThread().interrupt();
-                errors.add(e);
-            } catch (Exception e) {
-                log.error("Error closing transactionCommitter tasks: {}.", path, e);
-                errors.add(e);
-            }
-        }
-
-        if (modificationFlusher != null) {
-            try {
-                modificationFlusher.shutdown();
-                boolean terminated = modificationFlusher
-                        .awaitTermination(transactionTimeout.toMillis(), TimeUnit.MILLISECONDS);
-                if (!terminated) {
-                    log.warn("Failed to terminate flusher for writer {}", path);
-                    modificationFlusher.shutdownNow();
-                } else {
-                    log.info("Modification flusher closed successfully for writer {}", path);
-                }
-            } catch (InterruptedException e) {
-                log.error("Writer {} closure interrupted", path, e);
-                modificationFlusher.shutdownNow();
-                Thread.currentThread().interrupt();
-                errors.add(e);
-            } catch (Exception e) {
-                log.error("Error closing modificationFlusher tasks: {}.", path, e);
-                errors.add(e);
-            }
-        }
+        shutdownExecutor(transactionCommitter, "transaction committer", errors);
+        shutdownExecutor(modificationFlusher, "modification flusher", errors);
         return errors;
+    }
+
+    private void shutdownExecutor(@Nullable ScheduledExecutorService executor, String name, List<Exception> errors) {
+        if (executor == null) {
+            return;
+        }
+        try {
+            // Interrupt rather than drain: a pending flush or commit is not worth waiting for on close.
+            executor.shutdownNow();
+            if (executor.awaitTermination(CLOSE_STEP_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS)) {
+                log.info("Stopped {} for writer {}", name, path);
+            } else {
+                log.warn("{} for writer {} did not stop within {}", name, path, CLOSE_STEP_TIMEOUT);
+            }
+        } catch (InterruptedException e) {
+            log.warn("Interrupted while stopping {} for writer {}", name, path, e);
+            Thread.currentThread().interrupt();
+            errors.add(e);
+        } catch (Exception e) {
+            log.error("Error stopping {} for writer {}", name, path, e);
+            errors.add(e);
+        }
+    }
+
+    // Frees the YT transaction and its row locks right away instead of leaving them to expire server-side.
+    public void abortCurrentTransaction() {
+        ApiServiceTransaction transaction = currentTransaction;
+        if (transaction == null) {
+            return;
+        }
+        currentTransaction = null;
+        int droppedRows = rowsInTransaction.get() + rowsInBuffer.get();
+        try {
+            CompletableFuture<Void> abort = transaction.abort();
+            if (abort != null) {
+                abort.get(CLOSE_STEP_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+            }
+            log.info("Aborted transaction {} with {} uncommitted rows for table {}",
+                    transaction.getId(), droppedRows, path);
+        } catch (Exception e) {
+            log.warn("Unable to abort transaction {} with {} uncommitted rows for table {}; it will expire on its own",
+                    transaction.getId(), droppedRows, path, e);
+        }
     }
 
     public void write(Supplier<? extends Map<String, ?>> rowSupplier) {
@@ -249,6 +255,7 @@ public final class YtBufferedTransactionWriter {
         }
     }
 
+    @SneakyThrows
     public void flush() {
         checkError();
         boolean committed;
@@ -260,6 +267,11 @@ public final class YtBufferedTransactionWriter {
         } finally {
             commitTransactionLock.unlock();
             flushModificationLock.unlock();
+        }
+        // An interrupted commit must surface here, or a checkpoint could be acknowledged
+        // with the rows still sitting in an open transaction.
+        if (!committed && Thread.currentThread().isInterrupted()) {
+            throw new InterruptedException("Commit interrupted for table " + path);
         }
         if (committed) {
             notifyCommit();
@@ -281,15 +293,26 @@ public final class YtBufferedTransactionWriter {
         ).join();
     }
 
+    /**
+     * Commits the current transaction, retrying on failure.
+     *
+     * @return {@code true} if data was committed. {@code false} if there was nothing to commit, or the thread
+     * was interrupted: then the interrupt flag is restored and the transaction and its rows are left in place.
+     */
     @SneakyThrows
     private boolean commitTransaction() {
         checkError();
         boolean committedData = false;
         if (currentTransaction != null && rowsInTransaction.get() != 0) {
-            FutureUtils.allOf(transactionDataBuffer).get(transactionTimeout.getSeconds(), TimeUnit.SECONDS);
+            try {
+                FutureUtils.allOf(transactionDataBuffer).get(transactionTimeout.getSeconds(), TimeUnit.SECONDS);
+                commitWithRetry();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                log.warn("Commit interrupted for table {}, {} rows left uncommitted", path, rowsInTransaction.get());
+                return false;
+            }
             transactionDataBuffer = new ArrayList<>();
-
-            commitWithRetry();
 
             final GUID currentTransactionId = currentTransaction.getId();
             currentTransaction = null;
@@ -321,11 +344,11 @@ public final class YtBufferedTransactionWriter {
 
     private void commitWithRetry() throws InterruptedException {
         RetryStrategy backoffRetryStrategy = retryStrategy;
-        while (backoffRetryStrategy.getNumRemainingRetries() >= 0) {
+        while (true) {
             try {
                 currentTransaction.commit().join();
                 onCommitSuccess.run();
-                break;
+                return;
             } catch (Exception e) {
                 log.error("Unable to commit transaction {} for table {}", currentTransaction.getId(), path, e);
                 sumFailedRows.getAndAdd(rowsInTransaction.get());
@@ -334,8 +357,8 @@ public final class YtBufferedTransactionWriter {
                             currentTransaction.getId(), path, e);
                     throw e;
                 }
-                backoffRetryStrategy = backoffRetryStrategy.getNextRetryStrategy();
                 Thread.sleep(backoffRetryStrategy.getRetryDelay().toMillis());
+                backoffRetryStrategy = backoffRetryStrategy.getNextRetryStrategy();
 
                 currentTransaction = createTransaction();
                 log.info("Start retry transaction {} for table {}", currentTransaction.getId(), path);
