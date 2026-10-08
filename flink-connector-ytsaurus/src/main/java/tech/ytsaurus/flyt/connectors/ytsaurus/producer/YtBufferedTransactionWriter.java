@@ -36,9 +36,6 @@ import tech.ytsaurus.flyt.connectors.ytsaurus.utils.FutureUtils;
 public final class YtBufferedTransactionWriter {
     private static final int VALUE_METRIC_CLOSED = -1;
 
-    private static final Duration TRANSACTION_EXPIRATION = Duration.ofSeconds(10);
-    private static final Duration TRANSACTION_PING_PERIOD = Duration.ofSeconds(3);
-
     private final YTsaurusClient client;
     private final String path;
     private final TableSchema schema;
@@ -154,7 +151,7 @@ public final class YtBufferedTransactionWriter {
     }
 
     public void closeAsyncTasks() {
-        // interrupt committer thread, ongoing transaction will be automatically aborted after TRANSACTION_EXPIRATION ttl
+        // Interrupt the committer thread; the open transaction is aborted automatically after yt client ttl (15 sec)
         log.info("Close async tasks: {}", path);
         if (transactionCommitter != null) {
             transactionCommitter.shutdownNow();
@@ -247,8 +244,6 @@ public final class YtBufferedTransactionWriter {
                         .setType(TransactionType.Tablet)
                         .setSticky(true)
                         .setAtomicity(atomicity)
-                        .setTransactionTimeout(TRANSACTION_EXPIRATION)
-                        .setPingPeriod(TRANSACTION_PING_PERIOD)
                         .build()
         ).join();
     }

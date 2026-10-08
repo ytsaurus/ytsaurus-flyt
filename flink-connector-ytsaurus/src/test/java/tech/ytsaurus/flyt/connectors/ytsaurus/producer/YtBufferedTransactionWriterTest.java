@@ -209,6 +209,22 @@ class YtBufferedTransactionWriterTest {
     }
 
     @Test
+    void transactionsRelyOnTheClientDefaultExpiration() {
+        YtBufferedTransactionWriter writer = newWriter(2, 10, noRetry(), () -> { }, () -> { });
+
+        writer.write(() -> row(1));
+        writer.flushModifications();
+
+        // Close never aborts the transaction, so the server must do it: the request has to carry
+        // the client's default 15s timeout, kept alive only by the client's 5s pings.
+        ArgumentCaptor<StartTransaction> request = ArgumentCaptor.forClass(StartTransaction.class);
+        verify(client).startTransaction(request.capture());
+        assertThat(request.getValue().getTransactionTimeout()).isEqualTo(Duration.ofSeconds(15));
+        assertThat(request.getValue().getPing()).isTrue();
+        assertThat(request.getValue().getPingPeriod()).contains(Duration.ofSeconds(5));
+    }
+
+    @Test
     void emptyCommitUpdatesTimestampWithoutInvokingCommitHooks() throws Exception {
         Runnable onCommitSuccess = mock(Runnable.class);
         Runnable onTransactionCommitted = mock(Runnable.class);
