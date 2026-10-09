@@ -45,6 +45,20 @@ def validate_flyt_config(
     rows: List[Tuple[str, bool, str]] = []
 
     rows.append(("Runtime mode", True, "SquashFS"))
+    if config.is_application_cluster:
+        tm_preset = config.taskmanager_preset or "same as JobManager"
+        rows.append(
+            (
+                "cluster_mode",
+                True,
+                f"application: 1 JobManager + {config.effective_taskmanager_count} TaskManager(s) "
+                f"x {config.taskmanager_slots} slot(s), parallelism.default {config.effective_parallelism}, "
+                f"TaskManager preset {tm_preset}",
+            )
+        )
+        rows.append(("discovery_timeout", True, f"{config.discovery_timeout}s for TaskManagers to find the JobManager"))
+    else:
+        rows.append(("cluster_mode", True, "minicluster (single job, in-JVM MiniCluster)"))
 
     ok_pkgs = bool(config.runtime_python_packages)
     rows.append(

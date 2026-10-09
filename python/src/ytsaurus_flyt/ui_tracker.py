@@ -75,8 +75,16 @@ def _job_still_running(client: "YtClient", op_id: str, job_id: str) -> bool:
     return any((j.get("id") or j.get("job_id")) == job_id for j in jobs)
 
 
+# Application mode: only the JobManager task serves the Web UI.
+_TASKMANAGER_TASK_NAME = "taskmanager"
+
+
+def _ui_candidate_jobs(jobs: List[dict]) -> List[dict]:
+    return [j for j in jobs if str(j.get("task_name") or "").lower() != _TASKMANAGER_TASK_NAME]
+
+
 def _find_job_with_ipv6(client: "YtClient", op_id: str) -> Optional[Tuple[str, List[str]]]:
-    for job in _list_running_jobs(client, op_id) or []:
+    for job in _ui_candidate_jobs(_list_running_jobs(client, op_id) or []):
         job_id = job.get("id") or job.get("job_id")
         if not job_id:
             continue

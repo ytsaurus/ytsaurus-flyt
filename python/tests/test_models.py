@@ -107,3 +107,19 @@ class TestJobmanagerParams:
         params = JobmanagerParams()
         assert params.cpu == 2
         assert params.memory == parse_memory("4G")
+
+
+class TestTaskmanagerParams:
+    def test_defaults(self):
+        from ytsaurus_flyt.models import TaskmanagerParams
+
+        tm = TaskmanagerParams()
+        assert (tm.cpu, tm.memory, tm.count, tm.slots) == (2, parse_memory("4G"), 1, 1)
+
+    def test_rejects_zero_count_or_slots(self):
+        from ytsaurus_flyt.models import TaskmanagerParams
+
+        with pytest.raises(ValueError, match="count"):
+            TaskmanagerParams(count=0)
+        with pytest.raises(ValueError, match="slots"):
+            TaskmanagerParams(slots=0)
