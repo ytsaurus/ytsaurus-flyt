@@ -9,33 +9,20 @@ import shlex
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Iterator, Optional, Tuple
 
 import click
 import yaml
 
+if TYPE_CHECKING:
+    from ytsaurus_flyt.progress import Reporter
+
 from ytsaurus_flyt.cli_helpers import find_pyproject_for_job, job_command_relative_to_project, resolve_proxy_pool
-from ytsaurus_flyt.config import DEFAULT_JAVA_HOME, FlytConfig
-from ytsaurus_flyt.flink_lib_jars import (
-    download_flink_lib_jars,
-    partition_flink_lib_jars_for_delivery,
-    resolve_flink_lib_jars,
-)
-from ytsaurus_flyt.jobshell_resolve import flyt_profile_marker, resolve_default_jobshell_argv
-from ytsaurus_flyt.launcher import launch_vanilla_job
-from ytsaurus_flyt.layer_builder import (
-    build_runtime_squashfs,
-    compute_layer_hash,
-    ensure_runtime_layer,
-    ensure_unsquashfs_tool_remote,
-    upload_squashfs_layer,
-)
-from ytsaurus_flyt.models import ClusterPreset
-from ytsaurus_flyt.profiles import (
-    default_cypress_base_path,
+from ytsaurus_flyt.config.config import FlytConfig
+from ytsaurus_flyt.config.models import ClusterPreset
+from ytsaurus_flyt.config.profiles import (
     list_profile_names,
     load_profile_dict,
-    merge_yaml_dict,
     profile_dict_to_flyt_config,
     profile_yaml_path,
     read_active_profile_name,
@@ -44,9 +31,17 @@ from ytsaurus_flyt.profiles import (
     save_profile_dict,
     write_active_profile_name,
 )
-from ytsaurus_flyt.validate_config import validate_flyt_config
-from ytsaurus_flyt.wheel_utils import build_wheel
-from ytsaurus_flyt.yt_client import env_yt_token, make_yt_client
+from ytsaurus_flyt.config.validate_config import validate_flyt_config
+from ytsaurus_flyt.runtime.layer_builder import (
+    build_runtime_squashfs,
+    build_unsquashfs_binary,
+    upload_local_file,
+    upload_squashfs_layer,
+)
+from ytsaurus_flyt.runtime.wheel_utils import build_wheel
+from ytsaurus_flyt.submit.launcher import launch_vanilla_job
+from ytsaurus_flyt.submit.yt_client import env_yt_token, make_yt_client
+from ytsaurus_flyt.tracking.jobshell_resolve import flyt_profile_marker, resolve_default_jobshell_argv
 
 
 @click.group()
@@ -64,11 +59,90 @@ def cli(ctx: click.Context, global_profile: Optional[str]) -> None:
     ctx.obj["profile"] = global_profile
 
 
-def _setup_logging() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    )
+_UI_TRACKER_LOGGER = "ytsaurus_flyt.tracking.ui_tracker"
+_YT_LOGGER = "Yt"  # yt client's own logger (propagate=False, owns its stderr handler)
+
+
+def _configure_run_logging(verbose: bool, debug: bool, reporter: "Reporter") -> None:
+    """Configure ``flyt run`` logging: terse routes warnings/errors through ``reporter`` (above the
+    spinner) while keeping INFO flowing to the Flink UI watcher; -v adds INFO, --debug adds yt DEBUG."""
+    from ytsaurus_flyt.progress import FirstLineFormatter, ReporterLogHandler  # noqa: PLC0415
+
+    root = logging.getLogger()
+    for h in root.handlers[:]:
+        root.removeHandler(h)
+    yt = logging.getLogger(_YT_LOGGER)
+    ui = logging.getLogger(_UI_TRACKER_LOGGER)
+    for h in ui.handlers[:]:
+        ui.removeHandler(h)
+    ui.propagate, ui.level = True, logging.NOTSET
+
+    if verbose or debug:
+        level = logging.DEBUG if debug else logging.INFO
+        logging.basicConfig(level=level, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s", force=True)
+        yt.setLevel(level)
+        for h in yt.handlers:
+            h.setLevel(level)
+        if debug:
+            os.environ.setdefault("YT_LOG_LEVEL", "DEBUG")
+        return
+
+    # Terse: warnings/errors go through the reporter (printed above the spinner), one line each.
+    root.setLevel(logging.INFO)  # keep records flowing to the watcher's Yt handler
+    flyt_handler = ReporterLogHandler(reporter, level=logging.WARNING)
+    flyt_handler.setFormatter(FirstLineFormatter("%(levelname)s: %(message)s"))
+    root.addHandler(flyt_handler)
+
+    # Replace the yt client's own stderr handler so its retry/error spam can't trample the spinner.
+    for h in yt.handlers[:]:
+        yt.removeHandler(h)
+    yt.setLevel(logging.INFO)
+    yt.propagate = False
+    yt_handler = ReporterLogHandler(reporter, level=logging.WARNING)
+    yt_handler.setFormatter(FirstLineFormatter("%(message)s"))
+    yt.addHandler(yt_handler)
+
+    # The watcher's Flink Web UI announcement (INFO) stays visible, also via the reporter.
+    ui.setLevel(logging.INFO)
+    ui.propagate = False
+    ui_handler = ReporterLogHandler(reporter, level=logging.INFO)
+    ui_handler.setFormatter(logging.Formatter("%(message)s"))
+    ui.addHandler(ui_handler)
+
+
+def _cli_reporter(verbose: bool = False, debug: bool = False) -> "Reporter":
+    """Build the shared progress reporter (used by every command) and route logging through it."""
+    from ytsaurus_flyt.progress import make_reporter  # noqa: PLC0415
+
+    rep = make_reporter(verbose or debug, logging.getLogger("ytsaurus_flyt"))
+    _configure_run_logging(verbose, debug, rep)
+    return rep
+
+
+def _format_launch_error(exc: Exception) -> str:
+    """Terse error: the lead line, plus the real last line for wrapped subprocess failures."""
+    lines = [ln.strip() for ln in str(exc).splitlines() if ln.strip()]
+    hint = "Run with -v for the full traceback (--debug for yt client logs)."
+    if not lines:
+        return f"{exc.__class__.__name__}\n{hint}"
+    summary = lines[0]
+    tail = lines[-1]
+    if tail != summary and tail not in ("stdout:", "stderr:"):
+        summary = f"{summary}\n  → {tail}"
+    return f"{summary}\n{hint}"
+
+
+@contextlib.contextmanager
+def _clean_errors(verbose: bool) -> Iterator[None]:
+    """Turn launcher failures into a terse one-line error (full traceback under -v)."""
+    try:
+        yield
+    except click.ClickException:
+        raise
+    except Exception as exc:  # noqa: BLE001 - surfaced cleanly, re-raised under -v
+        if verbose:
+            raise
+        raise click.ClickException(_format_launch_error(exc)) from exc
 
 
 def _load_flyt_config_from_profile(ctx: Optional[click.Context]) -> Tuple[FlytConfig, Dict[str, Any]]:
@@ -87,16 +161,6 @@ def _load_flyt_config_from_profile(ctx: Optional[click.Context]) -> Tuple[FlytCo
     return cfg, profile_data
 
 
-def _echo_profile_line(ctx: Optional[click.Context]) -> None:
-    """Print the effective profile name (CLI --profile, FLYT_PROFILE, or active file)."""
-    gp = ctx.obj.get("profile") if ctx else None
-    name = resolve_effective_profile_name(gp)
-    if name:
-        click.echo(f"Profile: {name!r}")
-    else:
-        click.echo("Profile: (none)")
-
-
 def _resolve_connection(
     profile_data: Dict[str, Any],
     cli_proxy: Optional[str],
@@ -109,17 +173,16 @@ def _resolve_connection(
         raise click.ClickException(str(e)) from e
 
 
-def _default_profile_body(proxy: str, pool: str, preset: str, cypress: str) -> Dict[str, Any]:
+def _default_profile_body(proxy: str, pool: str, preset: str) -> Dict[str, Any]:
     return {
         "proxy": proxy,
         "pool": pool,
         "preset": preset,
-        "cypress_base_path": cypress,
         "squashfs_layer_delivery": "layer_paths",
-        "runtime_python_packages": ["apache-flink==1.20.1"],
-        "runtime_python_version": "3.8",
-        "java_home": DEFAULT_JAVA_HOME,
-        "python_bin": "/usr/bin/python3",
+        "squashfs_layer_paths": [],
+        "flink_version": "1.20.1",
+        "runtime_python_version": "3.10",
+        "java_version": "11",
         "jar_scan_folder": "",
     }
 
@@ -134,29 +197,24 @@ def profile_cli() -> None:
 @click.option("--proxy", required=True, help="YT HTTP proxy URL.")
 @click.option("--pool", default="default", show_default=True)
 @click.option("--preset", default="micro", show_default=True)
-@click.option(
-    "--cypress-base-path",
-    default=None,
-    help="Cypress prefix for layers/tools (default: //home/flyt/clusters/<name>).",
-)
 def profile_add(
     name: str,
     proxy: str,
     pool: str,
     preset: str,
-    cypress_base_path: Optional[str],
 ) -> None:
     """Create a profile. If it is the first profile, it becomes active."""
+    rep = _cli_reporter()
+    rep.header(name)
     if profile_yaml_path(name).exists():
         raise click.ClickException(f"Profile already exists: {name!r}")
-    cypress = (cypress_base_path or "").strip() or default_cypress_base_path(name)
-    body = _default_profile_body(proxy, pool, preset, cypress)
+    body = _default_profile_body(proxy, pool, preset)
     save_profile_dict(name, body)
     names = list_profile_names()
     if len(names) == 1 or not read_active_profile_name():
         write_active_profile_name(name)
-        click.echo(f"Active profile set to {name!r}.")
-    click.echo(f"Wrote profile {name!r} to {profile_yaml_path(name)}")
+        rep.line(f"Active profile set to {name!r}.")
+    rep.line(f"Wrote profile {name!r} to {profile_yaml_path(name)}")
 
 
 @profile_cli.command("import")
@@ -165,20 +223,16 @@ def profile_add(
 @click.option("--proxy", default=None, help="Override YT HTTP proxy URL.")
 @click.option("--pool", default=None, help="Override pool.")
 @click.option("--preset", default=None, help="Override preset.")
-@click.option(
-    "--cypress-base-path",
-    default=None,
-    help="Override Cypress prefix (default: from file, or //home/flyt/clusters/<name> if missing).",
-)
 def profile_import(
     file: Path,
     name: str,
     proxy: Optional[str],
     pool: Optional[str],
     preset: Optional[str],
-    cypress_base_path: Optional[str],
 ) -> None:
     """Import a YAML file as a named profile. If it is the first profile, it becomes active."""
+    rep = _cli_reporter()
+    rep.header(name)
     if profile_yaml_path(name).exists():
         raise click.ClickException(f"Profile already exists: {name!r}")
     with open(file, encoding="utf-8") as f:
@@ -192,28 +246,25 @@ def profile_import(
         data["pool"] = pool.strip()
     if preset is not None:
         data["preset"] = preset.strip()
-    cbp_cli = (cypress_base_path or "").strip()
-    if cbp_cli:
-        data["cypress_base_path"] = cbp_cli
-    elif not (str(data.get("cypress_base_path") or "").strip()):
-        data["cypress_base_path"] = default_cypress_base_path(name)
     save_profile_dict(name, data)
     out_path = profile_yaml_path(name)
     names = list_profile_names()
     if len(names) == 1 or not read_active_profile_name():
         write_active_profile_name(name)
-        click.echo(f"Active profile set to {name!r}.")
-    click.echo(f"Imported profile {name!r} to {out_path}")
+        rep.line(f"Active profile set to {name!r}.")
+    rep.line(f"Imported profile {name!r} to {out_path}")
 
 
 @profile_cli.command("select")
 @click.argument("name")
 def profile_select(name: str) -> None:
     """Set the active profile."""
+    rep = _cli_reporter()
+    rep.header(name)
     if not profile_yaml_path(name).is_file():
         raise click.ClickException(f"Unknown profile: {name!r}")
     write_active_profile_name(name)
-    click.echo(f"Active profile: {name!r}")
+    rep.line(f"Active profile: {name!r}")
 
 
 @profile_cli.command("update")
@@ -221,6 +272,8 @@ def profile_select(name: str) -> None:
 @click.argument("file", type=click.Path(exists=True, dir_okay=False, path_type=Path))
 def profile_update(name: str, file: Path) -> None:
     """Replace an existing profile's body with the YAML at FILE."""
+    rep = _cli_reporter()
+    rep.header(name)
     if not profile_yaml_path(name).is_file():
         raise click.ClickException(f"Unknown profile: {name!r}. Use `flyt profile add` or `flyt profile import`.")
     with open(file, encoding="utf-8") as f:
@@ -228,30 +281,34 @@ def profile_update(name: str, file: Path) -> None:
     if not isinstance(raw, dict):
         raise click.ClickException("Profile file must contain a YAML mapping (object).")
     save_profile_dict(name, dict(raw))
-    click.echo(f"Updated profile {name!r} from {file} at {profile_yaml_path(name)}")
+    rep.line(f"Updated profile {name!r} from {file} at {profile_yaml_path(name)}")
 
 
 @profile_cli.command("remove")
 @click.argument("name")
 def profile_remove(name: str) -> None:
     """Delete a local profile file (does not delete Cypress data)."""
+    rep = _cli_reporter()
+    rep.header(name)
     p = profile_yaml_path(name)
     if not p.is_file():
         raise click.ClickException(f"Unknown profile: {name!r}")
     p.unlink()
     if read_active_profile_name() == name:
         write_active_profile_name(None)
-        click.echo("Cleared active profile (no profile selected).")
-    click.echo(f"Removed {name!r}")
+        rep.line("Cleared active profile (no profile selected).")
+    rep.line(f"Removed {name!r}")
 
 
 @profile_cli.command("list")
 def profile_list() -> None:
     """List profile names and mark the active one."""
+    rep = _cli_reporter()
     active = read_active_profile_name()
+    rep.header(active)
     names = list_profile_names()
     if not names:
-        click.echo("No profiles. Use: flyt profile add <name> --proxy URL")
+        rep.line("No profiles. Use: flyt profile add <name> --proxy URL")
         return
     for n in names:
         mark = " *" if n == active else ""
@@ -264,63 +321,95 @@ def profile_list() -> None:
 def profile_show(name: Optional[str]) -> None:
     """Print a profile YAML (active profile if NAME omitted)."""
     n = name or read_active_profile_name()
+    rep = _cli_reporter()
+    rep.header(n)
     if not n:
         raise click.ClickException("No profile name and no active profile.")
     data = load_profile_dict(n)
     click.echo(yaml.safe_dump(data, default_flow_style=False, allow_unicode=True))
 
 
-@cli.command("install")
+@cli.group("build")
+def build_cli() -> None:
+    """Build flyt artifacts locally and upload them to explicit Cypress paths."""
+
+
+def _verbose_debug_options(f):  # noqa: ANN001
+    f = click.option("--debug", is_flag=True, default=False, help="Verbose logs plus yt client debug logging.")(f)
+    f = click.option("-v", "--verbose", is_flag=True, default=False, help="Show full logs instead of steps.")(f)
+    return f
+
+
+@build_cli.command("layer")
 @click.pass_context
-@click.option("--force", is_flag=True, help="Rebuild SquashFS even if cached on Cypress.")
 @click.option(
-    "--reuse-layers",
-    default=None,
-    help="Use existing Cypress prefix for layers (sets .../layers and .../tools under it).",
+    "--output", "output_path", default=None, type=click.Path(dir_okay=False), help="Write the .squashfs here."
 )
-def install(ctx: click.Context, force: bool, reuse_layers: Optional[str]) -> None:
-    """Build runtime SquashFS (and unsquashfs helper) and upload to the active profile paths."""
-    _setup_logging()
-    _echo_profile_line(ctx)
-    gp = ctx.obj.get("profile")
-    name = resolve_effective_profile_name(gp)
-    if not name:
-        raise click.ClickException(
-            "No profile selected. Run: flyt profile add <name> --proxy URL && flyt profile select <name>"
-        )
-    data = load_profile_dict(name)
-    if reuse_layers:
-        p = reuse_layers.rstrip("/")
-        data = merge_yaml_dict(
-            data,
-            {
-                "squashfs_layer_cache_prefix": f"{p}/layers",
-                "squashfs_tools_cache_prefix": f"{p}/tools",
-            },
-        )
-        save_profile_dict(name, data)
-    cfg = profile_dict_to_flyt_config(data)
-    proxy, _ = _resolve_connection(data, None, None)
-    yt_client = make_yt_client(proxy)
+@click.option("--upload", "upload_path", default=None, help="Upload to this explicit Cypress path.")
+@_verbose_debug_options
+def build_layer(
+    ctx: click.Context, output_path: Optional[str], upload_path: Optional[str], verbose: bool, debug: bool
+) -> None:
+    """Build the Flink runtime SquashFS layer (python + JRE + pyflink).
 
-    for row in validate_flyt_config(cfg, proxy=proxy, yt_client=yt_client):
-        click.echo(f"  [{'OK' if row[1] else '!!'}] {row[0]}: {row[2]}")
+    A local operation — no cluster credentials unless --upload. JARs are never in the layer.
+    """
+    reporter = _cli_reporter(verbose, debug)
+    reporter.header(resolve_effective_profile_name(ctx.obj.get("profile")))
+    if not output_path and not upload_path:
+        raise click.ClickException("Specify --output FILE and/or --upload //cypress/path.")
+    cfg, profile_data = _load_flyt_config_from_profile(ctx)
+    if not (cfg.flink_version or "").strip():
+        raise click.ClickException("flink_version is required in the profile to build a layer.")
 
-    if not cfg.runtime_python_packages:
-        raise click.ClickException("install requires runtime_python_packages in the profile.")
+    with _clean_errors(verbose or debug), tempfile.TemporaryDirectory(prefix="flyt_build_layer_") as tmp:
+        local = output_path or os.path.join(tmp, "runtime.squashfs")
+        build_runtime_squashfs(cfg, local, reporter=reporter)
+        rows = [("layer", output_path)] if output_path else []
+        if upload_path:
+            proxy, _ = _resolve_connection(profile_data, None, None)
+            yt_client = make_yt_client(proxy, cfg.yt_client_config)
+            with reporter.step("Uploading layer to Cypress"):
+                upload_squashfs_layer(
+                    yt_client,
+                    local,
+                    upload_path,
+                    set_filesystem_attribute=(cfg.squashfs_layer_delivery == "layer_paths"),
+                )
+            rows.append(("uploaded", upload_path))
+        reporter.result(rows)
 
-    flink_jars = resolve_flink_lib_jars(yt_client, cfg)
-    flink_lib_jar_yt_paths = flink_jars.yt_paths
-    jar_for_squashfs, _ = partition_flink_lib_jars_for_delivery(
-        cfg,
-        flink_lib_jar_yt_paths,
-        extra_runtime_basenames=flink_jars.extra_runtime_basenames,
-    )
-    remote = ensure_runtime_layer(yt_client, cfg, jar_for_squashfs, force_rebuild=force)
-    click.echo(f"Runtime layer: {remote}")
-    if cfg.squashfs_layer_delivery == "sandbox_unpack":
-        tool = ensure_unsquashfs_tool_remote(yt_client, cfg)
-        click.echo(f"unsquashfs helper: {tool}")
+
+@build_cli.command("unsquashfs")
+@click.pass_context
+@click.option("--output", "output_path", default=None, type=click.Path(dir_okay=False), help="Write the binary here.")
+@click.option("--upload", "upload_path", default=None, help="Upload to this explicit Cypress path.")
+@_verbose_debug_options
+def build_unsquashfs(
+    ctx: click.Context, output_path: Optional[str], upload_path: Optional[str], verbose: bool, debug: bool
+) -> None:
+    """Build a static unsquashfs helper for sandbox_unpack clusters without squashfs-tools.
+
+    Point the profile's unsquashfs_path at the uploaded binary. Local build; --upload needs creds.
+    """
+    reporter = _cli_reporter(verbose, debug)
+    reporter.header(resolve_effective_profile_name(ctx.obj.get("profile")))
+    if not output_path and not upload_path:
+        raise click.ClickException("Specify --output FILE and/or --upload //cypress/path.")
+
+    with _clean_errors(verbose or debug), tempfile.TemporaryDirectory(prefix="flyt_unsquashfs_") as tmp:
+        local = output_path or os.path.join(tmp, "unsquashfs")
+        with reporter.step("Building unsquashfs helper"):
+            build_unsquashfs_binary(local)
+        rows = [("unsquashfs", output_path)] if output_path else []
+        if upload_path:
+            cfg, profile_data = _load_flyt_config_from_profile(ctx)
+            proxy, _ = _resolve_connection(profile_data, None, None)
+            yt_client = make_yt_client(proxy, cfg.yt_client_config)
+            with reporter.step("Uploading helper to Cypress"):
+                upload_local_file(yt_client, local, upload_path)
+            rows.append(("uploaded", upload_path))
+        reporter.result(rows)
 
 
 @cli.command("validate")
@@ -333,8 +422,8 @@ def validate(
     pool: Optional[str],
 ) -> None:
     """Check profile and local tools (optional YT connectivity)."""
-    _setup_logging()
-    _echo_profile_line(ctx)
+    rep = _cli_reporter()
+    rep.header(resolve_effective_profile_name(ctx.obj.get("profile")))
     cfg, profile_data = _load_flyt_config_from_profile(ctx)
     try:
         px, _ = _resolve_connection(profile_data, proxy, pool)
@@ -342,12 +431,12 @@ def validate(
         px = None
     yt_client = None
     if px:
-        yt_client = make_yt_client(px)
+        yt_client = make_yt_client(px, cfg.yt_client_config)
     rows = validate_flyt_config(cfg, proxy=px or None, yt_client=yt_client)
     ok_all = True
     for name, ok, msg in rows:
         ok_all = ok_all and ok
-        click.echo(f"  [{'OK' if ok else '!!'}] {name}: {msg}")
+        rep.line(f"[{'OK' if ok else '!!'}] {name}: {msg}")
     ctx.exit(0 if ok_all else 1)
 
 
@@ -380,12 +469,24 @@ def validate(
     "Pass --cache-wheel to reuse a persistent Cypress wheel across runs; otherwise a temporary "
     "wheel is used (safe: YT snapshot-locks file_paths once the operation materializes).",
 )
-@click.option("--force-rebuild", "force_rebuild_layer", is_flag=True)
 @click.option(
     "--headless",
     is_flag=True,
     default=False,
     help="Do not open Flink Web UI in the browser when it becomes reachable.",
+)
+@click.option(
+    "-v",
+    "--verbose",
+    is_flag=True,
+    default=False,
+    help="Show full launcher logs instead of the terse step view.",
+)
+@click.option(
+    "--debug",
+    is_flag=True,
+    default=False,
+    help="Verbose launcher logs plus yt client debug logging (implies -v).",
 )
 def run(
     ctx: click.Context,
@@ -397,12 +498,13 @@ def run(
     source_dir: Optional[str],
     cache_wheel: bool,
     detach: bool,
-    force_rebuild_layer: bool,
     headless: bool,
+    verbose: bool,
+    debug: bool,
 ) -> None:
     """Launch a PyFlink job. Uses the active profile and auto wheel build."""
-    _setup_logging()
-    _echo_profile_line(ctx)
+    reporter = _cli_reporter(verbose, debug)
+    reporter.header(resolve_effective_profile_name(ctx.obj.get("profile")))
     job_command = shlex.join(list(job_argv))
     cfg, profile_data = _load_flyt_config_from_profile(ctx)
     proxy_f, pool_f = _resolve_connection(profile_data, proxy, pool)
@@ -413,14 +515,14 @@ def run(
     except KeyError as e:
         raise click.ClickException("Invalid preset %r. Use one of: micro, small, large, xlarge." % (preset_s,)) from e
 
-    with contextlib.ExitStack() as stack:
+    with _clean_errors(verbose), contextlib.ExitStack() as stack:
         project_root: Optional[str] = None
         if not wheel_path and not source_dir:
             proj = find_pyproject_for_job(job_command)
             if proj:
-                logging.getLogger(__name__).info("Building wheel from %s", proj)
                 wdir = stack.enter_context(tempfile.TemporaryDirectory(prefix="flyt_wheel_"))
-                wheel_path = build_wheel(proj, output_dir=wdir)
+                with reporter.step("Building service wheel"):
+                    wheel_path = build_wheel(proj, output_dir=wdir)
                 project_root = proj
             else:
                 raise click.ClickException(
@@ -432,7 +534,7 @@ def run(
         if project_root:
             job_command = job_command_relative_to_project(job_command, project_root)
 
-        from ytsaurus_flyt.ui_tracker import FlinkUIWatcher  # noqa: PLC0415
+        from ytsaurus_flyt.tracking.ui_tracker import FlinkUIWatcher  # noqa: PLC0415
 
         gp = ctx.obj.get("profile")
         # Watcher is pointless in detach mode: the process exits right after
@@ -444,7 +546,7 @@ def run(
         with watcher:
             launch_vanilla_job(
                 config=cfg,
-                yt_client=make_yt_client(proxy_f),
+                yt_client=make_yt_client(proxy_f, cfg.yt_client_config),
                 job_command=job_command,
                 pool=pool_f,
                 preset=preset_enum,
@@ -452,65 +554,9 @@ def run(
                 source_dir=source_dir,
                 cache_wheel=cache_wheel,
                 sync=not detach,
-                force_rebuild_layer=force_rebuild_layer,
                 profile_name=resolve_effective_profile_name(gp),
+                reporter=reporter,
             )
-
-
-@cli.command("build-layer")
-@click.pass_context
-@click.option(
-    "--output",
-    "output_path",
-    required=True,
-    type=click.Path(dir_okay=False),
-)
-@click.option("--upload", is_flag=True)
-@click.option("--force-rebuild", "force_rebuild", is_flag=True)
-def build_layer(
-    ctx: click.Context,
-    output_path: str,
-    upload: bool,
-    force_rebuild: bool,
-) -> None:
-    """Build a runtime SquashFS locally from the active profile (and optionally upload to Cypress)."""
-    _setup_logging()
-    _echo_profile_line(ctx)
-    cfg, profile_data = _load_flyt_config_from_profile(ctx)
-    if not cfg.runtime_python_packages:
-        raise click.ClickException("runtime_python_packages is required in the profile to build a layer.")
-
-    proxy, _ = _resolve_connection(profile_data, None, None)
-    yt_client = make_yt_client(proxy)
-
-    flink_jars = resolve_flink_lib_jars(yt_client, cfg)
-    jar_for_squashfs, _ = partition_flink_lib_jars_for_delivery(
-        cfg,
-        flink_jars.yt_paths,
-        extra_runtime_basenames=flink_jars.extra_runtime_basenames,
-    )
-
-    with tempfile.TemporaryDirectory(prefix="flyt_build_layer_") as tmp:
-        jar_dir = os.path.join(tmp, "jars")
-        local_jars = download_flink_lib_jars(yt_client, jar_for_squashfs, jar_dir)
-        build_runtime_squashfs(cfg, local_jars, output_path)
-
-    if upload:
-        h = compute_layer_hash(cfg, jar_for_squashfs)
-        prefix = (cfg.squashfs_layer_cache_prefix or "").strip() or "//tmp/flyt_squashfs_layers"
-        remote = f"{prefix.rstrip('/')}/runtime-{h}.squashfs"
-        if force_rebuild and yt_client.exists(remote):
-            yt_client.remove(remote, force=True)
-        upload_squashfs_layer(
-            yt_client,
-            output_path,
-            remote,
-            set_filesystem_attribute=(cfg.squashfs_layer_delivery == "layer_paths"),
-        )
-        click.echo(f"Uploaded layer to {remote}")
-        if cfg.squashfs_layer_delivery == "sandbox_unpack":
-            tool = ensure_unsquashfs_tool_remote(yt_client, cfg)
-            click.echo(f"Uploaded unsquashfs helper to {tool}")
 
 
 @cli.command("jobshell")
@@ -522,15 +568,13 @@ def build_layer(
 )
 @click.pass_context
 def jobshell(ctx: click.Context, jobshell_profile: Optional[str]) -> None:
-    """Attach to the sandbox of the running ``flyt run`` job for the selected profile."""
+    """Attach to the sandbox of the running 'flyt run' job for the selected profile."""
     parent = ctx.parent
     global_profile = parent.obj.get("profile") if parent and parent.obj else None
     gp = jobshell_profile or global_profile
     name = resolve_effective_profile_name(gp)
-    if name:
-        click.echo(f"Profile: {name!r}")
-    else:
-        click.echo("Profile: (none)")
+    rep = _cli_reporter()
+    rep.header(name)
     if not name:
         raise click.ClickException(
             "No profile selected. Use --profile, set FLYT_PROFILE, or: "
@@ -538,12 +582,13 @@ def jobshell(ctx: click.Context, jobshell_profile: Optional[str]) -> None:
         )
     data = load_profile_dict(name)
     proxy, _ = _resolve_connection(data, None, None)
+    cfg = profile_dict_to_flyt_config(data)
     yt_bin = shutil.which("yt")
     if not yt_bin:
         raise click.ClickException(
             "The 'yt' executable was not found in PATH. Install ytsaurus-client (pip install ytsaurus-client)."
         )
-    yt_client = make_yt_client(proxy)
+    yt_client = make_yt_client(proxy, cfg.yt_client_config)
     resolved = resolve_default_jobshell_argv(yt_client, name)
     if not resolved:
         raise click.ClickException(
@@ -583,14 +628,14 @@ def ui(
     open_browser: bool,
 ) -> None:
     """Find and print the Flink Web UI URL of a running flyt operation."""
-    _setup_logging()
-    _echo_profile_line(ctx)
-    _, profile_data = _load_flyt_config_from_profile(ctx)
+    rep = _cli_reporter()
+    rep.header(resolve_effective_profile_name(ctx.obj.get("profile")))
+    cfg, profile_data = _load_flyt_config_from_profile(ctx)
     proxy_f, _ = _resolve_connection(profile_data, proxy, None)
-    yt_client = make_yt_client(proxy_f)
+    yt_client = make_yt_client(proxy_f, cfg.yt_client_config)
 
-    from ytsaurus_flyt.jobshell_resolve import list_running_flyt_operations  # noqa: PLC0415
-    from ytsaurus_flyt.ui_tracker import find_ui_url_for_operation, wait_ui_url_for_operation  # noqa: PLC0415
+    from ytsaurus_flyt.tracking.jobshell_resolve import list_running_flyt_operations  # noqa: PLC0415
+    from ytsaurus_flyt.tracking.ui_tracker import find_ui_url_for_operation, wait_ui_url_for_operation  # noqa: PLC0415
 
     op_id = (operation_id or "").strip()
     if not op_id:
@@ -603,7 +648,7 @@ def ui(
                 "Pass --operation <id>, or start one with `flyt run ...`."
             )
         op_id = str(ops[0]["id"])
-        click.echo(f"Operation: {op_id}")
+        rep.line(f"Operation: {op_id}")
 
     if wait:
         url, state = wait_ui_url_for_operation(yt_client, op_id)
