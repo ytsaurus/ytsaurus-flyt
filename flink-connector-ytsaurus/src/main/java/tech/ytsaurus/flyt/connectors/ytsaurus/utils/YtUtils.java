@@ -78,7 +78,8 @@ public final class YtUtils {
      */
     public static String fetchSchemaStringFromTable(String pathToTable, YtClientConfig clientConfig)
             throws ExecutionException, InterruptedException {
-        try (YTsaurusClient client = makeYtClient(clientConfig.getProxy(), clientConfig.getUser(), clientConfig.getToken())) {
+        try (YTsaurusClient client = makeYtClient(clientConfig.getProxy(), clientConfig.getUser(),
+                clientConfig.getToken(), clientConfig.isUseTls())) {
             return YTreeTextSerializer.serialize(
                     client.getNode(pathToTable + YT_PATH_SEP + YT_ATTRIBUTE_SYMBOL + YT_SCHEMA_ATTRIBUTE_NAME)
                             .get()
@@ -109,42 +110,69 @@ public final class YtUtils {
      * Creates YT client based on cluster address and credentials.
      */
     public static YTsaurusClient makeYtClient(ComplexYtPath path, OAuthCredentialsConfig credentialsConfig) {
-        return makeYtClient(path.getClusterName(), credentialsConfig.getUsername(), credentialsConfig.getToken());
+        return makeYtClient(path, credentialsConfig, false);
+    }
+
+    public static YTsaurusClient makeYtClient(ComplexYtPath path,
+                                              OAuthCredentialsConfig credentialsConfig,
+                                              boolean useTls) {
+        return makeYtClient(path.getClusterName(), credentialsConfig.getUsername(), credentialsConfig.getToken(),
+                useTls);
     }
 
     public static YTsaurusClient makeYtClient(String proxy, OAuthCredentialsConfig credentialsConfig) {
-        return makeYtClient(proxy, credentialsConfig.getUsername(), credentialsConfig.getToken());
+        return makeYtClient(proxy, credentialsConfig, false);
+    }
+
+    public static YTsaurusClient makeYtClient(String proxy, OAuthCredentialsConfig credentialsConfig, boolean useTls) {
+        return makeYtClient(proxy, credentialsConfig.getUsername(), credentialsConfig.getToken(), useTls);
     }
 
     public static YTsaurusClient.ClientBuilder<? extends YTsaurusClient, ?> makeYtClientBuilder(
             ComplexYtPath path,
             OAuthCredentialsConfig credentialsConfig) {
+        return makeYtClientBuilder(path, credentialsConfig, false);
+    }
+
+    public static YTsaurusClient.ClientBuilder<? extends YTsaurusClient, ?> makeYtClientBuilder(
+            ComplexYtPath path,
+            OAuthCredentialsConfig credentialsConfig,
+            boolean useTls) {
         return makeYtClientBuilder(path.getClusterName(), credentialsConfig.getUsername(),
-                credentialsConfig.getToken());
+                credentialsConfig.getToken(), useTls);
     }
 
-    private static YTsaurusClient makeYtClient(String clusterName, String username, String token) {
-        return makeYtClientBuilder(clusterName, username, token).build();
+    private static YTsaurusClient makeYtClient(String clusterName, String username, String token, boolean useTls) {
+        return makeYtClientBuilder(clusterName, username, token, useTls).build();
     }
 
-    @SneakyThrows
     private static YTsaurusClient.ClientBuilder<? extends YTsaurusClient, ?> makeYtClientBuilder(String cluster,
                                                                                                  String username,
-                                                                                                 String token) {
-        YTsaurusClient.ClientBuilder<? extends YTsaurusClient, ?> builder = YTsaurusClient.builder()
+                                                                                                 String token,
+                                                                                                 boolean useTls) {
+        return YTsaurusClient.builder()
                 .setCluster(cluster)
                 .setAuth(YTsaurusClientAuth.builder()
                         .setUser(username)
                         .setToken(token)
-                        .build());
+                        .build())
+                .setConfig(makeYtClientConfig(useTls));
+    }
+
+    /**
+     * Client config shared by every YT client the connector creates.
+     *
+     * @param useTls connect to YT proxies over HTTPS only
+     */
+    @SneakyThrows
+    public static YTsaurusClientConfig makeYtClientConfig(boolean useTls) {
+        YTsaurusClientConfig.Builder config = YTsaurusClientConfig.builder().setUseTLS(useTls);
         String rpcProxySelectorClass = System.getProperty(RPC_PROXY_SELECTOR_CLASS_PROPERTY);
         if (rpcProxySelectorClass != null) {
             ProxySelector proxySelector = (ProxySelector)
                     Class.forName(rpcProxySelectorClass).getDeclaredConstructor().newInstance();
-            builder.setConfig(YTsaurusClientConfig.builder()
-                    .setRpcOptions(new RpcOptions().setRpcProxySelector(proxySelector))
-                    .build());
+            config.setRpcOptions(new RpcOptions().setRpcProxySelector(proxySelector));
         }
-        return builder;
+        return config.build();
     }
 }

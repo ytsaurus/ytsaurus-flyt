@@ -220,4 +220,13 @@ public class YtConnectorOptions {
             .stringType()
             .noDefaultValue()
             .withDeprecatedKeys("proxyRole");
+
+    /**
+     * Connect to YT over HTTPS only: proxy discovery goes to the https endpoint (port 443 by default)
+     * instead of plain http.
+     */
+    public static final ConfigOption<Boolean> USE_TLS = ConfigOptions.key("use-tls")
+            .booleanType()
+            .defaultValue(false)
+            .withDescription("Use HTTPS (TLS) for all connections to YT proxies");
 }

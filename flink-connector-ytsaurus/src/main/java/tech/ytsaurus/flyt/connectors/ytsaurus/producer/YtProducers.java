@@ -174,6 +174,7 @@ public final class YtProducers {
                         .reshardingConfig(reshardingConfig)
                         .tableAttributes(tableAttributes)
                         .ytWriterOptions(ytWriterOptions)
+                        .useTls(clientConfig.isUseTls())
                         .build()
                         .getSinkRuntimeProvider(null))
                         .createSinkFunction();

@@ -78,6 +78,15 @@ class YTsaurusQueueDynamicTableFactoryTest {
     }
 
     @Test
+    void createsSourceWithUseTls() {
+        Map<String, String> options = validSqlOptions();
+        assertThat(createSource(options)).extracting("useTls").isEqualTo(false);
+
+        options.put("use-tls", "true");
+        assertThat(createSource(options)).extracting("useTls").isEqualTo(true);
+    }
+
+    @Test
     void createsSourceWithLatestStartupMode() {
         Map<String, String> options = validSqlOptions();
         options.put("scan.startup.mode", "LATEST");

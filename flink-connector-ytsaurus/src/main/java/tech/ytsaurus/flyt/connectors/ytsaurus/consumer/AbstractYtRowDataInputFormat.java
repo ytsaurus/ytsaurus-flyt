@@ -53,6 +53,7 @@ public abstract class AbstractYtRowDataInputFormat
     protected final TypeInformation<RowData> rowDataTypeInfo;
     protected final CredentialsProvider credentialsProvider;
     protected final SerializableSupplier<RetryStrategy> retryStrategy;
+    protected final boolean useTls;
 
     protected transient YTsaurusClient client;
     protected transient TableReader<YTreeNode> tableReader;
@@ -70,13 +71,15 @@ public abstract class AbstractYtRowDataInputFormat
             DeserializationSchema<RowData> deserializer,
             TypeInformation<RowData> rowDataTypeInfo,
             CredentialsProvider credentialsProvider,
-            SerializableSupplier<RetryStrategy> retryStrategy) {
+            SerializableSupplier<RetryStrategy> retryStrategy,
+            boolean useTls) {
         this.ysonSchemaString = ysonSchemaString;
         this.limit = limit;
         this.deserializer = deserializer;
         this.rowDataTypeInfo = rowDataTypeInfo;
         this.credentialsProvider = credentialsProvider;
         this.retryStrategy = retryStrategy;
+        this.useTls = useTls;
     }
 
     @Override
@@ -286,7 +289,7 @@ public abstract class AbstractYtRowDataInputFormat
     protected abstract ComplexYtPath resolvePath();
 
     protected YTsaurusClient createClient(ComplexYtPath path) {
-        return YtUtils.makeYtClient(path, credentialsProvider.getCredentials(path.getClusterName()));
+        return YtUtils.makeYtClient(path, credentialsProvider.getCredentials(path.getClusterName()), useTls);
     }
 
     protected void updateHasNext() {
