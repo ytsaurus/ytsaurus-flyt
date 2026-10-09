@@ -95,6 +95,8 @@ public class YtRowDataLookupFunction extends LookupFunction {
     @Setter
     private boolean failOnUnavailable;
 
+    private final boolean useTls;
+
     private transient YTsaurusClient client;
 
     private transient TableSchema schema;
@@ -122,6 +124,25 @@ public class YtRowDataLookupFunction extends LookupFunction {
             DataType[] keyTypes,
             RowType rowType,
             boolean failOnUnavailable) {
+        this(credentialsProvider, ysonSchemaString, path, lookupMethod, partitionConfig, deserializer, fieldNames,
+                fieldTypes, keyNames, keyTypes, rowType, failOnUnavailable, false);
+    }
+
+    @SuppressWarnings("checkstyle:parameternumber")
+    public YtRowDataLookupFunction(
+            CredentialsProvider credentialsProvider,
+            String ysonSchemaString,
+            ComplexYtPath path,
+            LookupMethod lookupMethod,
+            @Nullable PartitionConfig partitionConfig,
+            DeserializationSchema<RowData> deserializer,
+            String[] fieldNames,
+            DataType[] fieldTypes,
+            String[] keyNames,
+            DataType[] keyTypes,
+            RowType rowType,
+            boolean failOnUnavailable,
+            boolean useTls) {
         checkNotNull(ysonSchemaString, "No YT schema supplied.");
         checkNotNull(fieldNames, "No fieldNames supplied.");
         checkNotNull(fieldTypes, "No fieldTypes supplied.");
@@ -144,6 +165,7 @@ public class YtRowDataLookupFunction extends LookupFunction {
         this.lookupMethod = lookupMethod;
         this.fieldNames = fieldNames;
         this.failOnUnavailable = failOnUnavailable;
+        this.useTls = useTls;
     }
 
     @Override
@@ -167,7 +189,7 @@ public class YtRowDataLookupFunction extends LookupFunction {
         }
         schema = TableSchema.fromYTree(YTreeTextSerializer.deserialize(ysonSchemaString)).toLookup();
         externalConverter = createKeyExternalConverter();
-        client = YtUtils.makeYtClient(path, credentialsConfig);
+        client = YtUtils.makeYtClient(path, credentialsConfig, useTls);
         if (path.isPartitioned()) {
             executors = Executors.newCachedThreadPool();
             partitions = scanPartitions();
@@ -301,7 +323,7 @@ public class YtRowDataLookupFunction extends LookupFunction {
                         && e.getCause() instanceof YTsaurusError
                         && ((YTsaurusError) e.getCause()).isUnrecoverable()
                         && !YtClusterUtils.isAvailable(
-                        path.getClusterName().toUpperCase(Locale.ROOT))) {
+                        path.getClusterName().toUpperCase(Locale.ROOT), useTls)) {
                     throw e;
                 }
                 backoffRetryStrategy = backoffRetryStrategy.getNextRetryStrategy();

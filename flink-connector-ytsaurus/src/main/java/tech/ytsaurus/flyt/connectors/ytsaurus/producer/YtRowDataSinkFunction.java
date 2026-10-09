@@ -58,6 +58,7 @@ public class YtRowDataSinkFunction extends RichSinkFunction<RowData> implements 
 
     private ReshardingConfig reshardingConfig;
     private YtWriterOptions ytWriterOptions;
+    private boolean useTls;
 
     @Nullable
     private DataMetricsConfig dataMetricsConfig;
@@ -117,6 +118,11 @@ public class YtRowDataSinkFunction extends RichSinkFunction<RowData> implements 
                     "Could not find token to connect to YT (username=%s). Please, check your credentials",
                     credentialsConfig.getUsername()));
         }
+        return this;
+    }
+
+    public YtRowDataSinkFunction withUseTls(boolean useTls) {
+        this.useTls = useTls;
         return this;
     }
 
@@ -199,7 +205,8 @@ public class YtRowDataSinkFunction extends RichSinkFunction<RowData> implements 
     }
 
     private YTsaurusClient makeYtClient() {
-        var clientBuilder = YtUtils.makeYtClientBuilder(path, credentialsConfig);
+        YTsaurusClient.ClientBuilder<? extends YTsaurusClient, ?> clientBuilder =
+                YtUtils.makeYtClientBuilder(path, credentialsConfig, useTls);
         if (ytWriterOptions.getProxyRole() != null) {
             log.info("Using proxy role: {} for table: {}", ytWriterOptions.getProxyRole(), path.getBasePath());
             clientBuilder.setProxyRole(ytWriterOptions.getProxyRole());
