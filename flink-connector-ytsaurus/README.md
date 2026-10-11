@@ -292,6 +292,7 @@ The YTsaurus connector supports a wide range of configuration options to customi
 |--------|------|---------|------------------------------|
 | `trackable-field` | String | - | Field name for tracking value |
 | `proxy-role` | String | - | Set proxy-role       |
+| `use-tls` | Boolean | `false` | Connect to YTsaurus over HTTPS only (proxy discovery via `https://`, port 443 by default) |
 
 ## Schema Definition
 
@@ -338,6 +339,35 @@ Set the following environment variables:
 ### Custom Authentication
 
 To create your own authentication method, implement the interface [`CredentialsProvider`](src/main/java/tech/ytsaurus/flyt/connectors/ytsaurus/common/credentials/CredentialsProvider.java) interface.
+
+## Connecting over HTTPS
+
+By default the connector discovers YTsaurus proxies over plain HTTP. Set `use-tls` to connect over HTTPS only
+(the `https://` endpoint of the proxy, port 443 unless the `proxy` option specifies another one):
+
+```sql
+CREATE TABLE secure_table (...) WITH (
+    'connector' = 'ytsaurus',
+    'proxy' = 'yt.example.com',
+    'use-tls' = 'true',
+    ...
+);
+```
+
+The same flag is available in the Java API:
+
+```java
+// DataStream sink via YtProducers
+YtClientConfig clientConfig = new YtClientConfig.Builder()
+        .setProxy("yt.example.com")
+        .setUseTls(true)
+        .build();
+
+// Sink / source / lookup built directly
+YtDynamicTableSink.builder().useTls(true)...build();
+YtRowDataInputFormat.builder().useTls(true)...build();
+YtQueueSource.<T>builder().useTls(true)...build();
+```
 
 ## Data Partitioning
 
@@ -694,6 +724,7 @@ YtQueueSource<String> source = YtQueueSource.<String>builder()
         .startupMode(YtQueueStartupMode.LATEST)
         .workerCount(4)
         .bufferCapacity(8)
+        .useTls(true) // optional: HTTPS only
         .build();
 
 env.fromSource(source, WatermarkStrategy.noWatermarks(), "ytsaurus-queue");
@@ -783,6 +814,7 @@ Metadata columns are not supported in either mode, so `$timestamp`, `$cumulative
 | `format` | String | - | Required insert-only format; must be `yson` in `ROW` read mode |
 | `username` | String | - | Username for the `options` credentials provider |
 | `token` | String | - | Token for the `options` credentials provider |
+| `use-tls` | Boolean | `false` | Connect to YTsaurus over HTTPS only |
 | `scan.startup.mode` | Enum | `EARLIEST` | Startup mode: `EARLIEST`, `LATEST`, or `SPECIFIC` |
 | `scan.startup.specific-offsets` | List&lt;Long&gt; | - | Semicolon-separated nonnegative offsets indexed by partition; required only for `SPECIFIC` |
 | `scan.trimmed-offset-policy` | Enum | `FAIL` | Behavior when a requested offset has been trimmed: `FAIL` stops the source, `SKIP` continues from the first available offset |

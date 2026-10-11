@@ -180,6 +180,12 @@ class YtQueueSourceTest {
                         bufferCapacity);
     }
 
+    @Test
+    void builderPassesUseTls() {
+        assertThat(sourceBuilder().build()).extracting("useTls").isEqualTo(false);
+        assertThat(sourceBuilder().useTls(true).build()).extracting("useTls").isEqualTo(true);
+    }
+
     private static YtQueueSource.Builder<String> sourceBuilder() {
         return YtQueueSource.<String>builder()
                 .proxy("localhost:9013")

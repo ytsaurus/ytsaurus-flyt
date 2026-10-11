@@ -57,6 +57,8 @@ public class YtQueueDynamicTableSource implements ScanTableSource {
     @Nullable
     private final Integer parallelism;
 
+    private final boolean useTls;
+
     @Override
     public ChangelogMode getChangelogMode() {
         return ChangelogMode.insertOnly();
@@ -79,6 +81,7 @@ public class YtQueueDynamicTableSource implements ScanTableSource {
                 .trimmedOffsetPolicy(trimmedOffsetPolicy)
                 .readerOptions(readerOptions)
                 .discoveryInterval(partitionDiscoveryInterval)
+                .useTls(useTls)
                 .build();
         return SourceProvider.of(source, parallelism);
     }
@@ -118,6 +121,7 @@ public class YtQueueDynamicTableSource implements ScanTableSource {
                 .columnModeOptions(columnModeOptions)
                 .partitionDiscoveryInterval(partitionDiscoveryInterval)
                 .parallelism(parallelism)
+                .useTls(useTls)
                 .build();
     }
 
