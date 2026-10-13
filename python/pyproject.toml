@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ytsaurus-flyt"
-version = "0.2.3"
+version = "0.3.0"
 description = "Launch PyFlink jobs on YTsaurus Vanilla operations"
 keywords = ["flink", "pyflink", "ytsaurus", "vanilla-operations", "data-pipeline"]
 readme = "README.md"
@@ -48,7 +48,7 @@ flyt = "ytsaurus_flyt.__main__:main"
 
 [project.urls]
 Homepage = "https://github.com/ytsaurus/ytsaurus-flyt"
-Documentation = "https://github.com/ytsaurus/ytsaurus-flyt/tree/main/python"
+Documentation = "https://ytsaurus.tech/docs/ru/user-guide/data-processing/flyt/overview"
 Repository = "https://github.com/ytsaurus/ytsaurus-flyt"
 Issues = "https://github.com/ytsaurus/ytsaurus-flyt/issues"
 

@@ -15,7 +15,12 @@ from typing import Iterator, List, Optional, Set
 
 from yt.wrapper import YtClient
 
-from ytsaurus_flyt.container_runtime import get_container_runtime_command, python_slim_image
+from ytsaurus_flyt.runtime.container_runtime import (
+    cache_owner_run_args,
+    flyt_cache_dir,
+    get_container_runtime_command,
+    python_slim_image,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -73,11 +78,18 @@ def _build_wheels_in_container(
     python_version: str,
 ) -> None:
     image = python_slim_image(python_version)
+    pip_cache = flyt_cache_dir("pip")
     _run_command(
         get_container_runtime_command()
         + [
             "run",
             "--rm",
+            # Run as the cache mount's owner so pip actually uses (not silently disables) PIP_CACHE_DIR.
+            *cache_owner_run_args(),
+            "-e",
+            "PIP_CACHE_DIR=/pipcache",
+            "-v",
+            f"{pip_cache}:/pipcache",
             "-v",
             f"{output_dir}:/out",
             image,

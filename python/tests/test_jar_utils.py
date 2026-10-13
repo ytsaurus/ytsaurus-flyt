@@ -1,8 +1,8 @@
-"""Tests for ytsaurus_flyt.jar_utils."""
+"""Tests for ytsaurus_flyt.runtime.jar_utils."""
 
 import pytest
 
-from ytsaurus_flyt.jar_utils import (
+from ytsaurus_flyt.runtime.jar_utils import (
     JarInfoExtractionError,
     SemanticVersion,
     UnsupportedVersionError,
