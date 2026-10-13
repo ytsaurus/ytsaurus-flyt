@@ -1,6 +1,6 @@
 # ytsaurus-flyt
 
-PyFlink on [YTsaurus](https://ytsaurus.tech/) [Vanilla](https://ytsaurus.tech/docs/en/user-guide/data-processing/operations/vanilla) in application mode.
+PyFlink on [YTsaurus](https://ytsaurus.tech/) [Vanilla](https://ytsaurus.tech/docs/en/user-guide/data-processing/operations/vanilla): one operation per pipeline, either as an in-JVM MiniCluster or as a Flink application cluster with separate TaskManagers.
 See [ARCHITECTURE.md](ARCHITECTURE.md) for internals.
 
 ## Install
@@ -51,6 +51,41 @@ python_bin: "/usr/bin/python3"
 
 Default `squashfs_layer_delivery` is `layer_paths`. For Kind local dev, use `sandbox_unpack` (see [examples/kind/README.md](examples/kind/README.md)).
 
+## Cluster modes
+
+`cluster_mode` in the profile (or `flyt run --mode`) picks the topology of the Vanilla operation:
+
+| Mode | Operation layout | Use it for |
+|---|---|---|
+| `minicluster` (default) | One `flink` job runs the script; PyFlink starts JobManager and TaskManager in the same JVM. | Small pipelines, local Kind clusters. |
+| `application` | A `jobmanager` job runs the script through Flink's `PythonDriver` (application mode) plus `taskmanager_count` TaskManager jobs. | Pipelines that need more than one container of CPU/RAM. |
+
+Application mode fields (profile or flags):
+
+```yaml
+cluster_mode: application
+parallelism: 8                # --parallelism; sizes the cluster: ceil(parallelism / slots) TaskManagers
+taskmanager_slots: 2          # --slots
+taskmanager_count: 4          # --taskmanagers; optional, must cover parallelism when both are set
+taskmanager_preset: small     # --tm-preset; empty = same preset as the JobManager
+taskmanager_cpu: 20           # --tm-cpu; overrides the preset's cpu per TaskManager
+taskmanager_memory: 24G       # --tm-mem; overrides the preset's memory per TaskManager
+taskmanager_off_heap: 2G      # --tm-off-heap; direct memory for connectors (default: preset off_heap, else 1/8 of the TM JVM)
+restart_completed_jobs: true  # false: complete the operation when the pipeline finishes (batch)
+discovery_timeout: 600        # seconds a TaskManager waits for the JobManager before failing
+sidecar_command: ""           # optional helper started in every JM/TM container before Flink (e.g. a metrics agent); ignored in minicluster
+flink_config:                 # optional Flink overrides, applied last
+  restart-strategy.type: fixed-delay
+```
+
+How it works: the JobManager is a [gang](https://ytsaurus.tech/docs/en/user-guide/data-processing/operations/vanilla#gang-operations) job, so any JobManager failure restarts the whole cluster with a new incarnation. TaskManagers find it through the YT API: they list the running `jobmanager` job of their own operation and incarnation, read its addresses from the job's `exec_attributes`, fetch `/jobmanager/config` from its REST port and connect to the `jobmanager.rpc.address` it advertises (no Cypress registry). A TaskManager that finds no JobManager within `discovery_timeout` fails and is restarted by YT, so a JobManager that never gets scheduled eventually fails the operation through `max_failed_job_count`. Job-to-job traffic uses `YT_IP_ADDRESS_FASTBONE` when the exec node provides it (the default address is filtered between containers on some clusters); the Web UI stays on the default address. A failed TaskManager is restarted by YT on its own and the job recovers through Flink's restart strategy (`exponential-delay` by default). The Web UI stays on port 27050 of the JobManager job.
+
+Memory: the JobManager JVM heap is the preset `max_heap`, the rest of the container is left to the Python driver; TaskManagers give 75% of their container to `taskmanager.memory.process.size` and the rest to Python UDF workers. Unlike the MiniCluster, where direct memory defaults to the heap size, Flink caps a TaskManager's `-XX:MaxDirectMemorySize` at `framework.off-heap` (128m) plus `taskmanager.memory.task.off-heap.size`, so connectors with netty/gRPC buffers need the latter: flyt sets it from `taskmanager_off_heap`, else the preset `off_heap`, else 1/8 of the TaskManager JVM. Managed memory (RocksDB, batch operators, Python UDF workers) is cut from Flink's 40% to 10% so task heap gets the rest, and every JVM runs with `-XX:+ExitOnOutOfMemoryError` plus `taskmanager.jvm-exit-on-oom` so an out-of-memory TaskManager dies and is restarted by YT instead of hanging in GC. Override any of it via `flink_config`.
+
+Sizing: a standalone Flink cluster cannot ask YT for more TaskManagers, so the job's parallelism must fit into `taskmanager_count * taskmanager_slots` (otherwise it waits for slots and fails after `slot.request.timeout`). Set `parallelism` and let flyt derive the count, or set both and flyt checks they fit. `parallelism.default` is `parallelism` when set, else `count * slots`; a pipeline's own `set_parallelism` still overrides it.
+
+The MiniCluster script and Flink configuration are untouched by these fields.
+
 ## Commands
 
 | Command | Description |
@@ -70,6 +105,8 @@ Without `--wheel` / `--source-dir`, `flyt run` finds `pyproject.toml` next to th
 With `--wheel` only, pass the script path as it appears inside the unpacked wheel (e.g. `pipeline.py`).
 
 `--force-rebuild` ignores a cached SquashFS on Cypress and rebuilds the layer.
+
+`--mode application --parallelism N [--slots K --tm-preset P]` (or `--taskmanagers N`) runs the pipeline as an application cluster (see [Cluster modes](#cluster-modes)); flags override the profile for this run.
 
 `-d` / `--detach` submits the operation, waits until it materializes, prints the tracking link and exits. Use `flyt ui --wait` afterwards to find the Flink Web UI. Add `--cache-wheel` to reuse the uploaded wheel across runs (needs `wheel_cache_prefix` or `cypress_base_path`).
 

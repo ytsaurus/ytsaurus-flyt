@@ -37,12 +37,18 @@ def make_yt_client(proxy: str) -> YtClient:
 
 
 def proxy_url_from_client(yt_client: YtClient) -> str:
-    """Best-effort HTTP proxy URL string for logging and UI links."""
+    """HTTP proxy URL of the client (as the ``yt`` library resolves it), or ``"unknown"``."""
+    try:
+        from yt.wrapper.http_helpers import get_proxy_url  # noqa: PLC0415
+
+        url = get_proxy_url(client=yt_client)
+        if url:
+            return str(url)
+    except Exception:  # noqa: BLE001 - fall back to the raw config below
+        pass
     cfg = getattr(yt_client, "config", None)
-    if isinstance(cfg, dict):
-        proxy = cfg.get("proxy") or {}
-        if isinstance(proxy, dict):
-            url = proxy.get("url")
-            if url:
-                return str(url)
-    return "unknown"
+    try:
+        url = (cfg or {}).get("proxy", {}).get("url")  # type: ignore[union-attr]
+    except Exception:  # noqa: BLE001
+        url = None
+    return str(url) if url else "unknown"

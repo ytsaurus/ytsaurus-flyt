@@ -68,3 +68,25 @@ def test_wait_ui_url_polls_until_up() -> None:
         url, state = wait_ui_url_for_operation(yt, "op-1", poll_interval_s=0.01)
     assert url == f"http://[2a02:6b8::1]:{FLINK_UI_PORT}"
     assert state == "running"
+
+
+def test_find_ui_url_skips_taskmanager_jobs() -> None:
+    yt = MagicMock()
+    yt.list_jobs.return_value = {
+        "jobs": [
+            {"id": "tm1", "state": "running", "task_name": "taskmanager"},
+            {"id": "jm1", "state": "running", "task_name": "jobmanager"},
+        ]
+    }
+    yt.get_job.return_value = {"exec_attributes": {"ip_addresses": ["2a02:6b8::7"]}}
+    with patch("ytsaurus_flyt.ui_tracker._probe_tcp", return_value=True):
+        url = find_ui_url_for_operation(yt, "op-1")
+    assert url == f"http://[2a02:6b8::7]:{FLINK_UI_PORT}"
+    yt.get_job.assert_called_once_with("op-1", "jm1")
+
+
+def test_find_ui_url_returns_none_when_only_taskmanagers_run() -> None:
+    yt = MagicMock()
+    yt.list_jobs.return_value = {"jobs": [{"id": "tm1", "state": "running", "task_name": "taskmanager"}]}
+    assert find_ui_url_for_operation(yt, "op-1") is None
+    yt.get_job.assert_not_called()

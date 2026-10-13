@@ -22,6 +22,8 @@ from ytsaurus_flyt.models import (
     ClusterPreset,
     JobmanagerParams,
     OperationParams,
+    TaskmanagerParams,
+    parse_memory,
 )
 from ytsaurus_flyt.spec import build_vanilla_operation_spec
 from ytsaurus_flyt.wheel_utils import dedupe_file_paths_by_basename, upload_service_wheel
@@ -47,6 +49,26 @@ def _make_jobmanager_params(preset_params: ClusterParams) -> JobmanagerParams:
     return JobmanagerParams(
         cpu=preset_params.cpu,
         memory=preset_params.memory_bytes(),
+    )
+
+
+def taskmanager_params_from_config(config: FlytConfig, jobmanager_preset: ClusterParams) -> TaskmanagerParams:
+    """TaskManager resources from ``taskmanager_preset`` (or the JobManager preset) and the config counts.
+
+    Public so launchers that build the operation spec themselves (``build_vanilla_operation_spec``)
+    size the cluster the same way ``launch_vanilla_job`` does.
+    """
+    name = (config.taskmanager_preset or "").strip()
+    params = ClusterPreset[name.upper()].params if name else jobmanager_preset
+    # Connectors run in TaskManagers, so the preset's off_heap (the MiniCluster -XX:MaxDirectMemorySize
+    # knob) keeps its meaning there unless taskmanager_off_heap overrides it.
+    off_heap_str = config.taskmanager_off_heap or params.off_heap_size or jobmanager_preset.off_heap_size
+    return TaskmanagerParams(
+        cpu=config.taskmanager_cpu if config.taskmanager_cpu is not None else params.cpu,
+        memory=parse_memory(config.taskmanager_memory) if config.taskmanager_memory else params.memory_bytes(),
+        count=config.effective_taskmanager_count,
+        slots=config.taskmanager_slots,
+        off_heap=parse_memory(off_heap_str) if off_heap_str else None,
     )
 
 
@@ -76,8 +98,13 @@ def launch_vanilla_job(
     sync: bool = True,
     force_rebuild_layer: bool = False,
     profile_name: Optional[str] = None,
+    taskmanager_params: Optional[TaskmanagerParams] = None,
 ) -> Any:
-    """Submit a PyFlink job as a Vanilla operation (application mode, ``execute.wait()``)."""
+    """Submit a PyFlink job as a Vanilla operation (``execute.wait()`` semantics).
+
+    With ``config.cluster_mode == "application"`` the operation runs a JobManager task and a
+    TaskManager task; ``taskmanager_params`` defaults to ``config.taskmanager_*`` over the preset.
+    """
     if isinstance(preset, ClusterPreset):
         preset_params = preset.params
         preset_name = preset.name
@@ -93,6 +120,19 @@ def launch_vanilla_job(
     )
 
     require_squashfs_runtime_config(config)
+    if config.is_application_cluster:
+        if proxy_url == "unknown":
+            raise ValueError(
+                "Cannot determine the YT proxy URL from yt_client; application mode needs it for discovery"
+            )
+        if taskmanager_params is None:
+            taskmanager_params = taskmanager_params_from_config(config, preset_params)
+        logger.info(
+            "Application cluster: 1 JobManager + %d TaskManager(s) x %d slot(s), parallelism.default %d",
+            taskmanager_params.count,
+            taskmanager_params.slots,
+            config.effective_parallelism,
+        )
 
     logger.info("Fetching credentials...")
     secure_vault = get_secure_credentials(yt_client, extra_secrets=extra_secrets)
@@ -172,6 +212,8 @@ def launch_vanilla_job(
             max_heap_size_str=preset_params.max_heap_size,
             off_heap_size_str=preset_params.off_heap_size,
             use_squashfs_sandbox_unpack=config.squashfs_layer_delivery == "sandbox_unpack",
+            taskmanager_params=taskmanager_params if config.is_application_cluster else None,
+            yt_proxy=proxy_url if config.is_application_cluster else None,
         )
 
         logger.info("Starting YT Vanilla operation...")

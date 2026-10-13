@@ -57,7 +57,7 @@ where = ["src"]
 include = ["ytsaurus_flyt*"]
 
 [tool.setuptools.package-data]
-ytsaurus_flyt = ["run_scripts/*.sh"]
+ytsaurus_flyt = ["run_scripts/*.sh", "run_scripts/*.py"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
