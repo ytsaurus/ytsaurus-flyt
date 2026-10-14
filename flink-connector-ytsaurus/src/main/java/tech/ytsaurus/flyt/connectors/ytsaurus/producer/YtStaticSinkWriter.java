@@ -27,6 +27,8 @@ import tech.ytsaurus.ysontree.YTreeBinarySerializer;
 import tech.ytsaurus.ysontree.YTreeMapNode;
 
 import tech.ytsaurus.flyt.connectors.datametrics.DataMetricsWriterDelegate;
+import tech.ytsaurus.flyt.connectors.ytsaurus.YtConnectorInfo;
+import tech.ytsaurus.flyt.connectors.ytsaurus.common.utils.project.info.ProjectInfoUtils;
 
 /** All session transitions run in the Flink task mailbox; SDK futures complete independently. */
 final class YtStaticSinkWriter<T> implements SinkWriter<T> {
@@ -65,6 +67,8 @@ final class YtStaticSinkWriter<T> implements SinkWriter<T> {
         this.clientFactory = clientFactory;
         time = context.getProcessingTimeService();
         mailbox = context.getMailboxExecutor();
+        ProjectInfoUtils.registerProjectInFlinkMetrics(YtConnectorInfo.MAVEN_NAME,
+                YtConnectorInfo.VERSION, context::metricGroup);
         MetricGroup group = context.metricGroup().addGroup(config.proxy).addGroup(config.path);
         publishedRows = group.counter("publishedRows");
         // Binary YSON bytes before wire framing/compression, not compressed chunk size.

@@ -129,6 +129,11 @@ public final class YtUtils {
     }
 
     public static YTsaurusClient.ClientBuilder<? extends YTsaurusClient, ?> makeYtClientBuilder(
+            String proxy, OAuthCredentialsConfig credentialsConfig, boolean useTls) {
+        return makeYtClientBuilder(proxy, credentialsConfig.getUsername(), credentialsConfig.getToken(), useTls);
+    }
+
+    public static YTsaurusClient.ClientBuilder<? extends YTsaurusClient, ?> makeYtClientBuilder(
             ComplexYtPath path,
             OAuthCredentialsConfig credentialsConfig) {
         return makeYtClientBuilder(path, credentialsConfig, false);

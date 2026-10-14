@@ -11,7 +11,6 @@ import tech.ytsaurus.client.YTsaurusClientConfig;
 import tech.ytsaurus.client.request.CreateNode;
 import tech.ytsaurus.client.request.GetNode;
 import tech.ytsaurus.client.request.WriteTable;
-import tech.ytsaurus.client.rpc.YTsaurusClientAuth;
 import tech.ytsaurus.core.cypress.CypressNodeType;
 import tech.ytsaurus.core.cypress.YPath;
 import tech.ytsaurus.core.tables.TableSchema;
@@ -57,13 +56,12 @@ final class YtStaticTableClient implements StaticTableClient {
                 .setGlobalTimeout(config.writeTimeout)
                 .setStreamingReadTimeout(config.writeTimeout)
                 .setStreamingWriteTimeout(config.writeTimeout);
-        return YTsaurusClient.builder()
-                .setCluster(config.proxy)
-                .setProxyRole(config.proxyRole)
-                .setAuth(YTsaurusClientAuth.builder()
-                        .setUser(credentials.getUsername()).setToken(credentials.getToken()).build())
-                .setConfig(clientConfig)
-                .build();
+        YTsaurusClient.ClientBuilder<? extends YTsaurusClient, ?> clientBuilder =
+                YtUtils.makeYtClientBuilder(config.proxy, credentials, config.useTls);
+        if (config.proxyRole != null) {
+            clientBuilder.setProxyRole(config.proxyRole);
+        }
+        return clientBuilder.setConfig(clientConfig).build();
     }
 
     @Override

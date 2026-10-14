@@ -1,7 +1,6 @@
 package tech.ytsaurus.flyt.connectors.ytsaurus;
 
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -16,6 +15,7 @@ import org.apache.flink.table.types.logical.RowType;
 
 import tech.ytsaurus.flyt.connectors.datametrics.DataMetricsConfig;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.TrackableField;
+import tech.ytsaurus.flyt.connectors.ytsaurus.common.YtTableAttributes;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.credentials.CredentialsProvider;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.utils.TableFactoryPropertyHelper;
 import tech.ytsaurus.flyt.connectors.ytsaurus.producer.YtStaticDynamicTableSink;
@@ -54,12 +54,8 @@ public class YTsaurusStaticTableFactory implements DynamicTableSinkFactory {
         if (!context.getCatalogTable().getPartitionKeys().isEmpty()) {
             throw new ValidationException("Static YT sink writes exactly one table and does not support partitions");
         }
-        Map<String, String> attributes = new HashMap<>();
-        options.toMap().forEach((key, value) -> {
-            if (key.startsWith("attributes.")) {
-                attributes.put(key.substring("attributes.".length()), value);
-            }
-        });
+        Map<String, String> attributes = helper.getEffectiveOptionValuesWithPrefix(
+                YtTableAttributes.CUSTOM_ATTRIBUTES_PREFIX);
         try {
             YtStaticSink.Builder<org.apache.flink.table.data.RowData> builder = YtStaticSink
                     .forRowData(rowType, options.get(YSON_SCHEMA))
@@ -99,7 +95,7 @@ public class YTsaurusStaticTableFactory implements DynamicTableSinkFactory {
     }
 
     protected List<String> validationExcludedPrefixes() {
-        return new ArrayList<>(List.of("attributes.", "data_metrics."));
+        return new ArrayList<>(List.of(YtTableAttributes.CUSTOM_ATTRIBUTES_PREFIX, "data_metrics."));
     }
 
     @Override
