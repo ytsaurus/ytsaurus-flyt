@@ -164,6 +164,11 @@ pids_limit = 16384
 ```
 
 in `~/.config/containers/containers.conf`, then recreate the Kind node or cluster.
+`scripts/ensure-podman-pids-for-kind.sh` does this for you. If you edit by hand, add
+`pids_limit` under the existing `[containers]` header (Podman's generated config on macOS
+already has one): a second `[containers]` table breaks Podman with
+`toml: ... Key 'containers' has already been defined` and Kind then fails with
+`failed to get podman info`.
 
 ## When in doubt
 
