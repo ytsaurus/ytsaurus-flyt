@@ -17,12 +17,14 @@ dependencies {
     implementation(project(":locks-api"))
     implementation(project(":locks-noop"))
     api(project(":flink-connector-data-metrics"))
+    implementation("com.github.ben-manes.caffeine:caffeine:3.2.4")
     // Flink 2.3 provides a compatible LZ4 implementation via at.yawk.lz4.
     api("tech.ytsaurus:ytsaurus-client:1.2.12") {
         exclude(group = "org.lz4", module = "lz4-java")
     }
     implementation(project(":flink-yson-fast-adapter"))
     implementation("jakarta.annotation:jakarta.annotation-api:1.3.5")
+    implementation("com.github.luben:zstd-jni:1.5.2-5")
 
     compileOnly("org.apache.flink:flink-connector-base:2.3.0")
     compileOnly("org.apache.flink:flink-core:2.3.0")
@@ -36,7 +38,10 @@ dependencies {
     compileOnly("org.projectlombok:lombok:1.18.20")
     annotationProcessor("org.projectlombok:lombok:1.18.20")
 
-    testImplementation(project(":flink-yson"))
+    // Reuse the published, self-contained YSON binary without its unpublished adapter dependency.
+    testImplementation("tech.ytsaurus.flyt.formats.yson:flink-yson:1.1.0:all") {
+        isTransitive = false
+    }
 
     testImplementation("org.apache.flink:flink-connector-base:2.3.0")
     testImplementation("org.apache.flink:flink-core:2.3.0")
@@ -77,6 +82,9 @@ tasks.compileJava {
 tasks.shadowJar {
     mergeServiceFiles()
     relocate("com.google.protobuf", "tech.ytsaurus.flyt.connectors.ytsaurus.shaded.com.google.protobuf")
+    // User protobuf jars can also contain NYT.Extension. Isolate the connector's generated classes
+    // together with protobuf to avoid mixing shaded and unshaded descriptor types.
+    relocate("NYT", "tech.ytsaurus.flyt.connectors.ytsaurus.shaded.NYT")
 }
 
 tasks.withType<Checkstyle> {

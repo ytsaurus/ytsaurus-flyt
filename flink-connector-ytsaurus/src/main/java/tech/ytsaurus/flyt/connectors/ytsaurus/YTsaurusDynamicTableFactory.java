@@ -90,6 +90,7 @@ import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.P
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.PRIMARY_MEDIUM;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.PROXY;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.PROXY_ROLE;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.USE_TLS;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.RESHARD_LAST_PARTITIONS_COUNT;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.RESHARD_STRATEGY;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.RESHARD_TABLET_COUNT;
@@ -173,6 +174,7 @@ public class YTsaurusDynamicTableFactory implements DynamicTableSinkFactory, Dyn
                 .eagerInitialization(options.get(EAGER_INITIALIZATION))
                 .reshardingConfig(reshardingConfig)
                 .ytWriterOptions(ytWriterOptions)
+                .useTls(options.get(USE_TLS))
                 .dataMetricsConfig(dataMetricsConfig)
                 .build();
     }
@@ -230,6 +232,7 @@ public class YTsaurusDynamicTableFactory implements DynamicTableSinkFactory, Dyn
                 .lookupMethod(options.get(LOOKUP_METHOD))
                 .retryStrategy(getRetryStrategy(options))
                 .options(options)
+                .useTls(options.get(USE_TLS))
                 .build();
     }
 
@@ -280,6 +283,7 @@ public class YTsaurusDynamicTableFactory implements DynamicTableSinkFactory, Dyn
                 ROWS_IN_TRANSACTION_LIMIT,
                 MOUNT_MODE,
                 PROXY_ROLE,
+                USE_TLS,
                 TRANSACTION_ATOMICITY,
                 YT_CUSTOM_ATTRIBUTES,
                 FactoryUtil.SINK_PARALLELISM,

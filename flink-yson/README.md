@@ -4,7 +4,8 @@ This project provides Apache Flink format support for [YSON (Yet anOther Seriali
 
 ## Supported Flink Versions
 
-This release line targets Apache Flink `2.3.X`.
+The published `1.1.0:all` artifact is compatible with Apache Flink `2.3.X`
+and can be reused without rebuilding or republishing this module.
 
 ## Installation
 
@@ -16,14 +17,26 @@ Maven
     <artifactId>flink-yson</artifactId>
     <version>1.1.0</version>
     <classifier>all</classifier>
+    <exclusions>
+        <exclusion>
+            <groupId>*</groupId>
+            <artifactId>*</artifactId>
+        </exclusion>
+    </exclusions>
 </dependency>
 ```
 
 Gradle
 
 ```kotlin
-implementation("tech.ytsaurus.flyt.formats.yson:flink-yson:1.1.0:all")
+implementation("tech.ytsaurus.flyt.formats.yson:flink-yson:1.1.0:all") {
+    isTransitive = false
+}
 ```
+
+The `all` classifier includes the YSON adapter and tree library. Disable
+transitive dependencies: the thin POM references an adapter artifact that is
+not published separately.
 
 ## Building from Source
 
@@ -31,7 +44,7 @@ implementation("tech.ytsaurus.flyt.formats.yson:flink-yson:1.1.0:all")
 
 - Git
 - Gradle 8.x (we recommend 8.14.3)
-- Java 11
+- Java 17
 
 ### Build Steps
 

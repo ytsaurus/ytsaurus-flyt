@@ -42,6 +42,7 @@ public class YtDynamicTableSink implements DynamicTableSink {
     private SerializableSupplier<RetryStrategy> retryStrategy;
     private ReshardingConfig reshardingConfig;
     private YtWriterOptions ytWriterOptions;
+    private boolean useTls;
 
     @Nullable
     private DataMetricsConfig dataMetricsConfig;
@@ -65,6 +66,7 @@ public class YtDynamicTableSink implements DynamicTableSink {
                 ytWriterOptions);
 
         rowDataYtFunction.withCredentials(credentialsProvider);
+        rowDataYtFunction.withUseTls(useTls);
         rowDataYtFunction.withTrackableField(trackableField);
         if (partitionConfig != null) {
             rowDataYtFunction.enablePartitioning(partitionConfig);
@@ -91,6 +93,7 @@ public class YtDynamicTableSink implements DynamicTableSink {
                 .tableAttributes(tableAttributes)
                 .reshardingConfig(reshardingConfig)
                 .ytWriterOptions(ytWriterOptions)
+                .useTls(useTls)
                 .dataMetricsConfig(dataMetricsConfig)
                 .build();
     }

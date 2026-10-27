@@ -2,6 +2,7 @@ package tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.table;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Objects;
 
 import javax.annotation.Nullable;
 
@@ -17,6 +18,9 @@ import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.types.DataType;
 
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.credentials.CredentialsProvider;
+import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.YtQueueRecordDeserializer;
+import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.config.YtQueueColumnModeOptions;
+import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.config.YtQueueReadMode;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.config.YtQueueStartupMode;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.config.YtQueueTrimmedOffsetPolicy;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.YtQueueReaderOptions;
@@ -43,10 +47,17 @@ public class YtQueueDynamicTableSource implements ScanTableSource {
 
     private final YtQueueReaderOptions readerOptions;
 
+    private final YtQueueReadMode readMode;
+
+    @Nullable
+    private final YtQueueColumnModeOptions columnModeOptions;
+
     private final Duration partitionDiscoveryInterval;
 
     @Nullable
     private final Integer parallelism;
+
+    private final boolean useTls;
 
     @Override
     public ChangelogMode getChangelogMode() {
@@ -63,15 +74,35 @@ public class YtQueueDynamicTableSource implements ScanTableSource {
                 .proxy(proxy)
                 .queuePath(queuePath)
                 .credentialsProvider(credentialsProvider)
-                .recordDeserializer(new YtQueueRowDataDeserializer(deserializer))
+                .recordDeserializer(createRecordDeserializer(deserializer))
                 .producedType(producedType)
                 .startupMode(startupMode)
                 .specificOffsets(specificOffsets)
                 .trimmedOffsetPolicy(trimmedOffsetPolicy)
                 .readerOptions(readerOptions)
                 .discoveryInterval(partitionDiscoveryInterval)
+                .useTls(useTls)
                 .build();
         return SourceProvider.of(source, parallelism);
+    }
+
+    private YtQueueRecordDeserializer<RowData> createRecordDeserializer(
+            DeserializationSchema<RowData> deserializer) {
+        switch (readMode) {
+            case ROW:
+                return new YtQueueRowDataDeserializer(deserializer);
+            case COLUMN:
+                YtQueueColumnModeOptions options = Objects.requireNonNull(
+                        columnModeOptions,
+                        "columnModeOptions are required for COLUMN read mode");
+                return new YtQueueColumnValueDeserializer<>(
+                        deserializer,
+                        options.getValueColumn(),
+                        options.getCodecColumn(),
+                        options.isIgnoreDecompressionErrors());
+            default:
+                throw new IllegalStateException("Unsupported YT queue read mode: " + readMode);
+        }
     }
 
     @Override
@@ -86,8 +117,11 @@ public class YtQueueDynamicTableSource implements ScanTableSource {
                 .specificOffsets(specificOffsets)
                 .trimmedOffsetPolicy(trimmedOffsetPolicy)
                 .readerOptions(readerOptions)
+                .readMode(readMode)
+                .columnModeOptions(columnModeOptions)
                 .partitionDiscoveryInterval(partitionDiscoveryInterval)
                 .parallelism(parallelism)
+                .useTls(useTls)
                 .build();
     }
 

@@ -45,6 +45,7 @@ public abstract class AbstractYtRowDataInputFormat
         implements ResultTypeQueryable<RowData> {
 
     private static final Logger LOG = LoggerFactory.getLogger(AbstractYtRowDataInputFormat.class);
+    private static final long EMPTY_BATCH_POLL_INTERVAL_MILLIS = 100;
 
     protected final String ysonSchemaString;
     protected final long limit;
@@ -52,6 +53,7 @@ public abstract class AbstractYtRowDataInputFormat
     protected final TypeInformation<RowData> rowDataTypeInfo;
     protected final CredentialsProvider credentialsProvider;
     protected final SerializableSupplier<RetryStrategy> retryStrategy;
+    protected final boolean useTls;
 
     protected transient YTsaurusClient client;
     protected transient TableReader<YTreeNode> tableReader;
@@ -69,13 +71,15 @@ public abstract class AbstractYtRowDataInputFormat
             DeserializationSchema<RowData> deserializer,
             TypeInformation<RowData> rowDataTypeInfo,
             CredentialsProvider credentialsProvider,
-            SerializableSupplier<RetryStrategy> retryStrategy) {
+            SerializableSupplier<RetryStrategy> retryStrategy,
+            boolean useTls) {
         this.ysonSchemaString = ysonSchemaString;
         this.limit = limit;
         this.deserializer = deserializer;
         this.rowDataTypeInfo = rowDataTypeInfo;
         this.credentialsProvider = credentialsProvider;
         this.retryStrategy = retryStrategy;
+        this.useTls = useTls;
     }
 
     @Override
@@ -147,7 +151,8 @@ public abstract class AbstractYtRowDataInputFormat
      * Returns the next row, or {@code null} when the table is exhausted.
      *
      * <p>A read that fails is never retried, because row index selectors are not supported for sorted dynamic tables,
-     * while re-reading everything before failed row looks like an overkill. An empty batch is different and is retried.
+     * while re-reading everything before failed row looks like an overkill. Empty batches are polled until a row or EOF
+     * is available.
      */
     @Nullable
     private YTreeNode pollRow() throws Exception {
@@ -159,7 +164,6 @@ public abstract class AbstractYtRowDataInputFormat
             return null;
         }
 
-        RetryStrategy retry = null;
         while (true) {
             tableReader.readyEvent().get();
             List<YTreeNode> rows = tableReader.read();
@@ -173,21 +177,7 @@ public abstract class AbstractYtRowDataInputFormat
             if (!tableReader.canRead()) {
                 return null;
             }
-            // EOF arrives as an empty batch that flips canRead() as it is read, so an empty batch
-            // with canRead() still true is not the end of the table: readyEvent() also fires when
-            // the request future completes, which can happen just before EOF reaches the stash.
-            if (retry == null) {
-                retry = newRetryStrategy();
-            }
-            if (retry.getNumRemainingRetries() < 1) {
-                throw new IOException(String.format(
-                        "Empty batch from %s at row %d while the reader is not at EOF",
-                        path.getFullPath(), rowsRead));
-            }
-            retry = RetryUtils.awaitNextAttempt(retry);
-            if (retry == null) {
-                return null;
-            }
+            Thread.sleep(EMPTY_BATCH_POLL_INTERVAL_MILLIS);
         }
     }
 
@@ -299,7 +289,7 @@ public abstract class AbstractYtRowDataInputFormat
     protected abstract ComplexYtPath resolvePath();
 
     protected YTsaurusClient createClient(ComplexYtPath path) {
-        return YtUtils.makeYtClient(path, credentialsProvider.getCredentials(path.getClusterName()));
+        return YtUtils.makeYtClient(path, credentialsProvider.getCredentials(path.getClusterName()), useTls);
     }
 
     protected void updateHasNext() {
