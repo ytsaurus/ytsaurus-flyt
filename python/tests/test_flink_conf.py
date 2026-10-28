@@ -33,10 +33,10 @@ def test_cluster_flink_config_sets_ports_memory_slots_and_jvm_flags():
     assert props["taskmanager.jvm-exit-on-oom"] == "true"
 
 
-def test_cluster_flink_config_bounds_flink_restarts():
+def test_cluster_flink_config_restarts_flink_jobs_without_an_attempt_limit():
     props = _props()
     assert props["restart-strategy.type"] == "exponential-delay"
-    assert props["restart-strategy.exponential-delay.attempts-before-reset-backoff"] == "10"
+    assert "restart-strategy.exponential-delay.attempts-before-reset-backoff" not in props
 
 
 def test_cluster_flink_config_leaves_per_container_keys_to_the_run_scripts():

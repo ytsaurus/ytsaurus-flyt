@@ -55,7 +55,7 @@ flyt generates one `config.yaml` at submit time and writes it to `flink/conf/con
 
 - ports: `rest.port` 27050 (the Web UI), `jobmanager.rpc.port` 27051, `blob.server.port` 27052, random TaskManager RPC/data ports so TaskManagers can share an exec node; bind addresses `0.0.0.0`;
 - the sizes from [Sizing](#sizing) and [Memory](#memory), `parallelism.default = taskmanager_count * slots`;
-- `restart-strategy.type: exponential-delay` with at most 10 attempts in a row (see [Discovery and lifecycle](#discovery-and-lifecycle));
+- `restart-strategy.type: exponential-delay` with Flink's defaults, no attempt limit (see [Discovery and lifecycle](#discovery-and-lifecycle));
 - `python.executable`/`python.client.executable` = `python_bin`; JVM flags `-Djava.net.preferIPv6Addresses=true`, `-XX:ActiveProcessorCount=<container cpu>`, `-XX:+ExitOnOutOfMemoryError`.
 
 Per-container values are passed on the command line by the run scripts:
@@ -74,7 +74,7 @@ The pipeline sets its Flink options in code, as in `minicluster` (`StreamExecuti
 How TaskManagers find the JobManager and how the gang operation restarts are described in [ARCHITECTURE.md](../ARCHITECTURE.md); what matters when operating a job:
 
 - A TaskManager polls for the JobManager up to `discovery_timeout` (default 300 s, Flink's own registration timeout), then fails and is restarted by YT; every such failure counts toward the operation's failed-job budget (`max_failed_job_count`, by default `max(10, 5 * taskmanager_count)`: about five failures per TaskManager, never fewer than minicluster's 10), so raise both on a pool where scheduling the JobManager takes long; a JobManager that never gets scheduled therefore fails the operation through that budget.
-- Flink restarts a failed job in the cluster (`exponential-delay`) at most 10 times in a row (`restart-strategy.exponential-delay.attempts-before-reset-backoff`; the count resets after an hour of stable run, `reset-backoff-threshold`). Then the Flink job fails, the driver exits non-zero and YT restarts the whole cluster, which also counts toward the budget: a job with a deterministic bug fails the operation instead of retrying forever. The pipeline can set its own restart strategy in code.
+- Flink restarts a failed job in the cluster (`exponential-delay`, Flink's defaults) without an attempt limit, so a job that keeps failing keeps retrying with a growing backoff instead of failing the operation. The pipeline can set its own restart strategy in code (e.g. `restart-strategy.exponential-delay.attempts-before-reset-backoff`).
 - Inside the YT jobs the proxy is the client proxy, the cluster's `/hosts` when the client proxy is a loopback address, or `job_yt_proxy`.
 - When the driver exits 0 (bounded sources finished, or the Flink job was cancelled or stopped from the Web UI) the operation completes: the JobManager calls `complete_operation` (retried for up to 2 minutes) and exits 0 whatever the answer, and every TaskManager also watches the JobManager job and exits 0 once it is completed, so the operation completes even when YT refuses the call (e.g. the token in `secure_vault` may not manage the operation). flyt never re-runs a finished pipeline, restarting operations is the orchestrator's job. A non-zero exit restarts the whole cluster with a new incarnation.
 - The Flink Web UI listens on port 27050 of the JobManager YT job: `flyt ui --wait` prints the URL.

@@ -31,10 +31,6 @@ TASKMANAGER_MANAGED_MEMORY_FRACTION = "0.1"
 # A JVM that survives an OutOfMemoryError hangs in GC, misses heartbeats and is never restarted by YT.
 JVM_EXIT_ON_OOM_OPT = "-XX:+ExitOnOutOfMemoryError"
 
-# Restarts without a stable run (restart-strategy.exponential-delay.reset-backoff-threshold, 1h) before
-# the Flink job fails; then the driver exits non-zero and YT restarts the cluster.
-FLINK_RESTART_ATTEMPTS = 10
-
 
 def _mebibytes(size_bytes: int) -> str:
     return f"{max(int(size_bytes) // MIB, 1)}m"
@@ -66,8 +62,6 @@ def cluster_flink_config(config: FlytConfig, resources: ApplicationResources) ->
         # Without checkpointing Flink defaults to no restarts: a lost TaskManager would fail the
         # driver and turn into a full gang restart instead of an in-cluster job restart.
         "restart-strategy.type": "exponential-delay",
-        # Flink retries forever by default; a job that keeps failing must fail the operation instead.
-        "restart-strategy.exponential-delay.attempts-before-reset-backoff": str(FLINK_RESTART_ATTEMPTS),
         # Task-thread OOMs kill the TaskManager (Flink option); ExitOnOutOfMemoryError covers every
         # other thread. Either way YT restarts the job and Flink recovers instead of hanging.
         "taskmanager.jvm-exit-on-oom": "true",
