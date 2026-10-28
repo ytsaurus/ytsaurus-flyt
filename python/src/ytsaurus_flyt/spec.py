@@ -2,16 +2,22 @@
 
 from __future__ import annotations
 
+import logging
 import shlex
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
+from yt.wrapper import YtClient
 from yt.wrapper.spec_builders import VanillaSpecBuilder
 
-from ytsaurus_flyt.application import ApplicationCluster
+from ytsaurus_flyt.application import application_cluster
 from ytsaurus_flyt.config import FlytConfig
 from ytsaurus_flyt.flink_conf import FLINK_REST_PORT, render_flink_config_yaml
+from ytsaurus_flyt.job_proxy import job_yt_proxy
 from ytsaurus_flyt.models import ClusterParams, OperationParams
+from ytsaurus_flyt.yt_client import proxy_url_from_client
+
+logger = logging.getLogger(__name__)
 
 # Environment read by the application-mode run scripts and the in-job helper.
 FLYT_YT_PROXY_ENV = "FLYT_YT_PROXY"
@@ -147,45 +153,48 @@ def build_vanilla_operation_spec(
     operation_params: OperationParams,
     secure_vault: dict[str, str],
     *,
-    minicluster_params: Optional[ClusterParams] = None,
-    application_cluster: Optional[ApplicationCluster] = None,
-    yt_proxy: Optional[str] = None,
+    preset_params: ClusterParams,
+    yt_client: Optional[YtClient] = None,
     use_squashfs_sandbox_unpack: bool = False,
 ) -> VanillaSpecBuilder:
     """Build a Vanilla operation spec to launch a Flink job (SquashFS runtime only).
 
-    ``cluster_mode: minicluster`` yields a single task sized by ``minicluster_params``; the script runs as
+    ``cluster_mode: minicluster`` yields a single task sized by ``preset_params``; the script runs as
     ``python <script>`` and configures its MiniCluster in code.
-    ``cluster_mode: application`` yields a gang ``jobmanager`` task and a ``taskmanager`` task sized and
-    configured by ``application_cluster`` (:func:`ytsaurus_flyt.application.application_cluster`); ``yt_proxy`` is
-    the HTTP proxy the TaskManagers query to discover the JobManager.
+    ``cluster_mode: application`` yields a gang ``jobmanager`` task and a ``taskmanager`` task; ``preset_params``
+    sizes every TaskManager (:func:`ytsaurus_flyt.application.application_cluster`). ``yt_client`` is then required:
+    its proxy (or ``config.job_yt_proxy``) is what the TaskManagers query to discover the JobManager.
     """
     service_name = config.service_name or _extract_service_name(job_command)
     is_application = config.is_application_cluster
-    if is_application:
-        if application_cluster is None:
-            raise ValueError("application_cluster is required for cluster_mode: application")
-        if not (yt_proxy or "").strip():
-            raise ValueError("yt_proxy is required for cluster_mode: application")
-    elif minicluster_params is None:
-        raise ValueError("minicluster_params is required for cluster_mode: minicluster")
 
     environment: Dict[str, str] = {
         **DEFAULT_ENVIRONMENT,
         "JAVA_HOME": config.java_home,
     }
     if is_application:
+        if yt_client is None:
+            raise ValueError("yt_client is required for cluster_mode: application")
+        proxy_url = proxy_url_from_client(yt_client)
+        if proxy_url is None:
+            raise ValueError(
+                "Cannot determine the YT proxy URL from yt_client; application mode needs it for discovery"
+            )
+        yt_proxy = job_yt_proxy(yt_client, proxy_url, config.job_yt_proxy)
+        if yt_proxy != proxy_url:
+            logger.info("Jobs will reach YT through %s", yt_proxy)
+        cluster = application_cluster(config, preset_params)
+        logger.info("Application cluster: %s", cluster.resources.summary())
         # Memory and JVM flags live in the cluster config.yaml (Flink's memory model), never in -Xmx.
-        environment[FLYT_YT_PROXY_ENV] = str(yt_proxy).strip()
+        environment[FLYT_YT_PROXY_ENV] = yt_proxy
     else:
-        assert minicluster_params is not None
-        java_opts = f"-Xmx{minicluster_params.max_heap_size}"
-        if minicluster_params.off_heap_size:
+        java_opts = f"-Xmx{preset_params.max_heap_size}"
+        if preset_params.off_heap_size:
             # Bounds NIO/netty direct buffers (gRPC connectors); otherwise the JVM
             # defaults MaxDirectMemorySize to ~the max heap size.
-            java_opts += f" -XX:MaxDirectMemorySize={minicluster_params.off_heap_size}"
+            java_opts += f" -XX:MaxDirectMemorySize={preset_params.off_heap_size}"
         # Pin the JVM's processor count to the container CPU limit.
-        java_opts += f" -XX:ActiveProcessorCount={minicluster_params.cpu}"
+        java_opts += f" -XX:ActiveProcessorCount={preset_params.cpu}"
         environment["FLINK_ENV_JAVA_OPTS"] = java_opts
     environment.update(config.extra_environment)
 
@@ -202,9 +211,8 @@ def build_vanilla_operation_spec(
 
     builder = VanillaSpecBuilder()
     if is_application:
-        assert application_cluster is not None
-        jobmanager_params = application_cluster.resources.jobmanager_params()
-        taskmanager_params = application_cluster.resources.taskmanager_params()
+        jobmanager_params = cluster.resources.jobmanager_params()
+        taskmanager_params = cluster.resources.taskmanager_params()
         _begin_task(
             builder,
             JOBMANAGER_TASK,
@@ -214,7 +222,7 @@ def build_vanilla_operation_spec(
                 service_name,
                 use_squashfs_sandbox_unpack=use_squashfs_sandbox_unpack,
                 role=JOBMANAGER_TASK,
-                flink_config=application_cluster.flink_config,
+                flink_config=cluster.flink_config,
             ),
             job_count=1,
             cpu=jobmanager_params.cpu,
@@ -232,7 +240,7 @@ def build_vanilla_operation_spec(
                 service_name,
                 use_squashfs_sandbox_unpack=use_squashfs_sandbox_unpack,
                 role=TASKMANAGER_TASK,
-                flink_config=application_cluster.flink_config,
+                flink_config=cluster.flink_config,
             ),
             job_count=taskmanager_params.count,
             cpu=taskmanager_params.cpu,
@@ -242,7 +250,6 @@ def build_vanilla_operation_spec(
             layer_paths=operation_params.layer_paths,
         )
     else:
-        assert minicluster_params is not None
         _begin_task(
             builder,
             MINICLUSTER_TASK,
@@ -253,8 +260,8 @@ def build_vanilla_operation_spec(
                 use_squashfs_sandbox_unpack=use_squashfs_sandbox_unpack,
             ),
             job_count=1,
-            cpu=minicluster_params.cpu,
-            memory=minicluster_params.memory_bytes(),
+            cpu=preset_params.cpu,
+            memory=preset_params.memory_bytes(),
             task_spec=common_task_spec,
             layer_paths=operation_params.layer_paths,
         )

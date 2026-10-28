@@ -9,7 +9,6 @@ from typing import Any, Dict, Optional, Union
 from yt.wrapper import YtClient
 from yt.wrapper.run_operation_commands import run_operation
 
-from ytsaurus_flyt.application import ApplicationCluster, application_cluster
 from ytsaurus_flyt.config import FlytConfig, require_squashfs_runtime_config
 from ytsaurus_flyt.credentials import get_secure_credentials
 from ytsaurus_flyt.flink_conf import FLINK_REST_PORT
@@ -17,7 +16,6 @@ from ytsaurus_flyt.flink_lib_jars import (
     partition_flink_lib_jars_for_delivery,
     resolve_flink_lib_jars,
 )
-from ytsaurus_flyt.job_proxy import job_yt_proxy
 from ytsaurus_flyt.jobshell_resolve import operation_title_for_profile
 from ytsaurus_flyt.layer_builder import ensure_runtime_layer, ensure_unsquashfs_tool_remote
 from ytsaurus_flyt.models import (
@@ -84,8 +82,7 @@ def launch_vanilla_job(
     """Submit a PyFlink job as a Vanilla operation (``execute.wait()`` semantics).
 
     With ``config.cluster_mode == ClusterMode.APPLICATION`` the operation runs a JobManager task and a
-    TaskManager task resolved by :func:`ytsaurus_flyt.application.application_cluster`; ``preset`` then sizes
-    every TaskManager.
+    TaskManager task; ``preset`` then sizes every TaskManager.
     """
     if isinstance(preset, ClusterPreset):
         preset_params = preset.params
@@ -104,18 +101,6 @@ def launch_vanilla_job(
     )
 
     require_squashfs_runtime_config(config)
-    cluster: Optional[ApplicationCluster] = None
-    jobs_proxy: Optional[str] = None
-    if config.is_application_cluster:
-        if proxy_url is None:
-            raise ValueError(
-                "Cannot determine the YT proxy URL from yt_client; application mode needs it for discovery"
-            )
-        jobs_proxy = job_yt_proxy(yt_client, proxy_url, config.job_yt_proxy)
-        if jobs_proxy != proxy_url:
-            logger.info("Jobs will reach YT through %s", jobs_proxy)
-        cluster = application_cluster(config, preset_params)
-        logger.info("Application cluster: %s", cluster.resources.summary())
 
     logger.info("Fetching credentials...")
     secure_vault = get_secure_credentials(yt_client, extra_secrets=extra_secrets)
@@ -189,9 +174,8 @@ def launch_vanilla_job(
             config=config,
             operation_params=operation_params,
             secure_vault=secure_vault,
-            minicluster_params=None if cluster is not None else preset_params,
-            application_cluster=cluster,
-            yt_proxy=jobs_proxy,
+            preset_params=preset_params,
+            yt_client=yt_client,
             use_squashfs_sandbox_unpack=config.squashfs_layer_delivery == "sandbox_unpack",
         )
 

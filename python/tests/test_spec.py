@@ -64,7 +64,7 @@ def test_build_vanilla_operation_spec_layer_paths_and_tmpfs():
         job_command="p.py",
         config=config,
         operation_params=op,
-        minicluster_params=_minicluster(),
+        preset_params=_minicluster(),
         secure_vault={},
         use_squashfs_sandbox_unpack=False,
     )
@@ -87,7 +87,7 @@ def test_build_vanilla_operation_spec_sandbox_unpack_no_layer_paths_in_task():
         job_command="p.py",
         config=config,
         operation_params=op,
-        minicluster_params=_minicluster(),
+        preset_params=_minicluster(),
         secure_vault={},
         use_squashfs_sandbox_unpack=True,
     )
@@ -105,7 +105,7 @@ def test_build_vanilla_operation_spec_environment_no_hardcoded_flink_paths():
         job_command="p.py",
         config=config,
         operation_params=op,
-        minicluster_params=_minicluster(),
+        preset_params=_minicluster(),
         secure_vault={},
     )
     spec = builder.build()
@@ -125,7 +125,7 @@ def test_build_vanilla_operation_spec_java_opts_heap_only():
         config=config,
         operation_params=op,
         secure_vault={},
-        minicluster_params=_minicluster("14G"),
+        preset_params=_minicluster("14G"),
     )
     env = builder.build()["tasks"][MINICLUSTER_TASK]["environment"]
     # MICRO preset -> cpu=2, so ActiveProcessorCount is pinned to 2.
@@ -141,7 +141,7 @@ def test_build_vanilla_operation_spec_java_opts_with_off_heap():
         config=config,
         operation_params=op,
         secure_vault={},
-        minicluster_params=_minicluster("14G", "8G"),
+        preset_params=_minicluster("14G", "8G"),
     )
     env = builder.build()["tasks"][MINICLUSTER_TASK]["environment"]
     assert env["FLINK_ENV_JAVA_OPTS"] == ("-Xmx14G -XX:MaxDirectMemorySize=8G -XX:ActiveProcessorCount=2")

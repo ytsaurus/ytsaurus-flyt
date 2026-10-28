@@ -4,8 +4,8 @@ import shutil
 import subprocess
 
 import pytest
+from yt.wrapper import YtClient
 
-from ytsaurus_flyt.application import application_cluster
 from ytsaurus_flyt.config import FlytConfig
 from ytsaurus_flyt.models import ClusterPreset, OperationParams
 from ytsaurus_flyt.spec import (
@@ -16,6 +16,7 @@ from ytsaurus_flyt.spec import (
 )
 
 _MICRO = ClusterPreset.MICRO.params
+_CLIENT = YtClient(proxy="proxy.example:80", token="t")
 
 
 def _op() -> OperationParams:
@@ -35,14 +36,14 @@ def _app_config(**overrides) -> FlytConfig:
 
 
 def _build(config: FlytConfig, preset=_MICRO, **kwargs):
-    kwargs.setdefault("application_cluster", application_cluster(config, preset))
-    kwargs.setdefault("yt_proxy", "http://proxy.example:80")
+    kwargs.setdefault("yt_client", _CLIENT)
     return build_vanilla_operation_spec(
         title="t",
         job_command="pipeline.py --x 1",
         config=config,
         operation_params=_op(),
         secure_vault={},
+        preset_params=preset,
         **kwargs,
     ).build()
 
@@ -72,11 +73,11 @@ def test_application_spec_has_gang_jobmanager_and_plain_taskmanager_tasks():
         assert "FLINK_ENV_JAVA_OPTS" not in env
 
 
-def test_application_spec_requires_the_cluster_and_proxy():
-    with pytest.raises(ValueError, match="application_cluster is required"):
-        _build(_app_config(), application_cluster=None)
-    with pytest.raises(ValueError, match="yt_proxy"):
-        _build(_app_config(), yt_proxy=None)
+def test_application_spec_requires_the_client_and_takes_the_jobs_proxy_from_it():
+    with pytest.raises(ValueError, match="yt_client is required"):
+        _build(_app_config(), yt_client=None)
+    env = _build(_app_config(job_yt_proxy="jobs.example"))["tasks"][TASKMANAGER_TASK]["environment"]
+    assert env["FLYT_YT_PROXY"] == "http://jobs.example"
 
 
 def test_application_run_scripts_launch_standalone_job_and_taskmanager():
@@ -148,8 +149,8 @@ def test_application_sandbox_unpack_keeps_unpack_fragment_and_drops_layer_paths(
         operation_params=OperationParams(file_paths=["//tmp/runtime.squashfs", "//tmp/wheel.whl"], pool="pool"),
         secure_vault={},
         use_squashfs_sandbox_unpack=True,
-        application_cluster=application_cluster(cfg, _MICRO),
-        yt_proxy="proxy.example",
+        preset_params=_MICRO,
+        yt_client=_CLIENT,
     ).build()
     for task in spec["tasks"].values():
         assert "common/01_unpack_runtime_squashfs.sh" in task["command"]
@@ -172,7 +173,7 @@ def _minicluster_spec(cfg: FlytConfig) -> dict:
         config=cfg,
         operation_params=_op(),
         secure_vault={},
-        minicluster_params=_MICRO,
+        preset_params=_MICRO,
     ).build()
 
 
@@ -223,7 +224,7 @@ def test_rendered_run_scripts_are_valid_bash(mode, delivery, tmp_path):
             config=cfg,
             operation_params=_op(),
             secure_vault={},
-            minicluster_params=_MICRO,
+            preset_params=_MICRO,
             use_squashfs_sandbox_unpack=unpack,
         ).build()
     for name, task in spec["tasks"].items():

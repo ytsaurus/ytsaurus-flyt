@@ -45,28 +45,9 @@ def test_launch_vanilla_job_accepts_cluster_params_type():
     assert ClusterParams in hints["preset"].__args__
 
 
-def test_launch_sizes_taskmanagers_with_the_preset(monkeypatch):
+def test_launch_passes_the_preset_and_the_client_to_the_spec(monkeypatch):
     from ytsaurus_flyt import launcher as launcher_module
     from ytsaurus_flyt.models import ClusterPreset
-
-    monkeypatch.setattr(launcher_module, "proxy_url_from_client", lambda _c: "http://proxy")
-    monkeypatch.setattr(launcher_module, "require_squashfs_runtime_config", lambda _c: None)
-    monkeypatch.setattr(launcher_module, "job_yt_proxy", lambda *a: "http://proxy")
-    seen = {}
-
-    def stop(config, preset):
-        seen["preset"] = preset
-        raise RuntimeError("stop here")
-
-    monkeypatch.setattr(launcher_module, "application_cluster", stop)
-    cfg = FlytConfig(service_name="svc", cluster_mode="application")
-    with pytest.raises(RuntimeError, match="stop here"):
-        launch_vanilla_job(cfg, MagicMock(), "pipeline.py", "pool", preset=ClusterPreset.LARGE)
-    assert seen["preset"] == ClusterPreset.LARGE.params
-
-
-def test_launch_passes_job_proxy_to_the_spec(monkeypatch):
-    from ytsaurus_flyt import launcher as launcher_module
 
     captured = {}
 
@@ -74,11 +55,8 @@ def test_launch_passes_job_proxy_to_the_spec(monkeypatch):
         captured.update(kwargs)
         raise RuntimeError("stop here")
 
-    monkeypatch.setattr(launcher_module, "proxy_url_from_client", lambda _c: "http://localhost:50005")
+    monkeypatch.setattr(launcher_module, "proxy_url_from_client", lambda _c: "http://proxy")
     monkeypatch.setattr(launcher_module, "require_squashfs_runtime_config", lambda _c: None)
-    monkeypatch.setattr(
-        launcher_module, "job_yt_proxy", lambda client, url, configured: configured or "hp-0.cluster,hp-1.cluster"
-    )
     monkeypatch.setattr(launcher_module, "get_secure_credentials", lambda *a, **k: {})
     monkeypatch.setattr(launcher_module, "upload_service_wheel", lambda *a, **k: contextlib.nullcontext("//tmp/w.whl"))
     monkeypatch.setattr(
@@ -88,10 +66,13 @@ def test_launch_passes_job_proxy_to_the_spec(monkeypatch):
     monkeypatch.setattr(launcher_module, "ensure_runtime_layer", lambda *a, **k: "//home/l.squashfs")
     monkeypatch.setattr(launcher_module, "ensure_unsquashfs_tool_remote", lambda *a, **k: "//home/unsquashfs")
     monkeypatch.setattr(launcher_module, "build_vanilla_operation_spec", fake_build)
+    client = MagicMock()
     cfg = FlytConfig(service_name="svc", cluster_mode="application", squashfs_layer_delivery="sandbox_unpack")
     with pytest.raises(RuntimeError, match="stop here"):
-        launch_vanilla_job(cfg, MagicMock(), "pipeline.py", "pool", wheel_path="w.whl")
-    assert captured["yt_proxy"] == "hp-0.cluster,hp-1.cluster"
+        launch_vanilla_job(cfg, client, "pipeline.py", "pool", preset=ClusterPreset.LARGE, wheel_path="w.whl")
+    # the spec builder sizes the cluster and resolves the jobs' proxy from these two
+    assert captured["preset_params"] == ClusterPreset.LARGE.params
+    assert captured["yt_client"] is client
 
 
 def test_failed_job_budget_scales_with_taskmanagers():
