@@ -21,8 +21,8 @@ from ytsaurus_flyt.job_proxy import job_yt_proxy
 from ytsaurus_flyt.jobshell_resolve import operation_title_for_profile
 from ytsaurus_flyt.layer_builder import ensure_runtime_layer, ensure_unsquashfs_tool_remote
 from ytsaurus_flyt.models import (
-    MiniClusterParams,
-    MiniClusterPreset,
+    ClusterParams,
+    ClusterPreset,
     OperationParams,
 )
 from ytsaurus_flyt.spec import build_vanilla_operation_spec
@@ -72,7 +72,7 @@ def launch_vanilla_job(
     yt_client: YtClient,
     job_command: str,
     pool: str,
-    preset: Union[MiniClusterPreset, MiniClusterParams] = MiniClusterPreset.MICRO,
+    preset: Union[ClusterPreset, ClusterParams] = ClusterPreset.MICRO,
     extra_secrets: Optional[Dict[str, str]] = None,
     wheel_path: Optional[str] = None,
     source_dir: Optional[str] = None,
@@ -83,11 +83,11 @@ def launch_vanilla_job(
 ) -> Any:
     """Submit a PyFlink job as a Vanilla operation (``execute.wait()`` semantics).
 
-    With ``config.cluster_mode == "application"`` the operation runs a JobManager task and a
+    With ``config.cluster_mode == ClusterMode.APPLICATION`` the operation runs a JobManager task and a
     TaskManager task resolved by :func:`ytsaurus_flyt.application.application_cluster`; ``preset`` then sizes
     every TaskManager.
     """
-    if isinstance(preset, MiniClusterPreset):
+    if isinstance(preset, ClusterPreset):
         preset_params = preset.params
         preset_name = preset.name
     else:

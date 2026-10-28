@@ -11,7 +11,7 @@ from yt.wrapper.spec_builders import VanillaSpecBuilder
 from ytsaurus_flyt.application import ApplicationCluster
 from ytsaurus_flyt.config import FlytConfig
 from ytsaurus_flyt.flink_conf import FLINK_REST_PORT, render_flink_config_yaml
-from ytsaurus_flyt.models import MiniClusterParams, OperationParams
+from ytsaurus_flyt.models import ClusterParams, OperationParams
 
 # Environment read by the application-mode run scripts and the in-job helper.
 FLYT_YT_PROXY_ENV = "FLYT_YT_PROXY"
@@ -147,7 +147,7 @@ def build_vanilla_operation_spec(
     operation_params: OperationParams,
     secure_vault: dict[str, str],
     *,
-    minicluster_params: Optional[MiniClusterParams] = None,
+    minicluster_params: Optional[ClusterParams] = None,
     application_cluster: Optional[ApplicationCluster] = None,
     yt_proxy: Optional[str] = None,
     use_squashfs_sandbox_unpack: bool = False,

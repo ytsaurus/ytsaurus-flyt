@@ -2,13 +2,23 @@
 
 import warnings
 from dataclasses import asdict, dataclass, field
+from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
 _VALID_SQUASHFS_DELIVERY: Tuple[str, ...] = ("layer_paths", "sandbox_unpack")
-_VALID_CLUSTER_MODES: Tuple[str, ...] = ("minicluster", "application")
 _VALID_SQUASHFS_COMPRESSION: Tuple[str, ...] = ("gzip", "xz", "zstd", "lz4")
+
+
+class ClusterMode(str, Enum):
+    """Topology of the Vanilla operation (``cluster_mode`` in the profile, ``flyt run --mode``)."""
+
+    MINICLUSTER = "minicluster"
+    """One YT job; PyFlink starts JobManager and TaskManager inside the script's JVM."""
+    APPLICATION = "application"
+    """A gang JobManager YT job running the script plus ``taskmanager_count`` TaskManager YT jobs."""
+
 
 # Typical OpenJDK 11 path on Debian/Ubuntu exec images; single source for FlytConfig default and CLI profile template.
 DEFAULT_JAVA_HOME = "/usr/lib/jvm/java-11-openjdk-amd64"
@@ -123,7 +133,7 @@ class FlytConfig:
     """
 
     # --- Cluster topology ---
-    cluster_mode: str = "minicluster"
+    cluster_mode: ClusterMode = ClusterMode.MINICLUSTER
     """``minicluster``: one YT job runs the PyFlink script with an in-JVM MiniCluster (JobManager and
     TaskManager share a single JVM). ``application``: a Flink application cluster with a
     ``jobmanager`` task (one gang YT job) and a ``taskmanager`` task with :attr:`taskmanager_count` jobs.
@@ -171,10 +181,11 @@ class FlytConfig:
             raise ValueError(f"squashfs_compression must be one of {list(_VALID_SQUASHFS_COMPRESSION)}, got {c!r}")
         self.squashfs_layer_delivery = d
         self.squashfs_compression = c
-        m = (self.cluster_mode or "").strip().lower()
-        if m not in _VALID_CLUSTER_MODES:
-            raise ValueError(f"cluster_mode must be one of {list(_VALID_CLUSTER_MODES)}, got {m!r}")
-        self.cluster_mode = m
+        m = str(self.cluster_mode.value if isinstance(self.cluster_mode, ClusterMode) else self.cluster_mode or "")
+        try:
+            self.cluster_mode = ClusterMode(m.strip().lower())
+        except ValueError as e:
+            raise ValueError(f"cluster_mode must be one of {[c.value for c in ClusterMode]}, got {m!r}") from e
         # Positive integers; the cpu fields may also be None (resolved later from defaults / slots).
         for name in (
             "taskmanager_count",
@@ -203,7 +214,9 @@ class FlytConfig:
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to a plain dict (dataclass fields only)."""
-        return asdict(self)
+        data = asdict(self)
+        data["cluster_mode"] = self.cluster_mode.value
+        return data
 
     def to_yaml(self) -> str:
         """Serialize to YAML text."""
@@ -230,7 +243,7 @@ class FlytConfig:
 
     @property
     def is_application_cluster(self) -> bool:
-        return self.cluster_mode == "application"
+        return self.cluster_mode is ClusterMode.APPLICATION
 
 
 # Messages shared with validate_flyt_config row output

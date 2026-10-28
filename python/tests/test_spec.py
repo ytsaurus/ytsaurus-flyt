@@ -1,12 +1,12 @@
 """Tests for Vanilla spec assembly and run-script selection."""
 
 from ytsaurus_flyt.config import FlytConfig
-from ytsaurus_flyt.models import MiniClusterParams, OperationParams
+from ytsaurus_flyt.models import ClusterParams, OperationParams
 from ytsaurus_flyt.spec import MINICLUSTER_TASK, _build_run_script, build_vanilla_operation_spec
 
 
-def _minicluster(max_heap: str = "2324M", off_heap=None) -> MiniClusterParams:
-    return MiniClusterParams(cpu=2, memory="4G", max_heap_size=max_heap, data_size_per_job="0B", off_heap_size=off_heap)
+def _minicluster(max_heap: str = "2324M", off_heap=None) -> ClusterParams:
+    return ClusterParams(cpu=2, memory="4G", max_heap_size=max_heap, data_size_per_job="0B", off_heap_size=off_heap)
 
 
 def test_build_run_script_squashfs_unpack_includes_unpack_fragment():

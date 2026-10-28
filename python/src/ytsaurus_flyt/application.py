@@ -13,8 +13,8 @@ from ytsaurus_flyt.models import (
     DEFAULT_JOBMANAGER_CPU,
     DEFAULT_JOBMANAGER_PROCESS_MEMORY,
     TASKMANAGER_CONTAINER_OVERHEAD,
+    ClusterParams,
     JobmanagerParams,
-    MiniClusterParams,
     TaskmanagerParams,
 )
 
@@ -58,7 +58,7 @@ class ApplicationResources:
         )
 
 
-def resolve_application_resources(config: FlytConfig, taskmanager_size: MiniClusterParams) -> ApplicationResources:
+def resolve_application_resources(config: FlytConfig, taskmanager_size: ClusterParams) -> ApplicationResources:
     """Every TaskManager gets the preset's cpu (or ``taskmanager_cpu``) and container memory, with one slot
     per cpu; the JobManager gets flyt's defaults (cpu from ``jobmanager_cpu``)."""
     taskmanager_cpu = config.taskmanager_cpu if config.taskmanager_cpu is not None else taskmanager_size.cpu
@@ -87,7 +87,7 @@ class ApplicationCluster:
     flink_config: Dict[str, str]
 
 
-def application_cluster(config: FlytConfig, taskmanager_size: MiniClusterParams) -> ApplicationCluster:
+def application_cluster(config: FlytConfig, taskmanager_size: ClusterParams) -> ApplicationCluster:
     """Resolve the application cluster from the profile and the preset that sizes each TaskManager."""
     resources = resolve_application_resources(config, taskmanager_size)
     return ApplicationCluster(resources=resources, flink_config=cluster_flink_config(config, resources))

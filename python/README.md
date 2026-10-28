@@ -70,10 +70,6 @@ preset: large                 # --preset; every TaskManager: 4 cpu = 4 task slot
 
 The preset that sizes the MiniCluster job sizes every TaskManager in application mode (its cpu is also the slot count, its memory the container); the JobManager gets 2 cpu and a 2g JVM. The cluster must hold the pipeline's highest operator parallelism in `taskmanager_count * slots`. Sizing, lifecycle and troubleshooting: [docs/application-mode.md](docs/application-mode.md).
 
-## Flink options
-
-flyt has no setting for Flink options yet, in either mode: the pipeline sets them in code (`StreamExecutionEnvironment.get_execution_environment(config)`, `t_env.get_config().set(...)`). In `minicluster` this includes the Web UI that `flyt ui` and port-forwards look for, `rest.port` 27050 and `rest.bind-address` 0.0.0.0 (see [examples/simple_wordcount/pipeline.py](examples/simple_wordcount/pipeline.py)). In `application` mode the same code configures the Flink job (parallelism, checkpointing, restart strategy, `pipeline.*`, `table.*`); the cluster itself (memory, slots, ports, JVM flags) is configured by flyt ([docs/application-mode.md](docs/application-mode.md#flink-configuration)).
-
 ## Commands
 
 | Command | Description |
@@ -130,7 +126,7 @@ Do not put the same basename in both lists.
 
 ## API
 
-`FlytConfig`, `FlytConfig.from_yaml()`, `launch_vanilla_job()`, `MiniClusterPreset` — see the package and [ARCHITECTURE.md](ARCHITECTURE.md).
+`FlytConfig`, `FlytConfig.from_yaml()`, `launch_vanilla_job()`, `ClusterPreset` — see the package and [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Development
 

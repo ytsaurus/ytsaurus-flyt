@@ -7,7 +7,7 @@ import pytest
 
 from ytsaurus_flyt.application import application_cluster
 from ytsaurus_flyt.config import FlytConfig
-from ytsaurus_flyt.models import MiniClusterPreset, OperationParams
+from ytsaurus_flyt.models import ClusterPreset, OperationParams
 from ytsaurus_flyt.spec import (
     JOBMANAGER_TASK,
     MINICLUSTER_TASK,
@@ -15,7 +15,7 @@ from ytsaurus_flyt.spec import (
     build_vanilla_operation_spec,
 )
 
-_MICRO = MiniClusterPreset.MICRO.params
+_MICRO = ClusterPreset.MICRO.params
 
 
 def _op() -> OperationParams:
@@ -158,7 +158,7 @@ def test_application_sandbox_unpack_keeps_unpack_fragment_and_drops_layer_paths(
 
 
 def test_application_spec_sizes_taskmanagers_from_the_preset_and_the_jobmanager_from_defaults():
-    spec = _build(_app_config(jobmanager_cpu=4), preset=MiniClusterPreset.LARGE.params)
+    spec = _build(_app_config(jobmanager_cpu=4), preset=ClusterPreset.LARGE.params)
     assert spec["tasks"][JOBMANAGER_TASK]["memory_limit"] == (2 * 1024 + 512) * 1024**2  # 2g JVM + the driver
     assert spec["tasks"][JOBMANAGER_TASK]["cpu_limit"] == 4
     assert spec["tasks"][TASKMANAGER_TASK]["memory_limit"] == 16 * 1024**3

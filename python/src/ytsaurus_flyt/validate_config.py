@@ -14,7 +14,7 @@ from ytsaurus_flyt.config import (
     FlytConfig,
 )
 from ytsaurus_flyt.container_runtime import get_container_runtime_command
-from ytsaurus_flyt.models import MiniClusterParams, MiniClusterPreset
+from ytsaurus_flyt.models import ClusterParams, ClusterPreset
 
 
 def _check_mksquashfs() -> Tuple[bool, str]:
@@ -37,7 +37,7 @@ def _check_container_runtime() -> Tuple[bool, str]:
         return False, str(e)
 
 
-def _application_rows(config: FlytConfig, preset: MiniClusterParams) -> List[Tuple[str, bool, str]]:
+def _application_rows(config: FlytConfig, preset: ClusterParams) -> List[Tuple[str, bool, str]]:
     """The application cluster exactly as ``flyt run`` resolves it."""
     try:
         resources = application_cluster(config, preset).resources
@@ -54,14 +54,14 @@ def validate_flyt_config(
     *,
     proxy: Optional[str] = None,
     yt_client: Optional[YtClient] = None,
-    preset: Optional[MiniClusterParams] = None,
+    preset: Optional[ClusterParams] = None,
 ) -> List[Tuple[str, bool, str]]:
     """Return list of (name, ok, message). ``preset`` sizes each TaskManager in application mode (default micro)."""
     rows: List[Tuple[str, bool, str]] = []
 
     rows.append(("Runtime mode", True, "SquashFS"))
     if config.is_application_cluster:
-        rows.extend(_application_rows(config, preset or MiniClusterPreset.MICRO.params))
+        rows.extend(_application_rows(config, preset or ClusterPreset.MICRO.params))
     else:
         rows.append(("cluster_mode", True, "minicluster (single job, in-JVM MiniCluster)"))
 

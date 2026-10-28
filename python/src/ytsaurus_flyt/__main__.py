@@ -16,7 +16,7 @@ import click
 import yaml
 
 from ytsaurus_flyt.cli_helpers import find_pyproject_for_job, job_command_relative_to_project, resolve_proxy_pool
-from ytsaurus_flyt.config import DEFAULT_JAVA_HOME, FlytConfig
+from ytsaurus_flyt.config import DEFAULT_JAVA_HOME, ClusterMode, FlytConfig
 from ytsaurus_flyt.flink_lib_jars import (
     download_flink_lib_jars,
     partition_flink_lib_jars_for_delivery,
@@ -31,7 +31,7 @@ from ytsaurus_flyt.layer_builder import (
     ensure_unsquashfs_tool_remote,
     upload_squashfs_layer,
 )
-from ytsaurus_flyt.models import DEFAULT_JOBMANAGER_CPU, MiniClusterPreset
+from ytsaurus_flyt.models import DEFAULT_JOBMANAGER_CPU, ClusterPreset
 from ytsaurus_flyt.profiles import (
     default_cypress_base_path,
     list_profile_names,
@@ -345,7 +345,7 @@ def validate(
     if px:
         yt_client = make_yt_client(px)
     _, _, pst = resolve_connection_from_profile(profile_data)
-    preset_params = MiniClusterPreset.__members__.get((pst or "micro").strip().upper(), MiniClusterPreset.MICRO).params
+    preset_params = ClusterPreset.__members__.get((pst or "micro").strip().upper(), ClusterPreset.MICRO).params
     rows = validate_flyt_config(cfg, proxy=px or None, yt_client=yt_client, preset=preset_params)
     ok_all = True
     for name, ok, msg in rows:
@@ -376,7 +376,7 @@ def validate(
 @click.option(
     "--mode",
     "cluster_mode",
-    type=click.Choice(["minicluster", "application"], case_sensitive=False),
+    type=click.Choice([mode.value for mode in ClusterMode], case_sensitive=False),
     default=None,
     help="minicluster: one YT job, in-JVM MiniCluster. application: JobManager + TaskManager tasks "
     "(default: cluster_mode from profile, or minicluster).",
@@ -459,7 +459,7 @@ def run(
     _, _, pst = resolve_connection_from_profile(profile_data)
     preset_s = (preset or "").strip().lower() or (pst or "micro").strip().lower()
     try:
-        preset_enum = MiniClusterPreset[preset_s.upper()]
+        preset_enum = ClusterPreset[preset_s.upper()]
     except KeyError as e:
         raise click.ClickException("Invalid preset %r. Use one of: micro, small, large, xlarge." % (preset_s,)) from e
 

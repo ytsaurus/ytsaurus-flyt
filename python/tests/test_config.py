@@ -5,7 +5,7 @@ import tempfile
 
 import pytest
 
-from ytsaurus_flyt.config import DEFAULT_JAVA_HOME, FlytConfig, require_squashfs_runtime_config
+from ytsaurus_flyt.config import DEFAULT_JAVA_HOME, ClusterMode, FlytConfig, require_squashfs_runtime_config
 
 
 class TestFlytConfig:
@@ -165,6 +165,14 @@ class TestClusterModeConfig:
     def test_invalid_cluster_mode(self):
         with pytest.raises(ValueError, match="cluster_mode"):
             FlytConfig(cluster_mode="session")
+
+    def test_cluster_mode_is_an_enum_that_round_trips_as_its_string(self):
+        config = FlytConfig(cluster_mode=ClusterMode.APPLICATION)
+        assert config.cluster_mode is ClusterMode.APPLICATION
+        assert FlytConfig(cluster_mode="application").cluster_mode is ClusterMode.APPLICATION
+        assert config.cluster_mode == "application"  # a str enum, comparable with the profile value
+        assert config.to_dict()["cluster_mode"] == "application"
+        assert "cluster_mode: application" in config.to_yaml()
 
     def test_invalid_taskmanager_cpu(self):
         with pytest.raises(ValueError, match="taskmanager_cpu"):

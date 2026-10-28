@@ -46,9 +46,10 @@ TASKMANAGER_CONTAINER_OVERHEAD = parse_memory("512M")
 
 
 @dataclass(frozen=True)
-class MiniClusterParams:
-    """The MiniCluster YT job (``cluster_mode: minicluster``): container cpu and memory, the JVM heap
-    (``-Xmx``) and optionally its direct memory (``-XX:MaxDirectMemorySize``)."""
+class ClusterParams:
+    """Size of a flyt job: the MiniCluster YT job, or every TaskManager YT job in application mode
+    (``cpu`` is then also its task slot count, ``memory`` its container). ``max_heap_size`` (``-Xmx``)
+    and ``off_heap_size`` (``-XX:MaxDirectMemorySize``) apply to the MiniCluster JVM only."""
 
     cpu: int
     memory: str
@@ -77,28 +78,28 @@ class MiniClusterParams:
         return parse_memory(self.memory)
 
 
-class MiniClusterPreset(Enum):
+class ClusterPreset(Enum):
     """Pre-defined sizes: the MiniCluster YT job, or every TaskManager YT job in application mode."""
 
-    MICRO = MiniClusterParams(
+    MICRO = ClusterParams(
         cpu=2,
         memory="4G",
         max_heap_size="2324M",
         data_size_per_job="500M",
     )
-    SMALL = MiniClusterParams(
+    SMALL = ClusterParams(
         cpu=2,
         memory="8G",
         max_heap_size="4648M",
         data_size_per_job="1G",
     )
-    LARGE = MiniClusterParams(
+    LARGE = ClusterParams(
         cpu=4,
         memory="16G",
         max_heap_size="9296M",
         data_size_per_job="2G",
     )
-    XLARGE = MiniClusterParams(
+    XLARGE = ClusterParams(
         cpu=8,
         memory="32G",
         max_heap_size="24G",
@@ -106,7 +107,7 @@ class MiniClusterPreset(Enum):
     )
 
     @property
-    def params(self) -> MiniClusterParams:
+    def params(self) -> ClusterParams:
         return self.value
 
 

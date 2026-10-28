@@ -2,7 +2,7 @@
 
 `cluster_mode: application` runs a pipeline as a Flink application cluster inside one YTsaurus Vanilla operation: a `jobmanager` job that executes the script through Flink's `PythonDriver`, plus `taskmanager_count` TaskManager YT jobs. Use it when a pipeline needs more CPU or memory than one container gives; `minicluster` (the default, one YT job with an in-JVM MiniCluster) stays the simpler choice for small pipelines and Kind clusters. Internals are in [ARCHITECTURE.md](../ARCHITECTURE.md).
 
-flyt is the YTsaurus counterpart of a standalone Flink cluster on Kubernetes in application mode: one `config.yaml` for every container and a fixed number of TaskManagers. The cluster is configured by flyt; the pipeline configures its Flink job in code, the same way in both modes (see [Flink options](#flink-options)).
+flyt is the YTsaurus counterpart of a standalone Flink cluster on Kubernetes in application mode: a fixed number of TaskManagers and one `config.yaml` that flyt generates for every container. The pipeline configures its Flink job in code, the same way in both modes (see [Flink options](#flink-options)).
 
 ## Fields and flags
 
@@ -67,7 +67,7 @@ Per-container values are passed on the command line by the run scripts:
 
 ### Flink options
 
-There is no flyt setting for Flink options yet, in either mode. The pipeline sets them in code, as in `minicluster` (`StreamExecutionEnvironment.get_execution_environment(config)`, `t_env.get_config().set(...)`), and the same code works in both modes for job options: parallelism, checkpointing, restart strategy, `pipeline.*`, `table.*`, `python.*`. Cluster options (memory, slots, ports, metrics reporters, JVM flags) are read by the JobManager and TaskManagers when they start, before the script runs, so setting them in code has no effect in `application` mode; flyt's values above apply.
+The pipeline sets its Flink options in code, as in `minicluster` (`StreamExecutionEnvironment.get_execution_environment(config)`, `t_env.get_config().set(...)`), and the same code works in both modes for job options: parallelism, checkpointing, restart strategy, `pipeline.*`, `table.*`, `python.*`. Cluster options (memory, slots, ports, metrics reporters, JVM flags) are read by the JobManager and TaskManagers when they start, before the script runs, so setting them in code has no effect in `application` mode; flyt's values above apply.
 
 ## Discovery and lifecycle
 

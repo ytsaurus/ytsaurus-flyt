@@ -5,13 +5,13 @@ import yaml
 from ytsaurus_flyt.application import application_cluster
 from ytsaurus_flyt.config import FlytConfig
 from ytsaurus_flyt.flink_conf import render_flink_config_yaml
-from ytsaurus_flyt.models import MiniClusterPreset
+from ytsaurus_flyt.models import ClusterPreset
 
 
 def _props(**overrides) -> dict:
     base = dict(service_name="svc", java_home="/jdk", python_bin="/py", cluster_mode="application")
     base.update(overrides)
-    return application_cluster(FlytConfig(**base), MiniClusterPreset.MICRO.params).flink_config
+    return application_cluster(FlytConfig(**base), ClusterPreset.MICRO.params).flink_config
 
 
 def test_cluster_flink_config_sets_ports_memory_slots_and_jvm_flags():

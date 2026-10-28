@@ -3,9 +3,9 @@
 import pytest
 
 from ytsaurus_flyt.models import (
+    ClusterParams,
+    ClusterPreset,
     JobmanagerParams,
-    MiniClusterParams,
-    MiniClusterPreset,
     OperationParams,
     parse_memory,
 )
@@ -43,53 +43,51 @@ class TestParseMemory:
             parse_memory("abc")
 
 
-class TestMiniClusterParams:
+class TestClusterParams:
     def test_memory_bytes(self):
-        params = MiniClusterParams(cpu=2, memory="4G", max_heap_size="2324M", data_size_per_job="500M")
+        params = ClusterParams(cpu=2, memory="4G", max_heap_size="2324M", data_size_per_job="500M")
         assert params.memory_bytes() == 4 * 1024 * 1024 * 1024
 
     def test_max_heap_size_bytes(self):
-        params = MiniClusterParams(cpu=2, memory="4G", max_heap_size="2324M", data_size_per_job="500M")
+        params = ClusterParams(cpu=2, memory="4G", max_heap_size="2324M", data_size_per_job="500M")
         assert params.max_heap_size_bytes() == 2324 * 1024 * 1024
 
     def test_off_heap_size_bytes_none_by_default(self):
-        params = MiniClusterParams(cpu=2, memory="4G", max_heap_size="2324M", data_size_per_job="500M")
+        params = ClusterParams(cpu=2, memory="4G", max_heap_size="2324M", data_size_per_job="500M")
         assert params.off_heap_size is None
         assert params.off_heap_size_bytes() is None
 
     def test_off_heap_size_bytes(self):
-        params = MiniClusterParams(
-            cpu=2, memory="4G", max_heap_size="2324M", data_size_per_job="500M", off_heap_size="8G"
-        )
+        params = ClusterParams(cpu=2, memory="4G", max_heap_size="2324M", data_size_per_job="500M", off_heap_size="8G")
         assert params.off_heap_size_bytes() == 8 * 1024 * 1024 * 1024
 
     def test_map_operation_fields_keep_their_bytes_helpers(self):
-        params = MiniClusterParams(cpu=2, memory="4G", max_heap_size="2324M", data_size_per_job="500M")
+        params = ClusterParams(cpu=2, memory="4G", max_heap_size="2324M", data_size_per_job="500M")
         assert params.data_size_per_job_bytes() == 500 * 1024 * 1024
         assert params.disk_request_space_bytes() == 10 * 1024**3
         assert params.disk_request_medium_name == "default"
-        assert MiniClusterPreset.MICRO.params.data_size_per_job == "500M"
+        assert ClusterPreset.MICRO.params.data_size_per_job == "500M"
 
     def test_frozen(self):
-        params = MiniClusterParams(cpu=2, memory="4G", max_heap_size="2324M", data_size_per_job="500M")
+        params = ClusterParams(cpu=2, memory="4G", max_heap_size="2324M", data_size_per_job="500M")
         with pytest.raises(AttributeError):
             params.cpu = 4  # type: ignore[misc]
 
 
-class TestMiniClusterPreset:
+class TestClusterPreset:
     def test_micro_preset(self):
-        assert MiniClusterPreset.MICRO.params.cpu == 2
-        assert MiniClusterPreset.MICRO.params.memory == "4G"
+        assert ClusterPreset.MICRO.params.cpu == 2
+        assert ClusterPreset.MICRO.params.memory == "4G"
 
     def test_small_preset(self):
-        assert MiniClusterPreset.SMALL.params.cpu == 2
-        assert MiniClusterPreset.SMALL.params.memory == "8G"
+        assert ClusterPreset.SMALL.params.cpu == 2
+        assert ClusterPreset.SMALL.params.memory == "8G"
 
     def test_large_preset(self):
-        assert MiniClusterPreset.LARGE.params.cpu == 4
+        assert ClusterPreset.LARGE.params.cpu == 4
 
     def test_xlarge_preset(self):
-        assert MiniClusterPreset.XLARGE.params.cpu == 8
+        assert ClusterPreset.XLARGE.params.cpu == 8
 
 
 class TestOperationParams:

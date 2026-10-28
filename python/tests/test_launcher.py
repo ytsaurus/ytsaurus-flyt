@@ -8,7 +8,7 @@ import pytest
 
 from ytsaurus_flyt.config import FlytConfig
 from ytsaurus_flyt.launcher import launch_vanilla_job
-from ytsaurus_flyt.models import MiniClusterParams
+from ytsaurus_flyt.models import ClusterParams
 
 
 @pytest.fixture
@@ -42,12 +42,12 @@ def test_launch_rejects_squashfs_without_runtime_python_version(mock_yt_client):
 
 def test_launch_vanilla_job_accepts_cluster_params_type():
     hints = get_type_hints(launch_vanilla_job)
-    assert MiniClusterParams in hints["preset"].__args__
+    assert ClusterParams in hints["preset"].__args__
 
 
 def test_launch_sizes_taskmanagers_with_the_preset(monkeypatch):
     from ytsaurus_flyt import launcher as launcher_module
-    from ytsaurus_flyt.models import MiniClusterPreset
+    from ytsaurus_flyt.models import ClusterPreset
 
     monkeypatch.setattr(launcher_module, "proxy_url_from_client", lambda _c: "http://proxy")
     monkeypatch.setattr(launcher_module, "require_squashfs_runtime_config", lambda _c: None)
@@ -61,8 +61,8 @@ def test_launch_sizes_taskmanagers_with_the_preset(monkeypatch):
     monkeypatch.setattr(launcher_module, "application_cluster", stop)
     cfg = FlytConfig(service_name="svc", cluster_mode="application")
     with pytest.raises(RuntimeError, match="stop here"):
-        launch_vanilla_job(cfg, MagicMock(), "pipeline.py", "pool", preset=MiniClusterPreset.LARGE)
-    assert seen["preset"] == MiniClusterPreset.LARGE.params
+        launch_vanilla_job(cfg, MagicMock(), "pipeline.py", "pool", preset=ClusterPreset.LARGE)
+    assert seen["preset"] == ClusterPreset.LARGE.params
 
 
 def test_launch_passes_job_proxy_to_the_spec(monkeypatch):
