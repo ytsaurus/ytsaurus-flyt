@@ -12,13 +12,12 @@ from ytsaurus_flyt.flink_conf import cluster_flink_config
 from ytsaurus_flyt.models import (
     DEFAULT_JOBMANAGER_CPU,
     DEFAULT_JOBMANAGER_PROCESS_MEMORY,
+    MIB,
     TASKMANAGER_CONTAINER_OVERHEAD,
     ClusterParams,
     JobmanagerParams,
     TaskmanagerParams,
 )
-
-_MIB = 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -40,9 +39,9 @@ class ApplicationResources:
     def summary(self) -> str:
         """One line for logs and ``flyt validate``."""
         return (
-            f"1 JobManager ({self.jobmanager_cpu} cpu, {self.jobmanager_process_memory // _MIB}m JVM) + "
+            f"1 JobManager ({self.jobmanager_cpu} cpu, {self.jobmanager_process_memory // MIB}m JVM) + "
             f"{self.taskmanager_count} TaskManager(s) x {self.slots} slot(s) "
-            f"({self.taskmanager_cpu} cpu, {self.taskmanager_process_memory // _MIB}m JVM each), "
+            f"({self.taskmanager_cpu} cpu, {self.taskmanager_process_memory // MIB}m JVM each), "
             f"parallelism.default {self.default_parallelism}"
         )
 
@@ -67,7 +66,7 @@ def resolve_application_resources(config: FlytConfig, taskmanager_size: ClusterP
     if taskmanager_process_memory < 1:
         raise ValueError(
             f"preset memory {taskmanager_size.memory} leaves no TaskManager JVM next to the "
-            f"{TASKMANAGER_CONTAINER_OVERHEAD // _MIB}m container overhead"
+            f"{TASKMANAGER_CONTAINER_OVERHEAD // MIB}m container overhead"
         )
     return ApplicationResources(
         taskmanager_count=config.taskmanager_count,

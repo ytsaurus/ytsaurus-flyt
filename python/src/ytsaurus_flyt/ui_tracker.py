@@ -10,7 +10,7 @@ import webbrowser
 from typing import TYPE_CHECKING, List, Optional, Tuple
 
 from ytsaurus_flyt.flink_conf import FLINK_REST_PORT
-from ytsaurus_flyt.spec import TASKMANAGER_TASK
+from ytsaurus_flyt.jobshell_resolve import runs_driver
 
 if TYPE_CHECKING:
     from yt.wrapper import YtClient
@@ -76,13 +76,8 @@ def _job_still_running(client: "YtClient", op_id: str, job_id: str) -> bool:
     return any((j.get("id") or j.get("job_id")) == job_id for j in jobs)
 
 
-def _ui_candidate_jobs(jobs: List[dict]) -> List[dict]:
-    # Application mode: only the JobManager task serves the Web UI.
-    return [j for j in jobs if str(j.get("task_name") or "").lower() != TASKMANAGER_TASK]
-
-
 def _find_job_with_ipv6(client: "YtClient", op_id: str) -> Optional[Tuple[str, List[str]]]:
-    for job in _ui_candidate_jobs(_list_running_jobs(client, op_id) or []):
+    for job in filter(runs_driver, _list_running_jobs(client, op_id) or []):
         job_id = job.get("id") or job.get("job_id")
         if not job_id:
             continue

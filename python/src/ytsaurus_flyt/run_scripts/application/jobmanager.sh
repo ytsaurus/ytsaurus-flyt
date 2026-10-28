@@ -2,8 +2,7 @@ echo "START FLINK JOBMANAGER (application mode)" 1>&2
 
 JM_HOST="$CLUSTER_IP"
 REST_HOST="${{SLOT_IP:-$CLUSTER_IP}}"
-UI_HOST=$([[ "$REST_HOST" == *:* ]] && echo "[$REST_HOST]" || echo "$REST_HOST")
-echo "Flink Web UI (cluster-internal only): http://${{UI_HOST}}:{rest_port}" 1>&2
+announce_web_ui "$REST_HOST"
 
 set -- {job_args}
 JOB_SCRIPT="$1"
@@ -26,7 +25,9 @@ if [ "$EXIT_CODE" -ne 0 ]; then
     # A failed gang job: YT restarts the whole cluster with a new incarnation.
     exit "$EXIT_CODE"
 fi
-# The driver finished (bounded sources, cancel or stop from the Web UI). TaskManagers never exit
-# on their own, so completing the operation is what ends them.
-"${{FLYT_HELPER[@]}}" complete-operation --operation-id "$YT_OPERATION_ID" 1>&2
+# The driver finished (bounded sources, cancel or stop from the Web UI). Completing the operation ends
+# the TaskManagers at once; if YT refuses, they exit 0 on their own once they see this job completed.
+# Never fail here: a failed JobManager job would re-run the finished pipeline through a gang restart.
+"${{FLYT_HELPER[@]}}" complete-operation --operation-id "$YT_OPERATION_ID" 1>&2 \
+    || echo "complete_operation failed; the TaskManagers finish when they see this job completed" 1>&2
 exit 0

@@ -4,9 +4,9 @@ import pytest
 
 from ytsaurus_flyt.application import application_cluster, resolve_application_resources
 from ytsaurus_flyt.config import FlytConfig
-from ytsaurus_flyt.models import ClusterParams, ClusterPreset
+from ytsaurus_flyt.models import MIB, ClusterParams, ClusterPreset
 
-_MIB = 1024**2
+_MIB = MIB
 
 
 def _app_config(**overrides) -> FlytConfig:
@@ -27,9 +27,9 @@ def test_preset_sizes_every_taskmanager_and_jobmanager_keeps_defaults():
 
 def test_cpu_fields_override_the_preset_and_the_jobmanager_default():
     cfg = _app_config(taskmanager_count=2, taskmanager_cpu=6, jobmanager_cpu=4)
-    res = resolve_application_resources(cfg, ClusterPreset.MICRO.params)
+    res = resolve_application_resources(cfg, ClusterPreset.SMALL.params)
     assert (res.taskmanager_cpu, res.slots, res.default_parallelism) == (6, 6, 12)
-    assert res.taskmanager_process_memory == (4 * 1024 - 512) * _MIB
+    assert res.taskmanager_process_memory == (8 * 1024 - 512) * _MIB
     assert res.jobmanager_cpu == 4
 
 

@@ -238,6 +238,27 @@ def test_minicluster_job_runs_the_script_directly_without_flyt_flink_config():
     cmd = spec["tasks"][MINICLUSTER_TASK]["command"]
     assert "FLYT_FLINK_CONF_EOF" not in cmd
     assert '"$PYTHON_BIN" "$@" 1>&2' in cmd
-    assert "http://${UI_HOST}:27050" in cmd
+    assert "http://${host}:27050" in cmd
     assert "Pipeline must set rest.port=27050 and rest.bind-address=0.0.0.0" in cmd
+    assert 'announce_web_ui "$SLOT_IP"' in cmd
     assert "annotations" not in spec
+
+
+def test_application_jobmanager_runs_the_script_and_never_fails_after_the_driver():
+    jm_cmd = _build(_app_config())["tasks"][JOBMANAGER_TASK]["command"]
+    assert '-py "$JOB_SCRIPT" "$@"' in jm_cmd
+    # a refused complete_operation must not fail the JobManager job and re-run the pipeline
+    assert '|| echo "complete_operation failed' in jm_cmd
+
+
+def test_application_taskmanager_exits_zero_once_the_jobmanager_job_completed():
+    tm_cmd = _build(_app_config())["tasks"][TASKMANAGER_TASK]["command"]
+    assert 'wait-job-completed --operation-id "$YT_OPERATION_ID" --job-id "$JM_JOB_ID"' in tm_cmd
+    assert 'kill -TERM "$TM_PID"' in tm_cmd
+    assert tm_cmd.index('if [ -f "$_FLYT_JM_DONE" ]; then') < tm_cmd.rindex('exit "$EXIT_CODE"')
+
+
+def test_jobmanager_announces_the_web_ui_like_the_minicluster_job():
+    jm_cmd = _build(_app_config())["tasks"][JOBMANAGER_TASK]["command"]
+    assert 'announce_web_ui "$REST_HOST"' in jm_cmd
+    assert "kubectl port-forward -n default pod/end-0 27050:27050" in jm_cmd  # from common/00_set_essentials.sh

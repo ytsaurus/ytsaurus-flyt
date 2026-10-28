@@ -14,6 +14,19 @@ pyflink_home() {{
     "$PYTHON_BIN" -c "import os, pyflink; print(os.path.dirname(os.path.abspath(pyflink.__file__)))"
 }}
 
+# Print where the Flink Web UI of this YT job listens (both modes), with the Kind port-forward hint.
+announce_web_ui() {{
+    local host="$1"
+    [ -n "$host" ] || return 0
+    [[ "$host" == *:* ]] && host="[$host]"
+    echo "Flink Web UI (cluster-internal only): http://${{host}}:{rest_port}" 1>&2
+    echo "From your client this URL likely will not open (Pod IPs are not routed on the host)." 1>&2
+    echo "Port-forward the exec pod (Kind default is end-0), then use localhost:" 1>&2
+    echo "  kubectl port-forward -n default pod/end-0 {rest_port}:{rest_port}" 1>&2
+    echo "  # If your exec StatefulSet has another name/index, adjust pod/<name>." 1>&2
+    echo "Then open: http://localhost:{rest_port}" 1>&2
+}}
+
 # Address of this YT job for the Flink Web UI; both run modes report it.
 get_slot_ip() {{
     # Try to get the IP address from YT environment variable

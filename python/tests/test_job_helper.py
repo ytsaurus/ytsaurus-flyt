@@ -316,3 +316,18 @@ def test_yt_request_fails_over_to_the_next_proxy(helper, monkeypatch):
     monkeypatch.setenv("FLYT_YT_PROXY", "hp-0.cluster")
     with pytest.raises(urllib.error.URLError):
         helper.yt_request("list_jobs", {"operation_id": "op-1"})
+
+
+def test_wait_job_completed_returns_once_the_job_completes(helper, monkeypatch):
+    states = iter([OSError("proxy unavailable"), {"state": "running"}, {"state": "completed"}])
+
+    def answer(command, params, body=None, method=None):
+        assert (command, params) == ("get_job", {"operation_id": "op-1", "job_id": "jm-1"})
+        value = next(states)
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+    monkeypatch.setattr(helper, "yt_request", answer)
+    monkeypatch.setattr(helper.time, "sleep", lambda s: None)
+    assert helper.main(["wait-job-completed", "--operation-id", "op-1", "--job-id", "jm-1"]) == 0

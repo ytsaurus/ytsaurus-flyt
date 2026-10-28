@@ -43,6 +43,8 @@ def _proxy_bases():
         item = item.strip()
         if not item:
             continue
+        # The launcher already gives every proxy the client's scheme (job_proxy.py); this stdlib-only
+        # helper cannot import it, so it keeps a plain http fallback for a bare host.
         if "://" not in item:
             item = "http://" + item
         bases.append(item.rstrip("/"))
@@ -266,30 +268,56 @@ def resolve_jobmanager(operation_id, incarnation, rest_port, use_server_filter=T
     return None, server_filter
 
 
-def cmd_wait_jobmanager(args):
-    deadline = time.monotonic() + args.timeout
-    interval = args.poll_interval
-    use_server_filter = True
+def _retry(attempt, timeout, interval):
+    """Call ``attempt()`` until it returns something other than None, sleeping ``interval`` seconds (growing
+    1.5x up to :data:`POLL_INTERVAL_MAX_S`) between calls; None once ``timeout`` seconds have passed."""
+    deadline = time.monotonic() + timeout
     while True:
-        try:
-            found, use_server_filter = resolve_jobmanager(
-                args.operation_id, args.incarnation or "", args.rest_port, use_server_filter
-            )
-        except Exception as e:  # noqa: BLE001 - keep polling through transient proxy errors
-            _log("discovery attempt failed (will retry): %s" % e)
-            found = None
-        if found:
-            job_id, host, port = found
-            _log("JobManager job %s advertises RPC %s:%d" % (job_id, host, port))
-            sys.stdout.write("%s %s %d\n" % (job_id, host, port))
-            sys.stdout.flush()
-            return 0
-        if time.monotonic() >= deadline:
-            break
+        result = attempt()
+        if result is not None or time.monotonic() >= deadline:
+            return result
         time.sleep(min(interval, max(0.0, deadline - time.monotonic())))
         interval = min(interval * 1.5, POLL_INTERVAL_MAX_S)
-    _log("no JobManager discovered for operation %s within %ss" % (args.operation_id, args.timeout))
-    return 1
+
+
+def cmd_wait_jobmanager(args):
+    state = {"server_filter": True}
+
+    def attempt():
+        try:
+            found, state["server_filter"] = resolve_jobmanager(
+                args.operation_id, args.incarnation or "", args.rest_port, state["server_filter"]
+            )
+            return found
+        except Exception as e:  # noqa: BLE001 - keep polling through transient proxy errors
+            _log("discovery attempt failed (will retry): %s" % e)
+            return None
+
+    found = _retry(attempt, args.timeout, args.poll_interval)
+    if found is None:
+        _log("no JobManager discovered for operation %s within %ss" % (args.operation_id, args.timeout))
+        return 1
+    job_id, host, port = found
+    _log("JobManager job %s advertises RPC %s:%d" % (job_id, host, port))
+    sys.stdout.write("%s %s %d\n" % (job_id, host, port))
+    sys.stdout.flush()
+    return 0
+
+
+def cmd_wait_job_completed(args):
+    """Block until a job of the operation is completed (the JobManager after the driver exited 0)."""
+
+    def attempt():
+        try:
+            job = yt_request("get_job", {"operation_id": args.operation_id, "job_id": args.job_id}) or {}
+            return True if job.get("state") == "completed" else None
+        except Exception as e:  # noqa: BLE001 - keep watching through transient proxy errors
+            _log("get_job %s failed (will retry): %s" % (args.job_id, e))
+            return None
+
+    _retry(attempt, float("inf"), args.poll_interval)
+    _log("job %s completed" % args.job_id)
+    return 0
 
 
 def _operation_finishing(operation_id):
@@ -302,25 +330,25 @@ def _operation_finishing(operation_id):
 
 
 def cmd_complete_operation(args):
-    """Retries until YT takes the request: a failure here would fail the JobManager job and re-run the
-    whole finished pipeline through a gang restart."""
-    deadline = time.monotonic() + args.timeout
-    interval = args.poll_interval
-    while True:
+    """Retries until YT takes the request. Only a shortcut: without it the TaskManagers still exit 0 once
+    they see the JobManager job completed (``wait-job-completed``), and the operation completes."""
+
+    def attempt():
         try:
             yt_request("complete_operation", {"operation_id": args.operation_id}, method="POST")
             _log("operation %s completed" % args.operation_id)
-            return 0
+            return True
         except Exception as e:  # noqa: BLE001 - transient proxy and network errors
             if _operation_finishing(args.operation_id):
                 _log("operation %s is already completing" % args.operation_id)
-                return 0
-            if time.monotonic() >= deadline:
-                _log("complete_operation for %s kept failing for %ss: %s" % (args.operation_id, args.timeout, e))
-                return 1
+                return True
             _log("complete_operation failed (will retry): %s" % e)
-        time.sleep(min(interval, max(0.0, deadline - time.monotonic())))
-        interval = min(interval * 1.5, POLL_INTERVAL_MAX_S)
+            return None
+
+    if _retry(attempt, args.timeout, args.poll_interval) is None:
+        _log("complete_operation for %s kept failing for %ss" % (args.operation_id, args.timeout))
+        return 1
+    return 0
 
 
 def build_parser():
@@ -337,9 +365,15 @@ def build_parser():
 
     s = sub.add_parser("complete-operation")
     s.add_argument("--operation-id", required=True)
-    s.add_argument("--timeout", type=float, default=600.0)
+    s.add_argument("--timeout", type=float, default=120.0)
     s.add_argument("--poll-interval", type=float, default=POLL_INTERVAL_MIN_S)
     s.set_defaults(func=cmd_complete_operation)
+
+    s = sub.add_parser("wait-job-completed")
+    s.add_argument("--operation-id", required=True)
+    s.add_argument("--job-id", required=True)
+    s.add_argument("--poll-interval", type=float, default=POLL_INTERVAL_MAX_S)
+    s.set_defaults(func=cmd_wait_job_completed)
     return p
 
 

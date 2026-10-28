@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional, Union
 
+MIB = 1024 * 1024
+
 
 def parse_memory(memory: Union[str, int]) -> int:
     """Parse a human-readable memory string (e.g. '4G', '512M') into bytes.

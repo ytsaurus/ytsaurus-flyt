@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Dict, Mapping
 import yaml
 
 from ytsaurus_flyt.config import FlytConfig
+from ytsaurus_flyt.models import MIB
 
 if TYPE_CHECKING:
     from ytsaurus_flyt.application import ApplicationResources
@@ -34,11 +35,9 @@ JVM_EXIT_ON_OOM_OPT = "-XX:+ExitOnOutOfMemoryError"
 # the Flink job fails; then the driver exits non-zero and YT restarts the cluster.
 FLINK_RESTART_ATTEMPTS = 10
 
-_MIB = 1024 * 1024
-
 
 def _mebibytes(size_bytes: int) -> str:
-    return f"{max(int(size_bytes) // _MIB, 1)}m"
+    return f"{max(int(size_bytes) // MIB, 1)}m"
 
 
 def cluster_flink_config(config: FlytConfig, resources: ApplicationResources) -> Dict[str, str]:

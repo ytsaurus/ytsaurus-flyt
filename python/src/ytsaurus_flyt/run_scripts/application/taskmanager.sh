@@ -14,7 +14,18 @@ TM_ARGS=("-Djobmanager.rpc.address=$JM_HOST" "-Djobmanager.rpc.port=$JM_RPC_PORT
     "-Dtaskmanager.resource-id=$YT_JOB_ID")
 
 # Not exec'ed so the EXIT trap can stop the sidecar when the TaskManager goes down.
-"$FLINK_HOME/bin/taskmanager.sh" start-foreground "${{TM_ARGS[@]}}" 1>&2 \
-    && EXIT_CODE=0 || EXIT_CODE=$?
+"$FLINK_HOME/bin/taskmanager.sh" start-foreground "${{TM_ARGS[@]}}" 1>&2 &
+TM_PID=$!
+# A standalone TaskManager never exits on its own: once the JobManager job has completed (the driver
+# exited 0), stop it and exit 0, so the operation completes even if complete_operation did not go through.
+_FLYT_JM_DONE="$ROOT_DIR/.flyt_jobmanager_completed"
+( "${{FLYT_HELPER[@]}}" wait-job-completed --operation-id "$YT_OPERATION_ID" --job-id "$JM_JOB_ID" \
+    && touch "$_FLYT_JM_DONE" && kill -TERM "$TM_PID" ) 1>&2 &
+_FLYT_WATCH_PID=$!
+wait "$TM_PID" && EXIT_CODE=0 || EXIT_CODE=$?
+kill "$_FLYT_WATCH_PID" 2>/dev/null || true
 echo "FLINK TASKMANAGER FINISHED (exit code: $EXIT_CODE)" 1>&2
+if [ -f "$_FLYT_JM_DONE" ]; then
+    exit 0
+fi
 exit "$EXIT_CODE"

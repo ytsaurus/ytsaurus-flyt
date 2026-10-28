@@ -25,7 +25,7 @@ def test_cluster_flink_config_sets_ports_memory_slots_and_jvm_flags():
     assert props["jobmanager.memory.process.size"] == "2048m"
     assert props["taskmanager.memory.process.size"] == "3584m"  # 4G container - 512m
     assert props["taskmanager.memory.task.off-heap.size"] == "448m"  # 1/8 of the TaskManager JVM
-    assert props["taskmanager.memory.managed.fraction"] == "0.1"
+    assert props["taskmanager.memory.managed.fraction"] == "0.1"  # the Python UDF workers' budget
     assert props["python.executable"] == props["python.client.executable"] == "/py"
     assert props["env.java.opts.all"] == "-Djava.net.preferIPv6Addresses=true"
     assert props["env.java.opts.jobmanager"] == "-XX:ActiveProcessorCount=4 -XX:+ExitOnOutOfMemoryError"

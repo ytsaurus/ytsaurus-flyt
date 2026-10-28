@@ -345,8 +345,13 @@ def validate(
     if px:
         yt_client = make_yt_client(px)
     _, _, pst = resolve_connection_from_profile(profile_data)
-    preset_params = ClusterPreset.__members__.get((pst or "micro").strip().upper(), ClusterPreset.MICRO).params
-    rows = validate_flyt_config(cfg, proxy=px or None, yt_client=yt_client, preset=preset_params)
+    preset_name = (pst or "micro").strip()
+    preset_member = ClusterPreset.__members__.get(preset_name.upper())
+    rows = validate_flyt_config(
+        cfg, proxy=px or None, yt_client=yt_client, preset=preset_member.params if preset_member else None
+    )
+    if preset_member is None:
+        rows.insert(0, ("preset", False, f"unknown preset {preset_name!r}; use one of micro, small, large, xlarge"))
     ok_all = True
     for name, ok, msg in rows:
         ok_all = ok_all and ok

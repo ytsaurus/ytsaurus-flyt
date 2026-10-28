@@ -1,17 +1,8 @@
 echo "START FLINK MINICLUSTER" 1>&2
 
-# Detect slot IP for Flink Web UI
 SLOT_IP=$(get_slot_ip)
-if [ -n "$SLOT_IP" ]; then
-    UI_HOST=$([[ "$SLOT_IP" == *:* ]] && echo "[$SLOT_IP]" || echo "$SLOT_IP")
-    echo "Flink Web UI (cluster-internal only): http://${{UI_HOST}}:{rest_port}" 1>&2
-    echo "From your client this URL likely will not open (Pod IPs are not routed on the host)." 1>&2
-    echo "Port-forward the exec pod (Kind default is end-0), then use localhost:" 1>&2
-    echo "  kubectl port-forward -n default pod/end-0 {rest_port}:{rest_port}" 1>&2
-    echo "  # If your exec StatefulSet has another name/index, adjust pod/<name>." 1>&2
-    echo "Pipeline must set rest.port={rest_port} and rest.bind-address=0.0.0.0 (see simple_wordcount/pipeline.py) or forward fails." 1>&2
-    echo "Then open: http://localhost:{rest_port}" 1>&2
-fi
+announce_web_ui "$SLOT_IP"
+echo "Pipeline must set rest.port={rest_port} and rest.bind-address=0.0.0.0 (see simple_wordcount/pipeline.py) or the Web UI is unreachable." 1>&2
 
 # Stream the MiniCluster's Flink log files to the YT job stderr live (in addition to dumping them
 # at the end). Files don't exist yet, so seed an empty one and tail -F follows

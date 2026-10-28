@@ -413,3 +413,18 @@ def test_run_without_mode_flag_keeps_profile_cluster_mode(monkeypatch, tmp_path:
     assert captured["config"].taskmanager_count == 2
     # minicluster stays the default when neither profile nor flag sets a mode
     assert FlytConfig().cluster_mode == "minicluster"
+
+
+def test_validate_reports_an_unknown_profile_preset(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("FLYT_CONFIG_DIR", str(tmp_path))
+    profiles = tmp_path / "profiles"
+    profiles.mkdir(parents=True)
+    (profiles / "p.yaml").write_text(
+        "proxy: http://cluster.example:80\npool: default\npreset: larg\n", encoding="utf-8"
+    )
+    (tmp_path / "active").write_text("p\n", encoding="utf-8")
+    monkeypatch.setattr("ytsaurus_flyt.__main__.make_yt_client", lambda _p: object())
+    monkeypatch.setattr("ytsaurus_flyt.__main__.validate_flyt_config", lambda *a, **k: [("check", True, "ok")])
+    result = CliRunner().invoke(cli, ["validate"], catch_exceptions=False)
+    assert result.exit_code == 1
+    assert "[!!] preset: unknown preset 'larg'" in result.output

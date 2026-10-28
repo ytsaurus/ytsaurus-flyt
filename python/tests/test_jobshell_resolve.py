@@ -6,6 +6,7 @@ from ytsaurus_flyt.jobshell_resolve import (
     flyt_profile_marker,
     operation_title_for_profile,
     resolve_default_jobshell_argv,
+    runs_driver,
 )
 
 
@@ -34,8 +35,8 @@ def test_resolve_prefers_jobmanager_task():
     }
     yt.list_jobs.return_value = {
         "jobs": [
-            {"id": "j-tm", "state": "running", "task_name": "flink"},
-            {"id": "j-jm", "state": "running", "task_name": "flink_jobmanager"},
+            {"id": "j-tm", "state": "running", "task_name": "taskmanager"},
+            {"id": "j-jm", "state": "running", "task_name": "jobmanager"},
         ],
     }
     out = resolve_default_jobshell_argv(yt, "kind")
@@ -71,3 +72,10 @@ def test_resolve_skips_op_without_job():
 
     yt.list_jobs.side_effect = list_jobs_side_effect
     assert resolve_default_jobshell_argv(yt, "kind") == ["run-job-shell", "j1"]
+
+
+def test_runs_driver_is_every_job_but_a_taskmanager():
+    assert runs_driver({"task_name": "jobmanager"})
+    assert runs_driver({"task_name": "flink_minicluster"})
+    assert runs_driver({"task_name": "flink"})  # operations from older flyt
+    assert not runs_driver({"task_name": "TaskManager"})
