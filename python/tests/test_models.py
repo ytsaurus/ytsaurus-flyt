@@ -58,14 +58,15 @@ class TestClusterParams:
         assert params.off_heap_size_bytes() is None
 
     def test_off_heap_size_bytes(self):
-        params = ClusterParams(
-            cpu=2,
-            memory="4G",
-            max_heap_size="2324M",
-            data_size_per_job="500M",
-            off_heap_size="8G",
-        )
+        params = ClusterParams(cpu=2, memory="4G", max_heap_size="2324M", data_size_per_job="500M", off_heap_size="8G")
         assert params.off_heap_size_bytes() == 8 * 1024 * 1024 * 1024
+
+    def test_map_operation_fields_keep_their_bytes_helpers(self):
+        params = ClusterParams(cpu=2, memory="4G", max_heap_size="2324M", data_size_per_job="500M")
+        assert params.data_size_per_job_bytes() == 500 * 1024 * 1024
+        assert params.disk_request_space_bytes() == 10 * 1024**3
+        assert params.disk_request_medium_name == "default"
+        assert ClusterPreset.MICRO.params.data_size_per_job == "500M"
 
     def test_frozen(self):
         params = ClusterParams(cpu=2, memory="4G", max_heap_size="2324M", data_size_per_job="500M")
@@ -102,8 +103,26 @@ class TestOperationParams:
         assert params.file_paths == ["//path/to/jar"]
 
 
-class TestJobmanagerParams:
+class TestTaskmanagerParams:
     def test_defaults(self):
-        params = JobmanagerParams()
-        assert params.cpu == 2
-        assert params.memory == parse_memory("4G")
+        from ytsaurus_flyt.models import TaskmanagerParams
+
+        tm = TaskmanagerParams(cpu=2, process_memory=parse_memory("4G"), count=1, slots=1)
+        assert (tm.cpu, tm.process_memory, tm.count, tm.slots) == (2, parse_memory("4G"), 1, 1)
+        assert tm.memory == parse_memory("4G") + parse_memory("512M")  # container = JVM + fixed overhead
+
+    def test_rejects_zero_count_or_slots(self):
+        from ytsaurus_flyt.models import TaskmanagerParams
+
+        with pytest.raises(ValueError, match="count"):
+            TaskmanagerParams(cpu=2, process_memory=parse_memory("4G"), count=0, slots=1)
+        with pytest.raises(ValueError, match="slots"):
+            TaskmanagerParams(cpu=2, process_memory=parse_memory("4G"), count=1, slots=0)
+
+
+class TestJobmanagerParams:
+    def test_container_is_jvm_plus_driver_overhead(self):
+        jm = JobmanagerParams(cpu=2, process_memory=parse_memory("2G"))
+        assert (jm.cpu, jm.process_memory, jm.memory) == (2, parse_memory("2G"), parse_memory("2560M"))
+        with pytest.raises(ValueError, match="process_memory"):
+            JobmanagerParams(cpu=2, process_memory=0)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import logging
 import os
 import shlex
@@ -15,7 +16,7 @@ import click
 import yaml
 
 from ytsaurus_flyt.cli_helpers import find_pyproject_for_job, job_command_relative_to_project, resolve_proxy_pool
-from ytsaurus_flyt.config import DEFAULT_JAVA_HOME, FlytConfig
+from ytsaurus_flyt.config import DEFAULT_JAVA_HOME, ClusterMode, FlytConfig
 from ytsaurus_flyt.flink_lib_jars import (
     download_flink_lib_jars,
     partition_flink_lib_jars_for_delivery,
@@ -30,7 +31,7 @@ from ytsaurus_flyt.layer_builder import (
     ensure_unsquashfs_tool_remote,
     upload_squashfs_layer,
 )
-from ytsaurus_flyt.models import ClusterPreset
+from ytsaurus_flyt.models import DEFAULT_JOBMANAGER_CPU, ClusterPreset
 from ytsaurus_flyt.profiles import (
     default_cypress_base_path,
     list_profile_names,
@@ -343,7 +344,14 @@ def validate(
     yt_client = None
     if px:
         yt_client = make_yt_client(px)
-    rows = validate_flyt_config(cfg, proxy=px or None, yt_client=yt_client)
+    _, _, pst = resolve_connection_from_profile(profile_data)
+    preset_name = (pst or "micro").strip()
+    preset_member = ClusterPreset.__members__.get(preset_name.upper())
+    rows = validate_flyt_config(
+        cfg, proxy=px or None, yt_client=yt_client, preset=preset_member.params if preset_member else None
+    )
+    if preset_member is None:
+        rows.insert(0, ("preset", False, f"unknown preset {preset_name!r}; use one of micro, small, large, xlarge"))
     ok_all = True
     for name, ok, msg in rows:
         ok_all = ok_all and ok
@@ -367,7 +375,38 @@ def validate(
     "--preset",
     type=click.Choice(["micro", "small", "large", "xlarge"], case_sensitive=False),
     default=None,
-    help="Resource preset (default: from profile or micro).",
+    help="Resource preset (default: from profile or micro): the MiniCluster YT job, or every TaskManager "
+    "YT job for --mode application (cpu = task slots, memory = container).",
+)
+@click.option(
+    "--mode",
+    "cluster_mode",
+    type=click.Choice([mode.value for mode in ClusterMode], case_sensitive=False),
+    default=None,
+    help="minicluster: one YT job, in-JVM MiniCluster. application: JobManager + TaskManager tasks "
+    "(default: cluster_mode from profile, or minicluster).",
+)
+@click.option(
+    "--taskmanagers",
+    "taskmanager_count",
+    type=click.IntRange(min=1),
+    default=None,
+    help="TaskManager YT job count for --mode application; the cluster has count * TaskManager cpu task slots "
+    "(default: profile, else 1).",
+)
+@click.option(
+    "--jm-cpu",
+    "jobmanager_cpu",
+    type=click.IntRange(min=1),
+    default=None,
+    help=f"CPU of the JobManager YT job for --mode application (default: profile, else {DEFAULT_JOBMANAGER_CPU}).",
+)
+@click.option(
+    "--tm-cpu",
+    "taskmanager_cpu",
+    type=click.IntRange(min=1),
+    default=None,
+    help="CPU, and task slots, per TaskManager YT job for --mode application (default: profile, else the preset's cpu).",
 )
 @click.option("--wheel", "wheel_path", default=None)
 @click.option("--source-dir", "source_dir", default=None)
@@ -393,6 +432,10 @@ def run(
     proxy: Optional[str],
     pool: Optional[str],
     preset: Optional[str],
+    cluster_mode: Optional[str],
+    taskmanager_count: Optional[int],
+    jobmanager_cpu: Optional[int],
+    taskmanager_cpu: Optional[int],
     wheel_path: Optional[str],
     source_dir: Optional[str],
     cache_wheel: bool,
@@ -405,6 +448,18 @@ def run(
     _echo_profile_line(ctx)
     job_command = shlex.join(list(job_argv))
     cfg, profile_data = _load_flyt_config_from_profile(ctx)
+    cluster_overrides = {
+        "cluster_mode": cluster_mode,
+        "taskmanager_count": taskmanager_count,
+        "jobmanager_cpu": jobmanager_cpu,
+        "taskmanager_cpu": taskmanager_cpu,
+    }
+    cluster_overrides = {k: v for k, v in cluster_overrides.items() if v is not None}
+    if cluster_overrides:
+        try:
+            cfg = dataclasses.replace(cfg, **cluster_overrides)
+        except ValueError as e:
+            raise click.ClickException(str(e)) from e
     proxy_f, pool_f = _resolve_connection(profile_data, proxy, pool)
     _, _, pst = resolve_connection_from_profile(profile_data)
     preset_s = (preset or "").strip().lower() or (pst or "micro").strip().lower()
@@ -613,7 +668,7 @@ def ui(
         url = find_ui_url_for_operation(yt_client, op_id)
         if not url:
             raise click.ClickException(
-                f"Flink UI not reachable for operation {op_id} (job not running yet, or port 27050 not open). "
+                f"Flink UI not reachable for operation {op_id} (job not running yet, or the Web UI port not open). "
                 "Use --wait to block until it comes up."
             )
     click.echo(url)

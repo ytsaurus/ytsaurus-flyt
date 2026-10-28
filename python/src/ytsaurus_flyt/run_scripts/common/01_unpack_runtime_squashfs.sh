@@ -1,4 +1,4 @@
-# sandbox_unpack: unpack runtime-*.squashfs into $ROOT_DIR (from 00_set_essentials.sh).
+# sandbox_unpack: unpack runtime-*.squashfs into $ROOT_DIR (from common/00_set_essentials.sh).
 UNSQUASHFS=""
 if command -v unsquashfs >/dev/null 2>&1; then
     UNSQUASHFS=$(command -v unsquashfs)

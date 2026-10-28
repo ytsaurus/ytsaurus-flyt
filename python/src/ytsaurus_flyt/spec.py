@@ -2,15 +2,34 @@
 
 from __future__ import annotations
 
+import logging
 import shlex
 from pathlib import Path
+from typing import Any, Dict, List, Mapping, Optional
 
+from yt.wrapper import YtClient
 from yt.wrapper.spec_builders import VanillaSpecBuilder
 
+from ytsaurus_flyt.application import application_cluster
 from ytsaurus_flyt.config import FlytConfig
-from ytsaurus_flyt.models import JobmanagerParams, OperationParams
+from ytsaurus_flyt.flink_conf import FLINK_REST_PORT, render_flink_config_yaml
+from ytsaurus_flyt.job_proxy import job_yt_proxy
+from ytsaurus_flyt.models import ClusterParams, OperationParams
+from ytsaurus_flyt.yt_client import proxy_url_from_client
 
-FLINK_STANDALONE_FLAG = "FLINK_STANDALONE"
+logger = logging.getLogger(__name__)
+
+# Environment read by the application-mode run scripts and the in-job helper.
+FLYT_YT_PROXY_ENV = "FLYT_YT_PROXY"
+
+# Vanilla task names: one task per role in application mode, one for the MiniCluster job.
+MINICLUSTER_TASK = "flink_minicluster"
+JOBMANAGER_TASK = "jobmanager"
+TASKMANAGER_TASK = "taskmanager"
+
+_RUN_SCRIPTS_DIR = Path(__file__).parent / "run_scripts"
+JOB_HELPER_FILENAME = "flyt_job_helper.py"
+_JOB_HELPER_PATH = _RUN_SCRIPTS_DIR / "application" / JOB_HELPER_FILENAME
 
 
 def _split_job_command_tokens_posix(job_command: str) -> list[str]:
@@ -37,52 +56,70 @@ def _extract_service_name(job_command: str) -> str:
     return "unknown"
 
 
+def _script_fragments(*, use_squashfs_sandbox_unpack: bool, role: Optional[str]) -> List[str]:
+    """Ordered run-script fragments for a MiniCluster job or an application-mode role."""
+    ordered = ["common/00_set_essentials.sh"]
+    if use_squashfs_sandbox_unpack:
+        ordered.append("common/01_unpack_runtime_squashfs.sh")
+    ordered += ["common/02_prepare_squashfs.sh"]
+    if role is not None:
+        ordered.append("application/00_prepare_cluster_bins.sh")
+    ordered += [
+        "common/03_prepare_libs.sh",
+        "common/04_prepare_service.sh",
+        "common/05_prepare_job_env.sh",
+    ]
+    if role is None:
+        ordered.append("minicluster/run.sh")
+    elif role == JOBMANAGER_TASK:
+        ordered += ["application/01_cluster_common.sh", "application/02_start_sidecar.sh", "application/jobmanager.sh"]
+    elif role == TASKMANAGER_TASK:
+        ordered += ["application/01_cluster_common.sh", "application/02_start_sidecar.sh", "application/taskmanager.sh"]
+    else:
+        raise ValueError(f"Unknown application-mode role: {role!r}")
+    return ordered
+
+
 def _build_run_script(
     job_command: str,
     config: FlytConfig,
     service_name: str,
     *,
     use_squashfs_sandbox_unpack: bool = False,
+    role: Optional[str] = None,
+    flink_config: Optional[Mapping[str, str]] = None,
 ) -> str:
-    scripts_dir = Path(__file__).parent / "run_scripts"
     result_script = ["#!/bin/bash", "set -e"]
+    # Values are substituted into the templates, not re-formatted, so braces in them are safe.
+    fmt: Dict[str, Any] = {
+        "job_args": _job_args_for_shell(job_command),
+        "service_name": service_name,
+        "python_bin": config.python_bin,
+        # The JobManager's REST port; a MiniCluster pipeline sets the same one in code.
+        "rest_port": FLINK_REST_PORT,
+    }
+    if role is not None:
+        assert flink_config is not None
+        fmt.update(
+            {
+                "flink_conf_yaml": render_flink_config_yaml(flink_config).rstrip("\n"),
+                "job_helper": _JOB_HELPER_PATH.read_text(encoding="utf-8"),
+                "job_helper_filename": JOB_HELPER_FILENAME,
+                "sidecar_command": shlex.quote(config.sidecar_command) if config.sidecar_command else "''",
+                "discovery_timeout": config.discovery_timeout,
+            }
+        )
 
-    if use_squashfs_sandbox_unpack:
-        ordered = [
-            "00_set_essentials.sh",
-            "00_unpack_runtime_squashfs.sh",
-            "01_prepare_squashfs.sh",
-            "21_prepare_libs.sh",
-            "30_prepare_service.sh",
-            "40_run_job.sh",
-        ]
-    else:
-        ordered = [
-            "00_set_essentials.sh",
-            "01_prepare_squashfs.sh",
-            "21_prepare_libs.sh",
-            "30_prepare_service.sh",
-            "40_run_job.sh",
-        ]
-    script_paths = [scripts_dir / name for name in ordered]
-
-    for script_path in script_paths:
-        result_script.append(f"echo 'Running {script_path.name}...' 1>&2")
+    for name in _script_fragments(use_squashfs_sandbox_unpack=use_squashfs_sandbox_unpack, role=role):
+        script_path = _RUN_SCRIPTS_DIR / name
+        result_script.append(f"echo 'Running {name}...' 1>&2")
         with open(script_path, encoding="utf-8") as script_file:
-            script_text = script_file.read()
-            result_script.append(
-                script_text.format(
-                    job_args=_job_args_for_shell(job_command),
-                    service_name=service_name,
-                    python_bin=config.python_bin,
-                )
-            )
+            result_script.append(script_file.read().format(**fmt))
 
     return "\n".join(result_script)
 
 
 DEFAULT_TASK_SPEC = {
-    "restart_completed_jobs": True,
     "memory_reserve_factor": 1.0,
     "max_speculative_job_count_per_task": 0,
 }
@@ -92,39 +129,76 @@ DEFAULT_ENVIRONMENT = {
 }
 
 
+def _begin_task(
+    builder: VanillaSpecBuilder,
+    name: str,
+    *,
+    command: str,
+    job_count: int,
+    cpu: int,
+    memory: int,
+    task_spec: Dict[str, Any],
+    layer_paths: List[str],
+) -> None:
+    task = builder.begin_task(name).command(command).job_count(job_count).cpu_limit(cpu).memory_limit(memory)
+    if layer_paths:
+        task = task.tmpfs_path(".")
+    task.copy_files(True).spec(task_spec).end_task()
+
+
 def build_vanilla_operation_spec(
     title: str,
     job_command: str,
     config: FlytConfig,
     operation_params: OperationParams,
-    jobmanager_params: JobmanagerParams,
     secure_vault: dict[str, str],
-    max_heap_size_str: str = "2324M",
     *,
-    off_heap_size_str: str | None = None,
+    preset_params: ClusterParams,
+    yt_client: Optional[YtClient] = None,
     use_squashfs_sandbox_unpack: bool = False,
 ) -> VanillaSpecBuilder:
-    """Build a Vanilla operation spec to launch a Flink job (SquashFS runtime only)."""
+    """Build a Vanilla operation spec to launch a Flink job (SquashFS runtime only).
+
+    ``cluster_mode: minicluster`` yields a single task sized by ``preset_params``; the script runs as
+    ``python <script>`` and configures its MiniCluster in code.
+    ``cluster_mode: application`` yields a gang ``jobmanager`` task and a ``taskmanager`` task; ``preset_params``
+    sizes every TaskManager (:func:`ytsaurus_flyt.application.application_cluster`). ``yt_client`` is then required:
+    its proxy (or ``config.job_yt_proxy``) is what the TaskManagers query to discover the JobManager.
+    """
     service_name = config.service_name or _extract_service_name(job_command)
+    is_application = config.is_application_cluster
 
-    java_opts = f"-Xmx{max_heap_size_str}"
-    if off_heap_size_str:
-        # Bounds NIO/netty direct buffers (gRPC connectors); otherwise the JVM
-        # defaults MaxDirectMemorySize to ~the max heap size.
-        java_opts += f" -XX:MaxDirectMemorySize={off_heap_size_str}"
-    if jobmanager_params.cpu:
-        # Pin the JVM's processor count to the container CPU limit.
-        java_opts += f" -XX:ActiveProcessorCount={jobmanager_params.cpu}"
-
-    environment = {
+    environment: Dict[str, str] = {
         **DEFAULT_ENVIRONMENT,
         "JAVA_HOME": config.java_home,
-        "FLINK_ENV_JAVA_OPTS": java_opts,
-        FLINK_STANDALONE_FLAG: "True",
-        **config.extra_environment,
     }
+    if is_application:
+        if yt_client is None:
+            raise ValueError("yt_client is required for cluster_mode: application")
+        proxy_url = proxy_url_from_client(yt_client)
+        if proxy_url is None:
+            raise ValueError(
+                "Cannot determine the YT proxy URL from yt_client; application mode needs it for discovery"
+            )
+        yt_proxy = job_yt_proxy(yt_client, proxy_url, config.job_yt_proxy)
+        if yt_proxy != proxy_url:
+            logger.info("Jobs will reach YT through %s", yt_proxy)
+        cluster = application_cluster(config, preset_params)
+        logger.info("Application cluster: %s", cluster.resources.summary())
+        # Memory and JVM flags live in the cluster config.yaml (Flink's memory model), never in -Xmx.
+        environment[FLYT_YT_PROXY_ENV] = yt_proxy
+    else:
+        java_opts = f"-Xmx{preset_params.max_heap_size}"
+        if preset_params.off_heap_size:
+            # Bounds NIO/netty direct buffers (gRPC connectors); otherwise the JVM
+            # defaults MaxDirectMemorySize to ~the max heap size.
+            java_opts += f" -XX:MaxDirectMemorySize={preset_params.off_heap_size}"
+        # Pin the JVM's processor count to the container CPU limit.
+        java_opts += f" -XX:ActiveProcessorCount={preset_params.cpu}"
+        environment["FLINK_ENV_JAVA_OPTS"] = java_opts
+    environment.update(config.extra_environment)
 
-    common_task_spec = {
+    common_task_spec: Dict[str, Any] = {
         **DEFAULT_TASK_SPEC,
         "file_paths": operation_params.file_paths,
         "environment": environment,
@@ -136,25 +210,63 @@ def build_vanilla_operation_spec(
         common_task_spec["network_project"] = config.network_project
 
     builder = VanillaSpecBuilder()
-    task = (
-        builder.begin_task("flink")
-        .command(
-            _build_run_script(
+    if is_application:
+        jobmanager_params = cluster.resources.jobmanager_params()
+        taskmanager_params = cluster.resources.taskmanager_params()
+        _begin_task(
+            builder,
+            JOBMANAGER_TASK,
+            command=_build_run_script(
                 job_command,
                 config,
                 service_name,
                 use_squashfs_sandbox_unpack=use_squashfs_sandbox_unpack,
-            )
+                role=JOBMANAGER_TASK,
+                flink_config=cluster.flink_config,
+            ),
+            job_count=1,
+            cpu=jobmanager_params.cpu,
+            memory=jobmanager_params.memory,
+            # Any JobManager failure restarts the whole cluster with a new incarnation.
+            task_spec={**common_task_spec, "gang_options": {}},
+            layer_paths=operation_params.layer_paths,
         )
-        .job_count(1)
-        .cpu_limit(jobmanager_params.cpu)
-        .memory_limit(jobmanager_params.memory)
-    )
-    if operation_params.layer_paths:
-        task = task.tmpfs_path(".")
-    task.copy_files(True).spec(common_task_spec).end_task()
+        _begin_task(
+            builder,
+            TASKMANAGER_TASK,
+            command=_build_run_script(
+                job_command,
+                config,
+                service_name,
+                use_squashfs_sandbox_unpack=use_squashfs_sandbox_unpack,
+                role=TASKMANAGER_TASK,
+                flink_config=cluster.flink_config,
+            ),
+            job_count=taskmanager_params.count,
+            cpu=taskmanager_params.cpu,
+            memory=taskmanager_params.memory,
+            # Not a gang task: a lost TaskManager is restarted alone and Flink restarts the job.
+            task_spec=common_task_spec,
+            layer_paths=operation_params.layer_paths,
+        )
+    else:
+        _begin_task(
+            builder,
+            MINICLUSTER_TASK,
+            command=_build_run_script(
+                job_command,
+                config,
+                service_name,
+                use_squashfs_sandbox_unpack=use_squashfs_sandbox_unpack,
+            ),
+            job_count=1,
+            cpu=preset_params.cpu,
+            memory=preset_params.memory_bytes(),
+            task_spec=common_task_spec,
+            layer_paths=operation_params.layer_paths,
+        )
 
-    spec_dict = {}
+    spec_dict: Dict[str, Any] = {}
     if title:
         spec_dict["title"] = title
     if operation_params.description:

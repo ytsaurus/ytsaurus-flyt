@@ -2,12 +2,23 @@
 
 import warnings
 from dataclasses import asdict, dataclass, field
+from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
 _VALID_SQUASHFS_DELIVERY: Tuple[str, ...] = ("layer_paths", "sandbox_unpack")
 _VALID_SQUASHFS_COMPRESSION: Tuple[str, ...] = ("gzip", "xz", "zstd", "lz4")
+
+
+class ClusterMode(str, Enum):
+    """Topology of the Vanilla operation (``cluster_mode`` in the profile, ``flyt run --mode``)."""
+
+    MINICLUSTER = "minicluster"
+    """One YT job; PyFlink starts JobManager and TaskManager inside the script's JVM."""
+    APPLICATION = "application"
+    """A gang JobManager YT job running the script plus ``taskmanager_count`` TaskManager YT jobs."""
+
 
 # Typical OpenJDK 11 path on Debian/Ubuntu exec images; single source for FlytConfig default and CLI profile template.
 DEFAULT_JAVA_HOME = "/usr/lib/jvm/java-11-openjdk-amd64"
@@ -78,6 +89,12 @@ class FlytConfig:
     Example: 'https://yt.my-cluster.example.com'
     """
 
+    job_yt_proxy: str = ""
+    """YT HTTP proxy as reachable from inside the jobs, for ``application`` mode discovery.
+    Defaults to the client proxy; set it when the client goes through a tunnel or port-forward
+    (e.g. ``http-proxies.default.svc.cluster.local`` for a Kind cluster reached via localhost).
+    """
+
     extra_file_paths: List[str] = field(default_factory=list)
     """Additional YT file paths to include in the operation (configs, etc.)."""
 
@@ -105,13 +122,54 @@ class FlytConfig:
     extra_environment: Dict[str, str] = field(default_factory=dict)
     """Additional environment variables to set in the Vanilla operation."""
 
-    max_failed_job_count: int = 10
-    """Passed to the Vanilla operation builder (``max_failed_job_count``)."""
+    max_failed_job_count: Optional[int] = None
+    """Failed YT jobs before the operation fails (``max_failed_job_count``), passed as is when set. Unset:
+    10 in ``minicluster`` mode, ``max(10, 5 * taskmanager_count)`` in ``application`` mode."""
 
     pre_built_layer_paths: List[str] = field(default_factory=list)
     """Pre-built Cypress layer paths (e.g. Porto layers) to use as ``layer_paths``
     instead of building a SquashFS layer.  When non-empty, ``ensure_runtime_layer``
     is skipped entirely.
+    """
+
+    # --- Cluster topology ---
+    cluster_mode: ClusterMode = ClusterMode.MINICLUSTER
+    """``minicluster``: one YT job runs the PyFlink script with an in-JVM MiniCluster (JobManager and
+    TaskManager share a single JVM). ``application``: a Flink application cluster with a
+    ``jobmanager`` task (one gang YT job) and a ``taskmanager`` task with :attr:`taskmanager_count` jobs.
+    """
+
+    taskmanager_count: int = 1
+    """Number of TaskManager YT jobs (``application`` mode only): the cluster's capacity, like the
+    TaskManager ``replicas`` of a standalone Flink cluster on Kubernetes. Each TaskManager has one task slot
+    per cpu, so the cluster has ``taskmanager_count * taskmanager cpu`` slots; ``parallelism.default`` is all
+    of them. Size it for the highest operator parallelism of the pipeline.
+    """
+
+    jobmanager_cpu: Optional[int] = None
+    """CPU limit of the JobManager YT job (``application`` mode; default 2). Its memory is fixed: a 2g Flink
+    JVM plus 512m for the PyFlink driver and helpers. The ``preset`` sizes the TaskManagers, not the JobManager.
+    """
+
+    taskmanager_cpu: Optional[int] = None
+    """CPU limit of one TaskManager YT job (``application`` mode; default: the preset's cpu). It is also the
+    TaskManager's task slot count. The container memory is the preset's; the Flink JVM gets all of it but
+    512m for the non-JVM processes.
+    """
+
+    discovery_timeout: int = 300
+    """Seconds a TaskManager waits for the JobManager YT job of its incarnation to advertise its RPC
+    endpoint (``application`` mode); the default matches Flink's ``taskmanager.registration.timeout``.
+    On timeout the TaskManager YT job fails and YT restarts it, so a JobManager that never gets
+    scheduled eventually fails the operation via ``max_failed_job_count``.
+    """
+
+    sidecar_command: str = ""
+    """Shell command started in the background in every ``application``-mode job (JobManager and
+    TaskManagers) right before Flink, from the service directory with the job environment and
+    ``secure_vault`` keys exported; killed when the job exits. Use it for per-container helpers
+    such as a metrics agent that every JVM must reach on ``localhost``. Ignored in ``minicluster``
+    mode (the profile may keep it while the mode is chosen per run).
     """
 
     def __post_init__(self) -> None:
@@ -123,6 +181,27 @@ class FlytConfig:
             raise ValueError(f"squashfs_compression must be one of {list(_VALID_SQUASHFS_COMPRESSION)}, got {c!r}")
         self.squashfs_layer_delivery = d
         self.squashfs_compression = c
+        m = str(self.cluster_mode.value if isinstance(self.cluster_mode, ClusterMode) else self.cluster_mode or "")
+        try:
+            self.cluster_mode = ClusterMode(m.strip().lower())
+        except ValueError as e:
+            raise ValueError(f"cluster_mode must be one of {[c.value for c in ClusterMode]}, got {m!r}") from e
+        # Positive integers; the cpu fields may also be None (resolved later from defaults / slots).
+        for name in (
+            "taskmanager_count",
+            "discovery_timeout",
+            "jobmanager_cpu",
+            "taskmanager_cpu",
+            "max_failed_job_count",
+        ):
+            value = getattr(self, name)
+            if value is None and name in ("jobmanager_cpu", "taskmanager_cpu", "max_failed_job_count"):
+                continue
+            if value is None or int(value) < 1:
+                raise ValueError(f"{name} must be >= 1, got {value!r}")
+            setattr(self, name, int(value))
+        self.job_yt_proxy = (self.job_yt_proxy or "").strip()
+        self.sidecar_command = (self.sidecar_command or "").strip()
         self.embed_squashfs_layer_jar_basenames = _normalize_jar_basename_list(self.embed_squashfs_layer_jar_basenames)
         self.runtime_jar_basenames = _normalize_jar_basename_list(self.runtime_jar_basenames)
         emb = set(self.embed_squashfs_layer_jar_basenames)
@@ -135,7 +214,9 @@ class FlytConfig:
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to a plain dict (dataclass fields only)."""
-        return asdict(self)
+        data = asdict(self)
+        data["cluster_mode"] = self.cluster_mode.value
+        return data
 
     def to_yaml(self) -> str:
         """Serialize to YAML text."""
@@ -159,6 +240,10 @@ class FlytConfig:
                 stacklevel=2,
             )
         return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
+
+    @property
+    def is_application_cluster(self) -> bool:
+        return self.cluster_mode is ClusterMode.APPLICATION
 
 
 # Messages shared with validate_flyt_config row output

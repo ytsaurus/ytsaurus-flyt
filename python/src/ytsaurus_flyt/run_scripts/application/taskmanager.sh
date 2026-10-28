@@ -1,0 +1,31 @@
+echo "START FLINK TASKMANAGER (application mode)" 1>&2
+
+# Block until the running JobManager job of this incarnation advertises its RPC endpoint.
+# Prints "<job_id> <host> <port>"; a timeout fails this job (YT restarts it, counted in max_failed_job_count).
+JM_ENDPOINT=$("${{FLYT_HELPER[@]}}" wait-jobmanager --operation-id "$YT_OPERATION_ID" \
+    --incarnation "${{YT_OPERATION_INCARNATION:-}}" --rest-port {rest_port} --timeout {discovery_timeout})
+read -r JM_JOB_ID JM_HOST JM_RPC_PORT <<< "$JM_ENDPOINT"
+echo "JobManager job $JM_JOB_ID discovered at $JM_HOST:$JM_RPC_PORT" 1>&2
+
+# Flink derives the default ResourceID from taskmanager.host, and an IPv6 literal puts brackets into
+# the MetricQueryService actor name (InvalidActorNameException): no TaskManager metrics in the Web UI.
+# The YT job id is a valid actor name and matches the job in the YT UI.
+TM_ARGS=("-Djobmanager.rpc.address=$JM_HOST" "-Djobmanager.rpc.port=$JM_RPC_PORT" "-Dtaskmanager.host=$CLUSTER_IP"
+    "-Dtaskmanager.resource-id=$YT_JOB_ID")
+
+# Not exec'ed so the EXIT trap can stop the sidecar when the TaskManager goes down.
+"$FLINK_HOME/bin/taskmanager.sh" start-foreground "${{TM_ARGS[@]}}" 1>&2 &
+TM_PID=$!
+# A standalone TaskManager never exits on its own: once the JobManager job has completed (the driver
+# exited 0), stop it and exit 0, so the operation completes even if complete_operation did not go through.
+_FLYT_JM_DONE="$ROOT_DIR/.flyt_jobmanager_completed"
+( "${{FLYT_HELPER[@]}}" wait-job-completed --operation-id "$YT_OPERATION_ID" --job-id "$JM_JOB_ID" \
+    && touch "$_FLYT_JM_DONE" && kill -TERM "$TM_PID" ) 1>&2 &
+_FLYT_WATCH_PID=$!
+wait "$TM_PID" && EXIT_CODE=0 || EXIT_CODE=$?
+kill "$_FLYT_WATCH_PID" 2>/dev/null || true
+echo "FLINK TASKMANAGER FINISHED (exit code: $EXIT_CODE)" 1>&2
+if [ -f "$_FLYT_JM_DONE" ]; then
+    exit 0
+fi
+exit "$EXIT_CODE"

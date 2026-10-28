@@ -1,0 +1,386 @@
+"""In-job helper for flyt application mode: JobManager discovery and operation completion.
+
+Runs inside YT jobs with the layer's Python, standard library only. Talks to the YT HTTP proxy
+(``FLYT_YT_PROXY``) with the operation's token (``YT_SECURE_VAULT_YT_TOKEN``).
+
+Discovery asks YT, not a registry: the TaskManager lists the running ``jobmanager`` job of its own
+operation and incarnation, reads the job's addresses, and takes the RPC endpoint the JobManager
+itself advertises in ``/jobmanager/config``.
+"""
+
+import argparse
+import json
+import os
+import socket
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+JOBMANAGER_TASK = "jobmanager"
+POLL_INTERVAL_MIN_S = 2.0
+POLL_INTERVAL_MAX_S = 15.0
+REQUEST_TIMEOUT_S = 30
+REST_TIMEOUT_S = 5
+TCP_PROBE_TIMEOUT_S = 3
+DEFAULT_RPC_PORT = 6123
+YT_UNKNOWN_PARAMETER_CODE = 1
+# An operation in these states has taken an earlier complete_operation whose answer got lost.
+FINISHING_OPERATION_STATES = ("completing", "completed")
+
+
+def _log(msg):
+    sys.stderr.write("[flyt_job_helper] %s\n" % msg)
+    sys.stderr.flush()
+
+
+def _proxy_bases():
+    """Proxy URLs from ``FLYT_YT_PROXY`` (comma-separated when the launcher listed cluster proxy hosts)."""
+    raw = (os.environ.get("FLYT_YT_PROXY") or "").strip()
+    bases = []
+    for item in raw.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        # The launcher already gives every proxy the client's scheme (job_proxy.py); this stdlib-only
+        # helper cannot import it, so it keeps a plain http fallback for a bare host.
+        if "://" not in item:
+            item = "http://" + item
+        bases.append(item.rstrip("/"))
+    if not bases:
+        raise SystemExit("FLYT_YT_PROXY is not set in the job environment")
+    return bases
+
+
+def _token():
+    for key in ("YT_SECURE_VAULT_YT_TOKEN", "YT_TOKEN"):
+        val = (os.environ.get(key) or "").strip()
+        if val:
+            return val
+    raise SystemExit("No YT token in the job environment (secure_vault YT_TOKEN)")
+
+
+class YtError(Exception):
+    def __init__(self, status, payload):
+        super().__init__("HTTP %s: %s" % (status, json.dumps(payload)[:2000]))
+        self.status = status
+        self.payload = payload if isinstance(payload, dict) else {}
+
+    def codes(self):
+        out = set()
+        stack = [self.payload]
+        while stack:
+            err = stack.pop()
+            if not isinstance(err, dict):
+                continue
+            if "code" in err:
+                out.add(err.get("code"))
+            stack.extend(err.get("inner_errors") or [])
+        return out
+
+    def messages(self):
+        out = []
+        stack = [self.payload]
+        while stack:
+            err = stack.pop()
+            if not isinstance(err, dict):
+                continue
+            out.append(str(err.get("message") or ""))
+            stack.extend(err.get("inner_errors") or [])
+        return " | ".join(out)
+
+
+def yt_request(command, params, body=None, method=None):
+    """Call ``/api/v4/<command>``; returns the decoded JSON response (``{}`` when empty).
+
+    With several proxies the first reachable one wins; a proxy that refuses the connection is skipped
+    (an HTTP error from YT is a real answer and is raised as :class:`YtError`).
+    """
+    bases = _proxy_bases()
+    for index, base in enumerate(bases):
+        try:
+            return _yt_request_via(base, command, params, body, method)
+        except urllib.error.URLError as e:
+            if isinstance(e, urllib.error.HTTPError) or index == len(bases) - 1:
+                raise
+            _log("YT proxy %s unreachable (%s); trying the next one" % (base, e.reason))
+    raise AssertionError("unreachable")
+
+
+def _yt_request_via(base, command, params, body, method):
+    url = "%s/api/v4/%s?%s" % (base, command, urllib.parse.urlencode(params))
+    # Format headers are YSON/JSON literals, hence the quotes around the format name.
+    headers = {
+        "Authorization": "OAuth " + _token(),
+        "X-YT-Output-Format": '"json"',
+    }
+    data = None
+    if body is not None:
+        data = json.dumps(body).encode("utf-8")
+        headers["X-YT-Input-Format"] = '"json"'
+    req = urllib.request.Request(
+        url, data=data, headers=headers, method=method or ("POST" if data is not None else "GET")
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT_S) as resp:
+            raw = resp.read()
+    except urllib.error.HTTPError as e:
+        raw = e.read()
+        try:
+            payload = json.loads(raw.decode("utf-8")) if raw else {}
+        except ValueError:
+            payload = {"message": raw.decode("utf-8", "replace")}
+        raise YtError(e.code, payload)
+    if not raw:
+        return {}
+    return json.loads(raw.decode("utf-8"))
+
+
+# --- discovery -----------------------------------------------------------------------------------
+
+
+def list_running_jobmanagers(operation_id, incarnation, use_server_filter=True):
+    """Running ``jobmanager`` jobs of this operation; ``(jobs, server_filter_supported)``.
+
+    Prefers the server-side ``operation_incarnation`` filter; falls back to filtering the
+    ``operation_incarnation`` job attribute client-side on clusters that do not know the parameter.
+    """
+    params = {"operation_id": operation_id, "task_name": JOBMANAGER_TASK, "state": "running"}
+    if incarnation and use_server_filter:
+        try:
+            resp = yt_request("list_jobs", dict(params, operation_incarnation=incarnation))
+            return list(resp.get("jobs") or []), True
+        except YtError as e:
+            if YT_UNKNOWN_PARAMETER_CODE not in e.codes():
+                raise
+            _log("list_jobs does not support operation_incarnation here; filtering client-side")
+    resp = yt_request("list_jobs", params)
+    jobs = []
+    for job in resp.get("jobs") or []:
+        job_incarnation = job.get("operation_incarnation")
+        if incarnation and job_incarnation and job_incarnation != incarnation:
+            _log(
+                "skipping JobManager %s from incarnation %r (ours is %r)"
+                % (job.get("id"), job_incarnation, incarnation)
+            )
+            continue
+        jobs.append(job)
+    return jobs, False
+
+
+JOB_ID_FLINK_KEY = "flyt.yt.job-id"
+
+
+def _host_of(address):
+    """Bare host of ``host``, ``host:port``, ``[ipv6]`` or ``[ipv6]:port`` (an IPv6 literal loses its brackets)."""
+    address = (address or "").strip()
+    if address.startswith("["):
+        return address[1 : address.find("]")] if "]" in address else address
+    return address.rsplit(":", 1)[0] if address.count(":") == 1 else address
+
+
+def job_addresses(operation_id, job_id):
+    """Addresses to probe for the JobManager REST port.
+
+    Per-job IPs from ``exec_attributes/ip_addresses`` when the exec node gives jobs their own network
+    namespace; otherwise the node address of the job, which jobs share on nodes without one (e.g.
+    Kind, ``simple`` job environment). :data:`JOB_ID_FLINK_KEY` then tells this JobManager apart from
+    one of another operation on the same node.
+    """
+    job = yt_request("get_job", {"operation_id": operation_id, "job_id": job_id}) or {}
+    addresses = list((job.get("exec_attributes") or {}).get("ip_addresses") or [])
+    if addresses:
+        return addresses
+    node_host = _host_of(job.get("address") or "")
+    return [node_host] if node_host else []
+
+
+def _url_host(host):
+    return "[%s]" % host if ":" in host and not host.startswith("[") else host
+
+
+def fetch_jobmanager_config(host, rest_port):
+    """``{key: value}`` from the Flink REST ``/jobmanager/config`` endpoint, or ``None``."""
+    url = "http://%s:%d/jobmanager/config" % (_url_host(host), int(rest_port))
+    try:
+        with urllib.request.urlopen(url, timeout=REST_TIMEOUT_S) as resp:
+            entries = json.loads(resp.read().decode("utf-8"))
+    except (OSError, ValueError) as e:
+        _log("REST %s not ready: %s" % (url, e))
+        return None
+    if not isinstance(entries, list):
+        return None
+    return {str(e.get("key")): str(e.get("value")) for e in entries if isinstance(e, dict) and "key" in e}
+
+
+def rpc_endpoint_from_config(config):
+    """``(host, port)`` the JobManager advertises for RPC (the address TaskManagers must use)."""
+    host = _host_of(config.get("jobmanager.rpc.address") or "")
+    if not host:
+        return None
+    try:
+        port = int(config.get("jobmanager.rpc.port") or DEFAULT_RPC_PORT)
+    except ValueError:
+        port = DEFAULT_RPC_PORT
+    return host, port
+
+
+def _tcp_open(host, port):
+    try:
+        with socket.create_connection((host, int(port)), timeout=TCP_PROBE_TIMEOUT_S):
+            return True
+    except OSError:
+        return False
+
+
+def resolve_jobmanager(operation_id, incarnation, rest_port, use_server_filter=True):
+    """``(job_id, host, port, server_filter_supported)`` for a reachable JobManager, else ``None``."""
+    jobs, server_filter = list_running_jobmanagers(operation_id, incarnation, use_server_filter)
+    if not jobs:
+        _log("no running JobManager job in operation %s yet" % operation_id)
+        return None, server_filter
+    for job in jobs:
+        job_id = job.get("id") or job.get("job_id")
+        if not job_id:
+            continue
+        addresses = job_addresses(operation_id, job_id)
+        if not addresses:
+            _log("JobManager job %s has no addresses yet" % job_id)
+            continue
+        for addr in addresses:
+            config = fetch_jobmanager_config(addr, rest_port)
+            if not config:
+                continue
+            advertised = str(config.get(JOB_ID_FLINK_KEY) or "")
+            if advertised and advertised != str(job_id):
+                _log("REST on %s belongs to JobManager job %s, not %s; skipping" % (addr, advertised, job_id))
+                continue
+            endpoint = rpc_endpoint_from_config(config)
+            if not endpoint:
+                _log("JobManager %s does not advertise jobmanager.rpc.address yet" % job_id)
+                break
+            host, port = endpoint
+            if not _tcp_open(host, port):
+                _log("JobManager RPC %s:%d (job %s) not accepting connections yet" % (host, port, job_id))
+                break
+            return (str(job_id), host, port), server_filter
+    return None, server_filter
+
+
+def _retry(attempt, timeout, interval):
+    """Call ``attempt()`` until it returns something other than None, sleeping ``interval`` seconds (growing
+    1.5x up to :data:`POLL_INTERVAL_MAX_S`) between calls; None once ``timeout`` seconds have passed."""
+    deadline = time.monotonic() + timeout
+    while True:
+        result = attempt()
+        if result is not None or time.monotonic() >= deadline:
+            return result
+        time.sleep(min(interval, max(0.0, deadline - time.monotonic())))
+        interval = min(interval * 1.5, POLL_INTERVAL_MAX_S)
+
+
+def cmd_wait_jobmanager(args):
+    state = {"server_filter": True}
+
+    def attempt():
+        try:
+            found, state["server_filter"] = resolve_jobmanager(
+                args.operation_id, args.incarnation or "", args.rest_port, state["server_filter"]
+            )
+            return found
+        except Exception as e:  # noqa: BLE001 - keep polling through transient proxy errors
+            _log("discovery attempt failed (will retry): %s" % e)
+            return None
+
+    found = _retry(attempt, args.timeout, args.poll_interval)
+    if found is None:
+        _log("no JobManager discovered for operation %s within %ss" % (args.operation_id, args.timeout))
+        return 1
+    job_id, host, port = found
+    _log("JobManager job %s advertises RPC %s:%d" % (job_id, host, port))
+    sys.stdout.write("%s %s %d\n" % (job_id, host, port))
+    sys.stdout.flush()
+    return 0
+
+
+def cmd_wait_job_completed(args):
+    """Block until a job of the operation is completed (the JobManager after the driver exited 0)."""
+
+    def attempt():
+        try:
+            job = yt_request("get_job", {"operation_id": args.operation_id, "job_id": args.job_id}) or {}
+            return True if job.get("state") == "completed" else None
+        except Exception as e:  # noqa: BLE001 - keep watching through transient proxy errors
+            _log("get_job %s failed (will retry): %s" % (args.job_id, e))
+            return None
+
+    _retry(attempt, float("inf"), args.poll_interval)
+    _log("job %s completed" % args.job_id)
+    return 0
+
+
+def _operation_finishing(operation_id):
+    try:
+        resp = yt_request("get_operation", {"operation_id": operation_id, "attributes": "state"})
+    except Exception as e:  # noqa: BLE001 - the caller retries
+        _log("get_operation failed: %s" % e)
+        return False
+    return resp.get("state") in FINISHING_OPERATION_STATES
+
+
+def cmd_complete_operation(args):
+    """Retries until YT takes the request. Only a shortcut: without it the TaskManagers still exit 0 once
+    they see the JobManager job completed (``wait-job-completed``), and the operation completes."""
+
+    def attempt():
+        try:
+            yt_request("complete_operation", {"operation_id": args.operation_id}, method="POST")
+            _log("operation %s completed" % args.operation_id)
+            return True
+        except Exception as e:  # noqa: BLE001 - transient proxy and network errors
+            if _operation_finishing(args.operation_id):
+                _log("operation %s is already completing" % args.operation_id)
+                return True
+            _log("complete_operation failed (will retry): %s" % e)
+            return None
+
+    if _retry(attempt, args.timeout, args.poll_interval) is None:
+        _log("complete_operation for %s kept failing for %ss" % (args.operation_id, args.timeout))
+        return 1
+    return 0
+
+
+def build_parser():
+    p = argparse.ArgumentParser(prog="flyt_job_helper")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    s = sub.add_parser("wait-jobmanager")
+    s.add_argument("--operation-id", required=True)
+    s.add_argument("--incarnation", default="")
+    s.add_argument("--rest-port", type=int, required=True)
+    s.add_argument("--timeout", type=float, default=300.0)
+    s.add_argument("--poll-interval", type=float, default=POLL_INTERVAL_MIN_S)
+    s.set_defaults(func=cmd_wait_jobmanager)
+
+    s = sub.add_parser("complete-operation")
+    s.add_argument("--operation-id", required=True)
+    s.add_argument("--timeout", type=float, default=120.0)
+    s.add_argument("--poll-interval", type=float, default=POLL_INTERVAL_MIN_S)
+    s.set_defaults(func=cmd_complete_operation)
+
+    s = sub.add_parser("wait-job-completed")
+    s.add_argument("--operation-id", required=True)
+    s.add_argument("--job-id", required=True)
+    s.add_argument("--poll-interval", type=float, default=POLL_INTERVAL_MAX_S)
+    s.set_defaults(func=cmd_wait_job_completed)
+    return p
+
+
+def main(argv=None):
+    args = build_parser().parse_args(argv)
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

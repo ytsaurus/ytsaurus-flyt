@@ -44,6 +44,8 @@ flyt install
 flyt run "examples/simple_wordcount/pipeline.py"
 ```
 
+For `cluster_mode: application` the TaskManagers reach YT from inside the pods, where `localhost:50005` is not the proxy; flyt notices the loopback address and hands the jobs the cluster's own proxy hosts from `/hosts` (override with `job_yt_proxy` in the profile if needed). A JobManager plus a TaskManager JVM need a few hundred threads, so the Kind node PID limit must be raised (see [TROUBLESHOOTING.md](TROUBLESHOOTING.md)); and the exec node (4 CPU / 8 GiB) fits the JobManager (2 CPU, 2.5 GiB) plus one `micro` TaskManager (2 CPU, 4 GiB): `flyt run --mode application examples/simple_wordcount/pipeline.py`.
+
 You can also override proxy/pool for a single run: `flyt run ... --proxy http://localhost:50005 --pool default` (and `--wheel` / `--source-dir` - of the job - as needed).
 
 SquashFS, pools, and incident handling: [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
