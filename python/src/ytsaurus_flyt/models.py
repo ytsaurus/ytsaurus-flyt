@@ -33,16 +33,13 @@ def parse_memory(memory: Union[str, int]) -> int:
     return value * units[unit]
 
 
-# Application-mode defaults. The JobManager's load barely depends on the job (dispatcher, REST, blob
-# server, plan compilation), so it gets fixed defaults; TaskManagers are sized per YT job in the Flink
-# configuration and these are only the floor; a TaskManager's cpu defaults to its slot count, as
-# kubernetes.taskmanager.cpu does.
+# Application-mode JobManager defaults: its load barely depends on the job (dispatcher, REST, blob
+# server, plan compilation). TaskManagers are sized by the preset.
 DEFAULT_JOBMANAGER_CPU = 2
 DEFAULT_JOBMANAGER_PROCESS_MEMORY = parse_memory("2G")
 # Memory of the JobManager container outside the Flink JVM: the PyFlink driver (the user's script and
 # its imports), bash, the discovery helper and a sidecar.
 JOBMANAGER_CONTAINER_OVERHEAD = parse_memory("512M")
-DEFAULT_TASKMANAGER_PROCESS_MEMORY = parse_memory("4G")
 # Memory of a TaskManager container outside the Flink JVM: bash, the discovery helper and a sidecar.
 # Python UDF workers are not here: Flink reserves managed memory for them inside process.size.
 TASKMANAGER_CONTAINER_OVERHEAD = parse_memory("512M")
@@ -81,7 +78,7 @@ class MiniClusterParams:
 
 
 class MiniClusterPreset(Enum):
-    """Pre-defined MiniCluster sizes; application mode is sized from the Flink configuration instead."""
+    """Pre-defined sizes: the MiniCluster YT job, or every TaskManager YT job in application mode."""
 
     MICRO = MiniClusterParams(
         cpu=2,

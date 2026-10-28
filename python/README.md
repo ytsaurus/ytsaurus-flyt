@@ -65,18 +65,14 @@ Application mode in a profile:
 ```yaml
 cluster_mode: application
 taskmanager_count: 3          # --taskmanagers; capacity, like TaskManager replicas on Kubernetes
-taskmanager_cpu: 12           # --tm-cpu; default: one cpu per task slot
-flink_config_override:        # Flink options stay Flink options
-  taskmanager.numberOfTaskSlots: 7
-  taskmanager.memory.process.size: 14500m   # TaskManager JVM; the container gets this + 512m
+preset: large                 # --preset; every TaskManager: 4 cpu = 4 task slots, 16G container
 ```
 
-Containers are the Flink JVM (`jobmanager.memory.process.size`, default 2g; `taskmanager.memory.process.size`, default 4g) plus a fixed overhead, and the cluster must hold the pipeline's highest operator parallelism in `taskmanager_count * slots`. Sizing, memory, configuration layering, lifecycle and troubleshooting: [docs/application-mode.md](docs/application-mode.md).
+The preset that sizes the MiniCluster job sizes every TaskManager in application mode (its cpu is also the slot count, its memory the container); the JobManager gets 2 cpu and a 2g JVM. The cluster must hold the pipeline's highest operator parallelism in `taskmanager_count * slots`. Sizing, lifecycle and troubleshooting: [docs/application-mode.md](docs/application-mode.md).
 
-## Flink configuration
+## Flink options
 
-- `application`: Flink options come from `base_flink_conf_path` (a Flink `config.yaml`, local or `//cypress/path`, `--flink-conf` for one run), `flink_config_override` (applied over the file) and `flyt run -D KEY=VALUE` (applied last); they form the cluster `config.yaml` of the JobManager and every TaskManager, over flyt's cluster defaults ([docs/application-mode.md](docs/application-mode.md#flink-configuration)).
-- `minicluster`: those fields and `-D` are not applied (flyt warns when they are set). PyFlink's local environment does not read `config.yaml`, so the script sets its Flink options in code (`get_execution_environment(config)`, `t_env.get_config().set(...)`), including the Web UI that `flyt ui` and port-forwards look for: `rest.port` 27050 and `rest.bind-address` 0.0.0.0 (see [examples/simple_wordcount/pipeline.py](examples/simple_wordcount/pipeline.py)).
+flyt has no setting for Flink options yet, in either mode: the pipeline sets them in code (`StreamExecutionEnvironment.get_execution_environment(config)`, `t_env.get_config().set(...)`). In `minicluster` this includes the Web UI that `flyt ui` and port-forwards look for, `rest.port` 27050 and `rest.bind-address` 0.0.0.0 (see [examples/simple_wordcount/pipeline.py](examples/simple_wordcount/pipeline.py)). In `application` mode the same code configures the Flink job (parallelism, checkpointing, restart strategy, `pipeline.*`, `table.*`); the cluster itself (memory, slots, ports, JVM flags) is configured by flyt ([docs/application-mode.md](docs/application-mode.md#flink-configuration)).
 
 ## Commands
 
@@ -98,18 +94,7 @@ With `--wheel` only, pass the script path as it appears inside the unpacked whee
 
 `--force-rebuild` ignores a cached SquashFS on Cypress and rebuilds the layer.
 
-`--mode application --taskmanagers N [--jm-cpu C --tm-cpu C --flink-conf config.yaml]` runs the pipeline as an application cluster ([docs/application-mode.md](docs/application-mode.md)); flags override the profile for this run, and `--flink-conf` replaces the profile's Flink configuration entirely.
-
-`-D KEY=VALUE` (repeatable, application mode) sets a Flink option for this run; it is applied last, over flyt's defaults, the Flink config file and `flink_config_override`, so `flyt run --flink-conf conf.yaml -D parallelism.default=8 ...` runs that file with one key changed. Repeat the flag for several options; put them before the script, everything after it goes to the script:
-
-```bash
-flyt run --mode application --taskmanagers 3 \
-  -D taskmanager.numberOfTaskSlots=4 \
-  -D taskmanager.memory.process.size=8g \
-  -D parallelism.default=12 \
-  -D execution.checkpointing.interval=30s \
-  examples/simple_wordcount/pipeline.py
-```
+`--mode application --taskmanagers N [--jm-cpu C --tm-cpu C]` runs the pipeline as an application cluster ([docs/application-mode.md](docs/application-mode.md)); flags override the profile for this run, `--preset` sizes every TaskManager.
 
 `-d` / `--detach` submits the operation, waits until it materializes, prints the tracking link and exits. Use `flyt ui --wait` afterwards to find the Flink Web UI. Add `--cache-wheel` to reuse the uploaded wheel across runs (needs `wheel_cache_prefix` or `cypress_base_path`).
 
@@ -134,7 +119,7 @@ Do not put the same basename in both lists.
 
 ## Presets
 
-`minicluster` mode only: the one YT job's CPU, container memory and `-Xmx`. Application mode sizes its containers from `jobmanager_cpu`/`taskmanager_cpu` and the Flink memory keys instead ([docs/application-mode.md](docs/application-mode.md)).
+`minicluster`: the one YT job's CPU, container memory and `-Xmx`. `application`: every TaskManager's CPU (= task slots) and container memory, the heap columns do not apply; the JobManager has fixed defaults ([docs/application-mode.md](docs/application-mode.md#sizing)).
 
 | Preset | CPU | RAM | Heap |
 |--------|-----|-----|------|

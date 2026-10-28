@@ -90,12 +90,3 @@ def test_find_ui_url_returns_none_when_only_taskmanagers_run() -> None:
     yt.list_jobs.return_value = {"jobs": [{"id": "tm1", "state": "running", "task_name": "taskmanager"}]}
     assert find_ui_url_for_operation(yt, "op-1") is None
     yt.get_job.assert_not_called()
-
-
-def test_find_ui_url_uses_the_rest_port_annotated_on_the_operation() -> None:
-    yt = _yt_with_job()
-    yt.get_operation.return_value = {"spec": {"annotations": {"flyt_flink_rest_port": 8081}}}
-    with patch("ytsaurus_flyt.ui_tracker._probe_tcp", return_value=True) as probe:
-        url = find_ui_url_for_operation(yt, "op-1")
-    assert url == "http://[2a02:6b8::1]:8081"
-    probe.assert_called_once_with("2a02:6b8::1", 8081)

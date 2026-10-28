@@ -12,11 +12,7 @@ from yt.wrapper.run_operation_commands import run_operation
 from ytsaurus_flyt.application import ApplicationCluster, application_cluster
 from ytsaurus_flyt.config import FlytConfig, require_squashfs_runtime_config
 from ytsaurus_flyt.credentials import get_secure_credentials
-from ytsaurus_flyt.flink_conf import (
-    FLINK_REST_PORT,
-    load_flink_conf_file,
-    minicluster_ignored_options_warning,
-)
+from ytsaurus_flyt.flink_conf import FLINK_REST_PORT
 from ytsaurus_flyt.flink_lib_jars import (
     partition_flink_lib_jars_for_delivery,
     resolve_flink_lib_jars,
@@ -88,7 +84,8 @@ def launch_vanilla_job(
     """Submit a PyFlink job as a Vanilla operation (``execute.wait()`` semantics).
 
     With ``config.cluster_mode == "application"`` the operation runs a JobManager task and a
-    TaskManager task resolved by :func:`ytsaurus_flyt.flink_conf.application_cluster`; ``preset`` then plays no part.
+    TaskManager task resolved by :func:`ytsaurus_flyt.application.application_cluster`; ``preset`` then sizes
+    every TaskManager.
     """
     if isinstance(preset, MiniClusterPreset):
         preset_params = preset.params
@@ -101,21 +98,15 @@ def launch_vanilla_job(
         "Launching Vanilla Flink job on %s in pool %s (%s)",
         proxy_url or "<unknown proxy>",
         pool,
-        "application mode, preset ignored" if config.is_application_cluster else f"preset={preset_name}",
+        f"application mode, preset={preset_name} per TaskManager"
+        if config.is_application_cluster
+        else f"preset={preset_name}",
     )
 
     require_squashfs_runtime_config(config)
     cluster: Optional[ApplicationCluster] = None
     jobs_proxy: Optional[str] = None
-    if not config.is_application_cluster:
-        ignored = minicluster_ignored_options_warning(config)
-        if ignored:
-            logger.warning("Flink configuration: %s", ignored)
-    else:
-        flink_conf_file: Optional[Dict[str, str]] = None
-        if config.base_flink_conf_path:
-            flink_conf_file = load_flink_conf_file(yt_client, config.base_flink_conf_path)
-            logger.info("Flink config file %s: %d option(s)", config.base_flink_conf_path, len(flink_conf_file))
+    if config.is_application_cluster:
         if proxy_url is None:
             raise ValueError(
                 "Cannot determine the YT proxy URL from yt_client; application mode needs it for discovery"
@@ -123,12 +114,8 @@ def launch_vanilla_job(
         jobs_proxy = job_yt_proxy(yt_client, proxy_url, config.job_yt_proxy)
         if jobs_proxy != proxy_url:
             logger.info("Jobs will reach YT through %s", jobs_proxy)
-        cluster = application_cluster(config, flink_conf_file)
-        resources = cluster.resources
-        resources.check_parallelism_fits()
-        logger.info("Application cluster: %s", resources.summary())
-        for warning in cluster.warnings:
-            logger.warning("Flink configuration: %s", warning)
+        cluster = application_cluster(config, preset_params)
+        logger.info("Application cluster: %s", cluster.resources.summary())
 
     logger.info("Fetching credentials...")
     secure_vault = get_secure_credentials(yt_client, extra_secrets=extra_secrets)
@@ -212,7 +199,6 @@ def launch_vanilla_job(
         op = run_operation(spec, sync=False, client=yt_client)  # type: ignore[union-attr]
 
         op_id = getattr(op, "id", "unknown")
-        ui_port = cluster.rest_port if cluster is not None else FLINK_REST_PORT
         ui_base = (config.yt_ui_base_url or "").strip().rstrip("/")
         base = ui_base or (proxy_url.rstrip("/") if proxy_url else "")
         if base:
@@ -221,13 +207,13 @@ def launch_vanilla_job(
                 "Operation %s started. Track: %s (Flink :%d is in-cluster; see stderr for port-forward).",
                 op_id,
                 tracking_url,
-                ui_port,
+                FLINK_REST_PORT,
             )
         else:
             logger.info(
                 "Operation %s started (Flink :%d is in-cluster; see stderr for port-forward).",
                 op_id,
-                ui_port,
+                FLINK_REST_PORT,
             )
         if ui_base:
             logger.info("Web UI base: %s", ui_base)

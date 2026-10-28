@@ -10,14 +10,11 @@ from yt.wrapper.spec_builders import VanillaSpecBuilder
 
 from ytsaurus_flyt.application import ApplicationCluster
 from ytsaurus_flyt.config import FlytConfig
-from ytsaurus_flyt.flink_conf import render_flink_config_yaml, rest_port
+from ytsaurus_flyt.flink_conf import FLINK_REST_PORT, render_flink_config_yaml
 from ytsaurus_flyt.models import MiniClusterParams, OperationParams
 
 # Environment read by the application-mode run scripts and the in-job helper.
 FLYT_YT_PROXY_ENV = "FLYT_YT_PROXY"
-
-# Operation annotation with the JobManager REST port (the Web UI).
-FLINK_REST_PORT_ANNOTATION = "flyt_flink_rest_port"
 
 # Vanilla task names: one task per role in application mode, one for the MiniCluster job.
 MINICLUSTER_TASK = "flink_minicluster"
@@ -92,8 +89,8 @@ def _build_run_script(
         "job_args": _job_args_for_shell(job_command),
         "service_name": service_name,
         "python_bin": config.python_bin,
-        # A MiniCluster pipeline sets the Web UI port in code; flyt ui looks for it on flyt's default.
-        "rest_port": rest_port(flink_config or {}),
+        # The JobManager's REST port; a MiniCluster pipeline sets the same one in code.
+        "rest_port": FLINK_REST_PORT,
     }
     if role is not None:
         assert flink_config is not None
@@ -265,9 +262,6 @@ def build_vanilla_operation_spec(
     spec_dict: Dict[str, Any] = {}
     if title:
         spec_dict["title"] = title
-    if application_cluster is not None:
-        # Read back by `flyt ui`, which cannot know the Flink configuration of this run otherwise.
-        spec_dict["annotations"] = {FLINK_REST_PORT_ANNOTATION: application_cluster.rest_port}
     if operation_params.description:
         spec_dict["description"] = operation_params.description
     if operation_params.pool:

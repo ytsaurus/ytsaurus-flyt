@@ -344,23 +344,14 @@ def validate(
     yt_client = None
     if px:
         yt_client = make_yt_client(px)
-    rows = validate_flyt_config(cfg, proxy=px or None, yt_client=yt_client)
+    _, _, pst = resolve_connection_from_profile(profile_data)
+    preset_params = MiniClusterPreset.__members__.get((pst or "micro").strip().upper(), MiniClusterPreset.MICRO).params
+    rows = validate_flyt_config(cfg, proxy=px or None, yt_client=yt_client, preset=preset_params)
     ok_all = True
     for name, ok, msg in rows:
-        ok_all = ok_all and ok is not False
-        mark = "WARN" if ok is None else ("OK" if ok else "!!")
-        click.echo(f"  [{mark}] {name}: {msg}")
+        ok_all = ok_all and ok
+        click.echo(f"  [{'OK' if ok else '!!'}] {name}: {msg}")
     ctx.exit(0 if ok_all else 1)
-
-
-def _parse_flink_options(options: Tuple[str, ...]) -> Dict[str, str]:
-    parsed: Dict[str, str] = {}
-    for option in options:
-        key, sep, value = option.partition("=")
-        if not sep or not key.strip():
-            raise click.BadParameter(f"expected KEY=VALUE, got {option!r}", param_hint="-D")
-        parsed[key.strip()] = value.strip()
-    return parsed
 
 
 @cli.command(
@@ -379,8 +370,8 @@ def _parse_flink_options(options: Tuple[str, ...]) -> Dict[str, str]:
     "--preset",
     type=click.Choice(["micro", "small", "large", "xlarge"], case_sensitive=False),
     default=None,
-    help="Resource preset for --mode minicluster (default: from profile or micro); application mode "
-    "sizes the JobManager from --jm-cpu and jobmanager.memory.process.size instead.",
+    help="Resource preset (default: from profile or micro): the MiniCluster YT job, or every TaskManager "
+    "YT job for --mode application (cpu = task slots, memory = container).",
 )
 @click.option(
     "--mode",
@@ -395,8 +386,8 @@ def _parse_flink_options(options: Tuple[str, ...]) -> Dict[str, str]:
     "taskmanager_count",
     type=click.IntRange(min=1),
     default=None,
-    help="TaskManager YT job count for --mode application, i.e. the cluster capacity in units of "
-    "taskmanager.numberOfTaskSlots (default: profile, else 1).",
+    help="TaskManager YT job count for --mode application; the cluster has count * TaskManager cpu task slots "
+    "(default: profile, else 1).",
 )
 @click.option(
     "--jm-cpu",
@@ -410,22 +401,7 @@ def _parse_flink_options(options: Tuple[str, ...]) -> Dict[str, str]:
     "taskmanager_cpu",
     type=click.IntRange(min=1),
     default=None,
-    help="CPU per TaskManager YT job for --mode application (default: profile, else taskmanager.numberOfTaskSlots).",
-)
-@click.option(
-    "--flink-conf",
-    "base_flink_conf_path",
-    default=None,
-    help="Flink config.yaml (local file or Cypress //path) for --mode application; replaces the profile's "
-    "base_flink_conf_path and flink_config_override entirely, flyt defaults still apply underneath.",
-)
-@click.option(
-    "-D",
-    "flink_options",
-    multiple=True,
-    metavar="KEY=VALUE",
-    help="Flink option for this run in --mode application, repeatable; applied last, over every other layer "
-    "(flyt defaults, the Flink config file, flink_config_override).",
+    help="CPU, and task slots, per TaskManager YT job for --mode application (default: profile, else the preset's cpu).",
 )
 @click.option("--wheel", "wheel_path", default=None)
 @click.option("--source-dir", "source_dir", default=None)
@@ -455,8 +431,6 @@ def run(
     taskmanager_count: Optional[int],
     jobmanager_cpu: Optional[int],
     taskmanager_cpu: Optional[int],
-    base_flink_conf_path: Optional[str],
-    flink_options: Tuple[str, ...],
     wheel_path: Optional[str],
     source_dir: Optional[str],
     cache_wheel: bool,
@@ -474,16 +448,8 @@ def run(
         "taskmanager_count": taskmanager_count,
         "jobmanager_cpu": jobmanager_cpu,
         "taskmanager_cpu": taskmanager_cpu,
-        "base_flink_conf_path": base_flink_conf_path,
     }
     cluster_overrides = {k: v for k, v in cluster_overrides.items() if v is not None}
-    if base_flink_conf_path is not None:
-        # The file given on the command line is the whole Flink configuration for this run.
-        cluster_overrides["flink_config_override"] = {}
-    if flink_options:
-        # -D is the top layer: over the profile's (or --flink-conf's) Flink configuration.
-        base = cluster_overrides.get("flink_config_override", cfg.flink_config_override)
-        cluster_overrides["flink_config_override"] = {**base, **_parse_flink_options(flink_options)}
     if cluster_overrides:
         try:
             cfg = dataclasses.replace(cfg, **cluster_overrides)

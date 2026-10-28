@@ -45,19 +45,24 @@ def test_launch_vanilla_job_accepts_cluster_params_type():
     assert MiniClusterParams in hints["preset"].__args__
 
 
-def test_launch_rejects_default_parallelism_above_capacity(monkeypatch):
+def test_launch_sizes_taskmanagers_with_the_preset(monkeypatch):
     from ytsaurus_flyt import launcher as launcher_module
+    from ytsaurus_flyt.models import MiniClusterPreset
 
     monkeypatch.setattr(launcher_module, "proxy_url_from_client", lambda _c: "http://proxy")
     monkeypatch.setattr(launcher_module, "require_squashfs_runtime_config", lambda _c: None)
-    cfg = FlytConfig(
-        service_name="svc",
-        cluster_mode="application",
-        taskmanager_count=2,
-        flink_config_override={"taskmanager.numberOfTaskSlots": "2", "parallelism.default": "5"},
-    )
-    with pytest.raises(ValueError, match="does not fit"):
-        launch_vanilla_job(cfg, MagicMock(), "pipeline.py", "pool")
+    monkeypatch.setattr(launcher_module, "job_yt_proxy", lambda *a: "http://proxy")
+    seen = {}
+
+    def stop(config, preset):
+        seen["preset"] = preset
+        raise RuntimeError("stop here")
+
+    monkeypatch.setattr(launcher_module, "application_cluster", stop)
+    cfg = FlytConfig(service_name="svc", cluster_mode="application")
+    with pytest.raises(RuntimeError, match="stop here"):
+        launch_vanilla_job(cfg, MagicMock(), "pipeline.py", "pool", preset=MiniClusterPreset.LARGE)
+    assert seen["preset"] == MiniClusterPreset.LARGE.params
 
 
 def test_launch_passes_job_proxy_to_the_spec(monkeypatch):
@@ -108,16 +113,3 @@ def test_failed_job_budget_scales_with_taskmanagers():
 def test_invalid_max_failed_job_count():
     with pytest.raises(ValueError, match="max_failed_job_count"):
         FlytConfig(max_failed_job_count=0)
-
-
-def test_minicluster_launch_warns_and_never_reads_the_flink_conf_file(monkeypatch, caplog):
-    from ytsaurus_flyt import launcher as launcher_module
-
-    monkeypatch.setattr(launcher_module, "proxy_url_from_client", lambda _c: "http://proxy")
-    monkeypatch.setattr(launcher_module, "require_squashfs_runtime_config", lambda _c: None)
-    monkeypatch.setattr(launcher_module, "load_flink_conf_file", lambda *a: pytest.fail("file read in minicluster"))
-    monkeypatch.setattr(launcher_module, "get_secure_credentials", MagicMock(side_effect=RuntimeError("stop here")))
-    cfg = FlytConfig(service_name="svc", base_flink_conf_path="//home/conf.yaml", flink_config_override={"a": "1"})
-    with caplog.at_level("WARNING"), pytest.raises(RuntimeError, match="stop here"):
-        launch_vanilla_job(cfg, MagicMock(), "pipeline.py", "pool")
-    assert "apply to application mode only" in caplog.text

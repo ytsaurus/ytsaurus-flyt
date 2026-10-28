@@ -10,7 +10,7 @@ import webbrowser
 from typing import TYPE_CHECKING, List, Optional, Tuple
 
 from ytsaurus_flyt.flink_conf import FLINK_REST_PORT
-from ytsaurus_flyt.spec import FLINK_REST_PORT_ANNOTATION, TASKMANAGER_TASK
+from ytsaurus_flyt.spec import TASKMANAGER_TASK
 
 if TYPE_CHECKING:
     from yt.wrapper import YtClient
@@ -76,19 +76,6 @@ def _job_still_running(client: "YtClient", op_id: str, job_id: str) -> bool:
     return any((j.get("id") or j.get("job_id")) == job_id for j in jobs)
 
 
-def _ui_port(client: "YtClient", op_id: str) -> int:
-    """The Web UI port the operation was launched with (spec annotation), else flyt's default."""
-    try:
-        op = client.get_operation(op_id, attributes=["spec"])
-    except Exception as exc:  # noqa: BLE001 - a transient error: keep the default
-        logger.debug("get_operation(%s) failed: %s", op_id, exc)
-        return FLINK_REST_PORT
-    spec = op.get("spec") if isinstance(op, dict) else None
-    annotations = spec.get("annotations") if isinstance(spec, dict) else None
-    port = annotations.get(FLINK_REST_PORT_ANNOTATION) if isinstance(annotations, dict) else None
-    return int(port) if port else FLINK_REST_PORT
-
-
 def _ui_candidate_jobs(jobs: List[dict]) -> List[dict]:
     # Application mode: only the JobManager task serves the Web UI.
     return [j for j in jobs if str(j.get("task_name") or "").lower() != TASKMANAGER_TASK]
@@ -124,12 +111,11 @@ def _wait_port_open(
     op_id: str,
     job_id: str,
     ipv6s: List[str],
-    port: int,
     stop: threading.Event,
 ) -> Optional[str]:
     while not stop.is_set():
         for host in ipv6s:
-            if _probe_tcp(host, port):
+            if _probe_tcp(host, FLINK_REST_PORT):
                 return host
         if not _job_still_running(client, op_id, job_id):
             return None
@@ -143,14 +129,13 @@ def _monitor(
     op_id: str,
     job_id: str,
     host: str,
-    port: int,
     stop: threading.Event,
 ) -> None:
     fails = 0
     while not stop.is_set():
         if stop.wait(_MONITOR_INTERVAL_S):
             return
-        if _probe_tcp(host, port):
+        if _probe_tcp(host, FLINK_REST_PORT):
             fails = 0
             continue
         fails += 1
@@ -182,7 +167,6 @@ def _watch_loop(
     open_in_browser: bool,
 ) -> None:
     logger.info("Waiting for Flink Web UI...")
-    port = _ui_port(client, op_id)
     first = True
     while not stop.is_set():
         found = _find_job_with_ipv6(client, op_id)
@@ -192,18 +176,18 @@ def _watch_loop(
             continue
 
         job_id, ipv6s = found
-        host = _wait_port_open(client, op_id, job_id, ipv6s, port, stop)
+        host = _wait_port_open(client, op_id, job_id, ipv6s, stop)
         if not host:
             continue
 
-        url = f"http://[{host}]:{port}"
+        url = f"http://[{host}]:{FLINK_REST_PORT}"
         if first:
             _announce_ui_url(url, open_in_browser=open_in_browser)
             first = False
         else:
             logger.info("Job restarted (%s). Flink Web UI: %s", job_id, url)
 
-        _monitor(client, op_id, job_id, host, port, stop)
+        _monitor(client, op_id, job_id, host, stop)
 
 
 def find_ui_url_for_operation(client: "YtClient", op_id: str, *, probe: bool = True) -> Optional[str]:
@@ -216,10 +200,9 @@ def find_ui_url_for_operation(client: "YtClient", op_id: str, *, probe: bool = T
     if not found:
         return None
     _, ipv6s = found
-    port = _ui_port(client, op_id)
     for host in ipv6s:
-        if not probe or _probe_tcp(host, port):
-            return f"http://[{host}]:{port}"
+        if not probe or _probe_tcp(host, FLINK_REST_PORT):
+            return f"http://[{host}]:{FLINK_REST_PORT}"
     return None
 
 

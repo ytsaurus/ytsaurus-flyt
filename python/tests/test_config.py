@@ -5,13 +5,7 @@ import tempfile
 
 import pytest
 
-from ytsaurus_flyt.application import resolve_application_resources
 from ytsaurus_flyt.config import DEFAULT_JAVA_HOME, FlytConfig, require_squashfs_runtime_config
-from ytsaurus_flyt.flink_conf import user_flink_config
-
-
-def _res(cfg, conf_file=None):
-    return resolve_application_resources(cfg, user_flink_config(cfg, conf_file))
 
 
 class TestFlytConfig:
@@ -159,22 +153,14 @@ class TestClusterModeConfig:
         assert config.taskmanager_count == 1
         assert config.taskmanager_cpu is None
         assert config.jobmanager_cpu is None
-        res = _res(config)
-        assert (res.slots, res.capacity, res.default_parallelism) == (1, 1, 1)
         assert config.discovery_timeout == 300
-        assert config.flink_config_override == {}
-        assert config.base_flink_conf_path == ""
+        assert config.max_failed_job_count is None
 
     def test_application_mode_normalizes(self):
-        config = FlytConfig(
-            cluster_mode=" Application ",
-            flink_config_override={"a.b": 1},
-            base_flink_conf_path=" //home/flyt/config.yaml ",
-        )
+        config = FlytConfig(cluster_mode=" Application ", job_yt_proxy=" http://jobs ")
         assert config.cluster_mode == "application"
         assert config.is_application_cluster is True
-        assert config.flink_config_override == {"a.b": "1"}
-        assert config.base_flink_conf_path == "//home/flyt/config.yaml"
+        assert config.job_yt_proxy == "http://jobs"
 
     def test_invalid_cluster_mode(self):
         with pytest.raises(ValueError, match="cluster_mode"):
@@ -191,11 +177,8 @@ class TestClusterModeConfig:
 cluster_mode: application
 taskmanager_count: 3
 discovery_timeout: 120
-base_flink_conf_path: ./flink-config.yaml
-flink_config_override:
-  restart-strategy.type: fixed-delay
-  taskmanager.numberOfTaskSlots: 2
-  taskmanager.memory.process.size: 14500m
+taskmanager_cpu: 6
+jobmanager_cpu: 3
 """
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             f.write(yaml_content)
@@ -204,23 +187,12 @@ flink_config_override:
         os.unlink(f.name)
         assert config.is_application_cluster
         assert config.taskmanager_count == 3
-        res = _res(config)
-        assert (res.slots, res.default_parallelism, res.taskmanager_process_memory) == (2, 6, 14500 * 1024**2)
+        assert (config.taskmanager_cpu, config.jobmanager_cpu) == (6, 3)
         assert config.discovery_timeout == 120
-        assert config.base_flink_conf_path == "./flink-config.yaml"
-        assert config.flink_config_override == {
-            "restart-strategy.type": "fixed-delay",
-            "taskmanager.numberOfTaskSlots": "2",
-            "taskmanager.memory.process.size": "14500m",
-        }
 
-    def test_invalid_taskmanager_count_and_default_parallelism(self):
+    def test_invalid_taskmanager_count(self):
         with pytest.raises(ValueError, match="taskmanager_count"):
             FlytConfig(taskmanager_count=0)
-        with pytest.raises(ValueError, match="parallelism.default"):
-            _res(FlytConfig(flink_config_override={"parallelism.default": "0"}))
-        with pytest.raises(ValueError, match="parallelism.default"):
-            _res(FlytConfig(flink_config_override={"parallelism.default": "all"}))
 
     def test_sidecar_command_is_kept_in_any_mode(self):
         assert FlytConfig(cluster_mode="application", sidecar_command=" agent ").sidecar_command == "agent"
