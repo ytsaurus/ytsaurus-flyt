@@ -2,8 +2,8 @@
 
 from unittest.mock import MagicMock, patch
 
+from ytsaurus_flyt.flink_conf import FLINK_REST_PORT
 from ytsaurus_flyt.ui_tracker import (
-    FLINK_UI_PORT,
     find_ui_url_for_operation,
     wait_ui_url_for_operation,
 )
@@ -26,8 +26,8 @@ def test_find_ui_url_probes_port() -> None:
     yt = _yt_with_job()
     with patch("ytsaurus_flyt.ui_tracker._probe_tcp", return_value=True) as probe:
         url = find_ui_url_for_operation(yt, "op-1")
-    assert url == f"http://[2a02:6b8::1]:{FLINK_UI_PORT}"
-    probe.assert_called_once_with("2a02:6b8::1", FLINK_UI_PORT)
+    assert url == f"http://[2a02:6b8::1]:{FLINK_REST_PORT}"
+    probe.assert_called_once_with("2a02:6b8::1", FLINK_REST_PORT)
 
 
 def test_find_ui_url_none_when_port_closed() -> None:
@@ -39,7 +39,7 @@ def test_find_ui_url_none_when_port_closed() -> None:
 def test_find_ui_url_no_probe() -> None:
     yt = _yt_with_job()
     url = find_ui_url_for_operation(yt, "op-1", probe=False)
-    assert url == f"http://[2a02:6b8::1]:{FLINK_UI_PORT}"
+    assert url == f"http://[2a02:6b8::1]:{FLINK_REST_PORT}"
 
 
 def test_wait_ui_url_returns_when_up() -> None:
@@ -47,7 +47,7 @@ def test_wait_ui_url_returns_when_up() -> None:
     yt.get_operation_state.return_value = "running"
     with patch("ytsaurus_flyt.ui_tracker._probe_tcp", return_value=True):
         url, state = wait_ui_url_for_operation(yt, "op-1")
-    assert url == f"http://[2a02:6b8::1]:{FLINK_UI_PORT}"
+    assert url == f"http://[2a02:6b8::1]:{FLINK_REST_PORT}"
     assert state == "running"
 
 
@@ -66,5 +66,36 @@ def test_wait_ui_url_polls_until_up() -> None:
     probes = iter([False, True])
     with patch("ytsaurus_flyt.ui_tracker._probe_tcp", side_effect=lambda *_: next(probes)):
         url, state = wait_ui_url_for_operation(yt, "op-1", poll_interval_s=0.01)
-    assert url == f"http://[2a02:6b8::1]:{FLINK_UI_PORT}"
+    assert url == f"http://[2a02:6b8::1]:{FLINK_REST_PORT}"
     assert state == "running"
+
+
+def test_find_ui_url_skips_taskmanager_jobs() -> None:
+    yt = MagicMock()
+    yt.list_jobs.return_value = {
+        "jobs": [
+            {"id": "tm1", "state": "running", "task_name": "taskmanager"},
+            {"id": "jm1", "state": "running", "task_name": "jobmanager"},
+        ]
+    }
+    yt.get_job.return_value = {"exec_attributes": {"ip_addresses": ["2a02:6b8::7"]}}
+    with patch("ytsaurus_flyt.ui_tracker._probe_tcp", return_value=True):
+        url = find_ui_url_for_operation(yt, "op-1")
+    assert url == f"http://[2a02:6b8::7]:{FLINK_REST_PORT}"
+    yt.get_job.assert_called_once_with("op-1", "jm1")
+
+
+def test_find_ui_url_returns_none_when_only_taskmanagers_run() -> None:
+    yt = MagicMock()
+    yt.list_jobs.return_value = {"jobs": [{"id": "tm1", "state": "running", "task_name": "taskmanager"}]}
+    assert find_ui_url_for_operation(yt, "op-1") is None
+    yt.get_job.assert_not_called()
+
+
+def test_find_ui_url_uses_the_rest_port_annotated_on_the_operation() -> None:
+    yt = _yt_with_job()
+    yt.get_operation.return_value = {"spec": {"annotations": {"flyt_flink_rest_port": 8081}}}
+    with patch("ytsaurus_flyt.ui_tracker._probe_tcp", return_value=True) as probe:
+        url = find_ui_url_for_operation(yt, "op-1")
+    assert url == "http://[2a02:6b8::1]:8081"
+    probe.assert_called_once_with("2a02:6b8::1", 8081)

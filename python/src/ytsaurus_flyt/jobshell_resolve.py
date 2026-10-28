@@ -7,6 +7,8 @@ from typing import List, Optional
 
 from yt.wrapper import YtClient
 
+from ytsaurus_flyt.spec import JOBMANAGER_TASK
+
 # Embedded in Vanilla operation titles and used as list_operations filter substring.
 _FLYT_PROFILE_KEY = "flyt-profile"
 
@@ -74,7 +76,7 @@ def _pick_running_job_id(yt_client: YtClient, operation_id: str) -> Optional[str
 
     for j in jobs:
         tn = str(j.get("task_name") or "").lower()
-        if "jobmanager" in tn or "job_manager" in tn:
+        if JOBMANAGER_TASK in tn:
             jid = j.get("id")
             if jid:
                 return str(jid)

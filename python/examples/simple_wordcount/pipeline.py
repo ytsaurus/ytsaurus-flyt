@@ -67,7 +67,7 @@ def main():
         GROUP BY word
     """)
 
-    # In application mode, we must wait for the job to finish
+    # Block until the job finishes: the YT job (minicluster) or the JobManager (application) ends with the script
     result.wait()
     logger.info("Wordcount pipeline finished.")
 

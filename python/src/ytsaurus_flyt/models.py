@@ -33,9 +33,25 @@ def parse_memory(memory: Union[str, int]) -> int:
     return value * units[unit]
 
 
+# Application-mode defaults. The JobManager's load barely depends on the job (dispatcher, REST, blob
+# server, plan compilation), so it gets fixed defaults; TaskManagers are sized per YT job in the Flink
+# configuration and these are only the floor; a TaskManager's cpu defaults to its slot count, as
+# kubernetes.taskmanager.cpu does.
+DEFAULT_JOBMANAGER_CPU = 2
+DEFAULT_JOBMANAGER_PROCESS_MEMORY = parse_memory("2G")
+# Memory of the JobManager container outside the Flink JVM: the PyFlink driver (the user's script and
+# its imports), bash, the discovery helper and a sidecar.
+JOBMANAGER_CONTAINER_OVERHEAD = parse_memory("512M")
+DEFAULT_TASKMANAGER_PROCESS_MEMORY = parse_memory("4G")
+# Memory of a TaskManager container outside the Flink JVM: bash, the discovery helper and a sidecar.
+# Python UDF workers are not here: Flink reserves managed memory for them inside process.size.
+TASKMANAGER_CONTAINER_OVERHEAD = parse_memory("512M")
+
+
 @dataclass(frozen=True)
-class ClusterParams:
-    """Resource parameters for a Flink cluster running in a YT Vanilla operation."""
+class MiniClusterParams:
+    """The MiniCluster YT job (``cluster_mode: minicluster``): container cpu and memory, the JVM heap
+    (``-Xmx``) and optionally its direct memory (``-XX:MaxDirectMemorySize``)."""
 
     cpu: int
     memory: str
@@ -44,6 +60,9 @@ class ClusterParams:
     disk_request_space: str = "10G"
     disk_request_medium_name: str = "default"
     off_heap_size: Optional[str] = None
+    """``data_size_per_job`` and ``disk_request_*`` are for launchers that run the same MiniCluster
+    inside YT Map operations (input bytes per job, sandbox disk quota); flyt's Vanilla operations
+    do not use them."""
 
     def data_size_per_job_bytes(self) -> int:
         return parse_memory(self.data_size_per_job)
@@ -61,28 +80,28 @@ class ClusterParams:
         return parse_memory(self.memory)
 
 
-class ClusterPreset(Enum):
-    """Pre-defined resource presets for Flink clusters."""
+class MiniClusterPreset(Enum):
+    """Pre-defined MiniCluster sizes; application mode is sized from the Flink configuration instead."""
 
-    MICRO = ClusterParams(
+    MICRO = MiniClusterParams(
         cpu=2,
         memory="4G",
         max_heap_size="2324M",
         data_size_per_job="500M",
     )
-    SMALL = ClusterParams(
+    SMALL = MiniClusterParams(
         cpu=2,
         memory="8G",
         max_heap_size="4648M",
         data_size_per_job="1G",
     )
-    LARGE = ClusterParams(
+    LARGE = MiniClusterParams(
         cpu=4,
         memory="16G",
         max_heap_size="9296M",
         data_size_per_job="2G",
     )
-    XLARGE = ClusterParams(
+    XLARGE = MiniClusterParams(
         cpu=8,
         memory="32G",
         max_heap_size="24G",
@@ -90,7 +109,7 @@ class ClusterPreset(Enum):
     )
 
     @property
-    def params(self) -> ClusterParams:
+    def params(self) -> MiniClusterParams:
         return self.value
 
 
@@ -108,7 +127,46 @@ class OperationParams:
 
 @dataclass
 class JobmanagerParams:
-    """Parameters for the Flink JobManager task in a Vanilla operation."""
+    """The JobManager YT job of ``cluster_mode: application``: ``process_memory`` is the Flink JVM
+    (``jobmanager.memory.process.size``), the container gets it plus :data:`JOBMANAGER_CONTAINER_OVERHEAD`."""
 
-    cpu: int = 2
-    memory: int = parse_memory("4G")
+    cpu: int
+    process_memory: int
+
+    def __post_init__(self) -> None:
+        if self.process_memory < 1:
+            raise ValueError(f"JobmanagerParams.process_memory must be positive, got {self.process_memory}")
+
+    @property
+    def memory(self) -> int:
+        """YT ``memory_limit`` of the JobManager job."""
+        return self.process_memory + JOBMANAGER_CONTAINER_OVERHEAD
+
+
+@dataclass
+class TaskmanagerParams:
+    """Parameters for the Flink TaskManager task (``cluster_mode: application`` only).
+
+    ``count`` TaskManager YT jobs are started, each with ``slots`` task slots; the default
+    job parallelism becomes ``count * slots``. ``process_memory`` is the Flink JVM
+    (``taskmanager.memory.process.size``); the YT container gets it plus
+    :data:`TASKMANAGER_CONTAINER_OVERHEAD`, the way a Kubernetes pod gets ``process.size``.
+    """
+
+    cpu: int
+    process_memory: int
+    count: int
+    slots: int
+
+    def __post_init__(self) -> None:
+        if self.count < 1:
+            raise ValueError(f"TaskmanagerParams.count must be >= 1, got {self.count}")
+        if self.slots < 1:
+            raise ValueError(f"TaskmanagerParams.slots must be >= 1, got {self.slots}")
+        if self.process_memory < 1:
+            raise ValueError(f"TaskmanagerParams.process_memory must be positive, got {self.process_memory}")
+
+    @property
+    def memory(self) -> int:
+        """YT ``memory_limit`` of one TaskManager YT job."""
+        return self.process_memory + TASKMANAGER_CONTAINER_OVERHEAD

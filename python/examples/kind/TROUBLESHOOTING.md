@@ -165,6 +165,14 @@ pids_limit = 16384
 
 in `~/.config/containers/containers.conf`, then recreate the Kind node or cluster.
 
+Without recreating anything, raise the limit on the running Kind node (persisted in the container config, survives `podman machine` restarts):
+
+```bash
+podman update --pids-limit 16384 flyt-local-control-plane
+```
+
+Check with `podman exec flyt-local-control-plane cat /sys/fs/cgroup/pids.max /sys/fs/cgroup/pids.current`. The same limit also breaks `flyt run --mode application`: a JobManager JVM dies with `pthread_create failed (EAGAIN)` and two jobs of one operation starting at the same moment fail with `Process terminated by signal 4` before the user command runs.
+
 ## When in doubt
 
 This blunt reset fixed most partial failures on this setup:

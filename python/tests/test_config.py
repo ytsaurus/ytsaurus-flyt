@@ -5,7 +5,13 @@ import tempfile
 
 import pytest
 
+from ytsaurus_flyt.application import resolve_application_resources
 from ytsaurus_flyt.config import DEFAULT_JAVA_HOME, FlytConfig, require_squashfs_runtime_config
+from ytsaurus_flyt.flink_conf import user_flink_config
+
+
+def _res(cfg, conf_file=None):
+    return resolve_application_resources(cfg, user_flink_config(cfg, conf_file))
 
 
 class TestFlytConfig:
@@ -23,7 +29,7 @@ class TestFlytConfig:
         assert config.squashfs_layer_delivery == "layer_paths"
         assert config.squashfs_tools_cache_prefix == ""
         assert config.network_project is None
-        assert config.max_failed_job_count == 10
+        assert config.max_failed_job_count is None  # the launcher picks the per-mode default
 
     def test_construct_with_known_fields(self):
         config = FlytConfig(
@@ -143,3 +149,84 @@ def test_require_squashfs_runtime_config_missing_version():
         require_squashfs_runtime_config(
             FlytConfig(runtime_python_packages=["apache-flink==1.20.1"], runtime_python_version="")
         )
+
+
+class TestClusterModeConfig:
+    def test_defaults_are_minicluster(self):
+        config = FlytConfig()
+        assert config.cluster_mode == "minicluster"
+        assert config.is_application_cluster is False
+        assert config.taskmanager_count == 1
+        assert config.taskmanager_cpu is None
+        assert config.jobmanager_cpu is None
+        res = _res(config)
+        assert (res.slots, res.capacity, res.default_parallelism) == (1, 1, 1)
+        assert config.discovery_timeout == 300
+        assert config.flink_config_override == {}
+        assert config.base_flink_conf_path == ""
+
+    def test_application_mode_normalizes(self):
+        config = FlytConfig(
+            cluster_mode=" Application ",
+            flink_config_override={"a.b": 1},
+            base_flink_conf_path=" //home/flyt/config.yaml ",
+        )
+        assert config.cluster_mode == "application"
+        assert config.is_application_cluster is True
+        assert config.flink_config_override == {"a.b": "1"}
+        assert config.base_flink_conf_path == "//home/flyt/config.yaml"
+
+    def test_invalid_cluster_mode(self):
+        with pytest.raises(ValueError, match="cluster_mode"):
+            FlytConfig(cluster_mode="session")
+
+    def test_invalid_taskmanager_cpu(self):
+        with pytest.raises(ValueError, match="taskmanager_cpu"):
+            FlytConfig(taskmanager_cpu=0)
+        with pytest.raises(ValueError, match="jobmanager_cpu"):
+            FlytConfig(jobmanager_cpu=0)
+
+    def test_from_yaml_application_fields(self):
+        yaml_content = """
+cluster_mode: application
+taskmanager_count: 3
+discovery_timeout: 120
+base_flink_conf_path: ./flink-config.yaml
+flink_config_override:
+  restart-strategy.type: fixed-delay
+  taskmanager.numberOfTaskSlots: 2
+  taskmanager.memory.process.size: 14500m
+"""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            f.write(yaml_content)
+            f.flush()
+            config = FlytConfig.from_yaml(f.name)
+        os.unlink(f.name)
+        assert config.is_application_cluster
+        assert config.taskmanager_count == 3
+        res = _res(config)
+        assert (res.slots, res.default_parallelism, res.taskmanager_process_memory) == (2, 6, 14500 * 1024**2)
+        assert config.discovery_timeout == 120
+        assert config.base_flink_conf_path == "./flink-config.yaml"
+        assert config.flink_config_override == {
+            "restart-strategy.type": "fixed-delay",
+            "taskmanager.numberOfTaskSlots": "2",
+            "taskmanager.memory.process.size": "14500m",
+        }
+
+    def test_invalid_taskmanager_count_and_default_parallelism(self):
+        with pytest.raises(ValueError, match="taskmanager_count"):
+            FlytConfig(taskmanager_count=0)
+        with pytest.raises(ValueError, match="parallelism.default"):
+            _res(FlytConfig(flink_config_override={"parallelism.default": "0"}))
+        with pytest.raises(ValueError, match="parallelism.default"):
+            _res(FlytConfig(flink_config_override={"parallelism.default": "all"}))
+
+    def test_sidecar_command_is_kept_in_any_mode(self):
+        assert FlytConfig(cluster_mode="application", sidecar_command=" agent ").sidecar_command == "agent"
+        # a profile may carry it while --mode picks the topology per run; minicluster just ignores it
+        assert FlytConfig(sidecar_command="agent").sidecar_command == "agent"
+
+    def test_invalid_discovery_timeout(self):
+        with pytest.raises(ValueError, match="discovery_timeout"):
+            FlytConfig(discovery_timeout=0)

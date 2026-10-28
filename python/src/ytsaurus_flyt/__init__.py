@@ -3,21 +3,26 @@
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 
+from ytsaurus_flyt.application import ApplicationCluster, ApplicationResources
 from ytsaurus_flyt.config import FlytConfig
 from ytsaurus_flyt.models import (
-    ClusterParams,
-    ClusterPreset,
     JobmanagerParams,
+    MiniClusterParams,
+    MiniClusterPreset,
     OperationParams,
+    TaskmanagerParams,
 )
 
 __all__ = [
     "FlytConfig",
     "launch_vanilla_job",
-    "ClusterParams",
-    "ClusterPreset",
+    "ApplicationCluster",
+    "ApplicationResources",
     "JobmanagerParams",
+    "MiniClusterParams",
+    "MiniClusterPreset",
     "OperationParams",
+    "TaskmanagerParams",
     "build_vanilla_operation_spec",
     "ensure_runtime_layer",
     "FlinkLibJarsResolveResult",
