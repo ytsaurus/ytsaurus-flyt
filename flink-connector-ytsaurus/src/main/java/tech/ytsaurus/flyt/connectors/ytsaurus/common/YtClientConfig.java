@@ -12,7 +12,7 @@ import lombok.Getter;
 import lombok.Setter;
 import lombok.experimental.Accessors;
 
-import static org.apache.flink.shaded.guava31.com.google.common.base.Preconditions.checkNotNull;
+import static org.apache.flink.shaded.guava33.com.google.common.base.Preconditions.checkNotNull;
 
 public class YtClientConfig implements Serializable {
     @Getter

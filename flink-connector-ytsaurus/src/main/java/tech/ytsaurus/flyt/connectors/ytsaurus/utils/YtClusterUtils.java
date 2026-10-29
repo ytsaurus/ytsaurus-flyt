@@ -6,8 +6,8 @@ import java.util.concurrent.TimeUnit;
 
 import lombok.experimental.UtilityClass;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.flink.shaded.guava31.com.google.common.cache.Cache;
-import org.apache.flink.shaded.guava31.com.google.common.cache.CacheBuilder;
+import org.apache.flink.shaded.guava33.com.google.common.cache.Cache;
+import org.apache.flink.shaded.guava33.com.google.common.cache.CacheBuilder;
 import tech.ytsaurus.client.YTsaurusClient;
 import tech.ytsaurus.client.rpc.YTsaurusClientAuth;
 

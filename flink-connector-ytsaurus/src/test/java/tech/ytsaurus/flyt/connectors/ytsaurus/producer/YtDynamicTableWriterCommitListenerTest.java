@@ -8,7 +8,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.flink.api.common.functions.RuntimeContext;
 import org.apache.flink.formats.common.TimestampFormat;
 import org.apache.flink.metrics.groups.UnregisteredMetricsGroup;
-import org.apache.flink.shaded.guava31.com.google.common.collect.Iterators;
+import org.apache.flink.shaded.guava33.com.google.common.collect.Iterators;
 import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.types.logical.BigIntType;
 import org.apache.flink.table.types.logical.RowType;
