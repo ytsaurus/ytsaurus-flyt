@@ -1,12 +1,40 @@
-"""Tests for synchronous Flink UI discovery helpers."""
+"""Tests for Flink UI discovery helpers and the background watcher."""
 
+import logging
+from typing import Optional
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from ytsaurus_flyt.ui_tracker import (
     FLINK_UI_PORT,
+    FlinkUIWatcher,
     find_ui_url_for_operation,
     wait_ui_url_for_operation,
 )
+
+
+@pytest.mark.parametrize("token", [None, "launch-token"])
+def test_watcher_uses_launch_credentials_in_background(token: Optional[str]) -> None:
+    operation_id = "12345678-12345678-12345678-12345678"
+    token_kwargs = {} if token is None else {"token": token}
+    watcher = FlinkUIWatcher("test-cluster", False, **token_kwargs)
+    yt_logger = logging.getLogger("Yt")
+    with (
+        patch("yt.wrapper.YtClient") as make_client,
+        patch("ytsaurus_flyt.ui_tracker._watch_loop") as watch_loop,
+        watcher,
+    ):
+        yt_logger.handle(
+            logging.LogRecord("Yt", logging.INFO, __file__, 0, "Operation started: id=%s", (operation_id,), None)
+        )
+        watcher._thread.join(timeout=5)
+        assert not watcher._thread.is_alive()
+
+        make_client.assert_called_once_with(proxy="test-cluster", token=token)
+        watch_loop.assert_called_once_with(make_client.return_value, operation_id, watcher._stop, False)
+
+    assert watcher._capture not in yt_logger.handlers
 
 
 def _yt_with_job(ipv6: str = "2a02:6b8::1") -> MagicMock:

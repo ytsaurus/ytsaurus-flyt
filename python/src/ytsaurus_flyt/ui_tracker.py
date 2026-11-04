@@ -241,6 +241,7 @@ def _thread_main(
     capture: _OpIdCapture,
     stop: threading.Event,
     open_in_browser: bool,
+    token: Optional[str],
 ) -> None:
     op_id = capture.wait(stop)
     if not op_id:
@@ -248,7 +249,7 @@ def _thread_main(
 
     from yt.wrapper import YtClient  # noqa: PLC0415
 
-    _watch_loop(YtClient(proxy=proxy), op_id, stop, open_in_browser)
+    _watch_loop(YtClient(proxy=proxy, token=token), op_id, stop, open_in_browser)
 
 
 class FlinkUIWatcher:
@@ -262,15 +263,19 @@ class FlinkUIWatcher:
     Not useful with ``sync=False`` (detach mode) since the process exits before
     the watcher can find the job — skip it in that case.
 
+    Pass the launch token when it differs from the local default credentials.
+    The background thread creates its own YT client with that token.
+
     Usage::
 
-        with FlinkUIWatcher(proxy="hahn.yt.yandex.net", open_in_browser=True):
+        with FlinkUIWatcher(proxy="hahn.yt.yandex.net", token=launch_token):
             launch_vanilla_job(...)
     """
 
-    def __init__(self, proxy: str, open_in_browser: bool = True) -> None:
+    def __init__(self, proxy: str, open_in_browser: bool = True, *, token: Optional[str] = None) -> None:
         self._proxy = proxy
         self._open = open_in_browser
+        self._token = token
         self._capture = _OpIdCapture()
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -279,7 +284,7 @@ class FlinkUIWatcher:
         logging.getLogger("Yt").addHandler(self._capture)
         self._thread = threading.Thread(
             target=_thread_main,
-            args=(self._proxy, self._capture, self._stop, self._open),
+            args=(self._proxy, self._capture, self._stop, self._open, self._token),
             daemon=True,
             name="flink-ui-watcher",
         )
