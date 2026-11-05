@@ -94,17 +94,18 @@ class YtError(Exception):
 def yt_request(command, params, body=None, method=None):
     """Call ``/api/v4/<command>``; returns the decoded JSON response (``{}`` when empty).
 
-    With several proxies the first reachable one wins; a proxy that refuses the connection is skipped
+    With several proxies the first reachable one wins; a proxy that refuses the connection or times out is skipped
     (an HTTP error from YT is a real answer and is raised as :class:`YtError`).
     """
     bases = _proxy_bases()
     for index, base in enumerate(bases):
         try:
             return _yt_request_via(base, command, params, body, method)
-        except urllib.error.URLError as e:
+        # OSError: a read timeout is a bare socket timeout, not a URLError.
+        except OSError as e:
             if isinstance(e, urllib.error.HTTPError) or index == len(bases) - 1:
                 raise
-            _log("YT proxy %s unreachable (%s); trying the next one" % (base, e.reason))
+            _log("YT proxy %s unreachable (%s); trying the next one" % (base, getattr(e, "reason", e)))
     raise AssertionError("unreachable")
 
 

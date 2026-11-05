@@ -312,6 +312,16 @@ def test_yt_request_fails_over_to_the_next_proxy(helper, monkeypatch):
         "http://hp-0.cluster/api/v4/list_jobs?operation_id=op-1",
         "http://hp-1.cluster/api/v4/list_jobs?operation_id=op-1",
     ]
+
+    # a proxy that accepts the connection and hangs times out on read, outside URLError
+    def hanging_urlopen(req, timeout):
+        if "hp-0" in req.full_url:
+            raise TimeoutError("timed out")
+        return FakeResp(b'{"jobs": [2]}')
+
+    monkeypatch.setattr(helper.urllib.request, "urlopen", hanging_urlopen)
+    assert helper.yt_request("list_jobs", {"operation_id": "op-1"}) == {"jobs": [2]}
+    monkeypatch.setattr(helper.urllib.request, "urlopen", fake_urlopen)
     # the last proxy's connection error is raised, an HTTP answer is never retried elsewhere
     monkeypatch.setenv("FLYT_YT_PROXY", "hp-0.cluster")
     with pytest.raises(urllib.error.URLError):
