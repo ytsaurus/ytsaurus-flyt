@@ -181,11 +181,11 @@ class FlytConfig:
             raise ValueError(f"squashfs_compression must be one of {list(_VALID_SQUASHFS_COMPRESSION)}, got {c!r}")
         self.squashfs_layer_delivery = d
         self.squashfs_compression = c
-        m = str(self.cluster_mode.value if isinstance(self.cluster_mode, ClusterMode) else self.cluster_mode or "")
+        mode = str(self.cluster_mode.value if isinstance(self.cluster_mode, ClusterMode) else self.cluster_mode or "")
         try:
-            self.cluster_mode = ClusterMode(m.strip().lower())
+            self.cluster_mode = ClusterMode(mode.strip().lower())
         except ValueError as e:
-            raise ValueError(f"cluster_mode must be one of {[c.value for c in ClusterMode]}, got {m!r}") from e
+            raise ValueError(f"cluster_mode must be one of {[c.value for c in ClusterMode]}, got {mode!r}") from e
         # Positive integers; the cpu fields may also be None (resolved later from defaults / slots).
         for name in (
             "taskmanager_count",
