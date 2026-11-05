@@ -20,6 +20,12 @@ cat > "$FLINK_CONF_DIR/config.yaml" <<'FLYT_FLINK_CONF_EOF'
 FLYT_FLINK_CONF_EOF
 echo "Flink cluster configuration ($FLINK_CONF_DIR/config.yaml):" 1>&2
 cat "$FLINK_CONF_DIR/config.yaml" 1>&2
+# PythonEnvUtils logs the driver's full environment, secure_vault secrets included, at INFO.
+cat >> "$FLINK_CONF_DIR/log4j-console.properties" <<'FLYT_LOG4J_EOF'
+
+logger.flytPythonEnv.name = org.apache.flink.client.python.PythonEnvUtils
+logger.flytPythonEnv.level = WARN
+FLYT_LOG4J_EOF
 # SLOT_IP is the address reachable by clients (Web UI). Job-to-job traffic must use the fastbone
 # address where YT provides one: the default (backbone) address is filtered between containers.
 SLOT_IP=$(get_slot_ip)
