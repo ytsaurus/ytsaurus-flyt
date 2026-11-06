@@ -38,10 +38,7 @@ dependencies {
     compileOnly("org.projectlombok:lombok:1.18.20")
     annotationProcessor("org.projectlombok:lombok:1.18.20")
 
-    // Reuse the published, self-contained YSON binary without its unpublished adapter dependency.
-    testImplementation("tech.ytsaurus.flyt.formats.yson:flink-yson:1.1.0:all") {
-        isTransitive = false
-    }
+    testImplementation(project(":flink-yson"))
 
     testImplementation("org.apache.flink:flink-connector-base:2.3.0")
     testImplementation("org.apache.flink:flink-core:2.3.0")

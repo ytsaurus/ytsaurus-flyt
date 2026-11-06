@@ -4,7 +4,7 @@ This project provides Apache Flink format support for [YSON (Yet anOther Seriali
 
 ## Supported Flink Versions
 
-The published `1.1.0:all` artifact is compatible with Apache Flink `2.3.X`
+The published `1.1.0:all` artifact is compatible with Apache Flink `2.3.0`
 and can be reused without rebuilding or republishing this module.
 
 ## Installation
@@ -35,8 +35,7 @@ implementation("tech.ytsaurus.flyt.formats.yson:flink-yson:1.1.0:all") {
 ```
 
 The `all` classifier includes the YSON adapter and tree library. Disable
-transitive dependencies: the thin POM references an adapter artifact that is
-not published separately.
+transitive dependencies to use these bundled libraries.
 
 ## Building from Source
 
