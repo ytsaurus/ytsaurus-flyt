@@ -7,7 +7,7 @@ import java.util.Set;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.flink.configuration.ConfigOption;
 import org.apache.flink.configuration.ReadableConfig;
-import org.apache.flink.shaded.guava31.com.google.common.collect.Sets;
+import org.apache.flink.shaded.guava33.com.google.common.collect.Sets;
 import org.apache.flink.util.Preconditions;
 
 @Slf4j

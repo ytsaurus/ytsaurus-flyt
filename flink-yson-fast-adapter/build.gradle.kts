@@ -3,5 +3,5 @@ version = "1.0.4"
 
 dependencies {
     compileOnly("tech.ytsaurus:yson-tree:1.2.12")
-    compileOnly("org.apache.flink:flink-table-common:1.20.1")
+    compileOnly("org.apache.flink:flink-table-common:2.3.0")
 }
