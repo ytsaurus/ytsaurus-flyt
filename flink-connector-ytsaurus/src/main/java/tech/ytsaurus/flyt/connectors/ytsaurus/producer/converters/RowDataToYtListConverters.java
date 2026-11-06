@@ -1,6 +1,6 @@
 package tech.ytsaurus.flyt.connectors.ytsaurus.producer.converters;
 
-import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.Serializable;
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -10,6 +10,8 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
+
+import javax.annotation.Nullable;
 
 import lombok.extern.slf4j.Slf4j;
 import org.apache.flink.formats.common.TimestampFormat;
@@ -24,12 +26,16 @@ import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.LogicalTypeRoot;
 import org.apache.flink.table.types.logical.MapType;
 import org.apache.flink.table.types.logical.RowType;
-import tech.ytsaurus.core.operations.YTreeBinarySerializer;
+import tech.ytsaurus.client.DefaultSerializationResolver;
+import tech.ytsaurus.core.tables.ColumnSchema;
+import tech.ytsaurus.core.tables.ColumnValueType;
+import tech.ytsaurus.yson.YsonBinaryWriter;
 import tech.ytsaurus.typeinfo.TypeName;
 import tech.ytsaurus.ysontree.YTree;
 import tech.ytsaurus.ysontree.YTreeBuilder;
 import tech.ytsaurus.ysontree.YTreeMapNode;
 import tech.ytsaurus.ysontree.YTreeNode;
+import tech.ytsaurus.ysontree.YTreeNodeUtils;
 import tech.ytsaurus.ysontree.YTreeTextSerializer;
 
 import tech.ytsaurus.flyt.connectors.ytsaurus.utils.ChronoUtils;
@@ -95,8 +101,9 @@ public class RowDataToYtListConverters implements Serializable {
                 return (reuse, value) -> value.toString();
             case BINARY:
             case VARBINARY:
-                if (fieldNode != null && EXPLICIT_YSON_TYPES.contains(getFieldTypeName(fieldNode).toLowerCase())) {
-                    return (reuse, yson) -> YTreeBinarySerializer.deserialize(new ByteArrayInputStream((byte[]) yson));
+                if (isYsonColumn(fieldNode)) {
+                    // Already binary YSON, passed through by the encoder below.
+                    return (reuse, yson) -> yson;
                 } else {
                     return (reuse, value) -> YTree.bytesNode((byte[]) value);
                 }
@@ -351,12 +358,67 @@ public class RowDataToYtListConverters implements Serializable {
                         rowType.asSummaryString()
                 ));
             }
-            fieldConverters[i] = createConverter(fieldTypes[i], fieldNode);
+            RowDataToYtMapConverter converter = createConverter(fieldTypes[i], fieldNode);
+            // Only top-level fields come with a column node; nested values stay YSON trees.
+            fieldConverters[i] = isYsonColumn(fieldNode) ? wrapIntoBinaryYsonConverter(converter) : converter;
         }
         return fieldConverters;
     }
 
     private String getFieldTypeName(YTreeNode fieldNode) {
         return fieldNode.asMap().get(SCHEMA_TYPE_NAME).stringValue();
+    }
+
+    /**
+     * Columns that take binary YSON as is: "any" / "yson" in the old-style {@code type}, or a
+     * composite / yson {@code type_v3}. The old-style name is checked first because
+     * {@link ColumnSchema#fromYTree} rejects names like "yson" or "datetime" in {@code type}.
+     */
+    private static boolean isYsonColumn(@Nullable YTreeNode fieldNode) {
+        if (fieldNode == null) {
+            return false;
+        }
+        String typeName = ConverterUtils.getType(fieldNode);
+        if (typeName != null) {
+            return EXPLICIT_YSON_TYPES.contains(typeName.toLowerCase());
+        }
+        ColumnValueType type = ColumnSchema.fromYTree(fieldNode).getType();
+        return type == ColumnValueType.ANY || type == ColumnValueType.COMPOSITE;
+    }
+
+    /**
+     * Encodes the column value to binary YSON once, in the converter. The YT client otherwise
+     * serializes each such value with a fresh {@code YsonBinaryWriter} and a 4 KB buffer, which took a lot of CPU;
+     * {@code byte[]} values are passed through untouched.
+     */
+    private static RowDataToYtMapConverter wrapIntoBinaryYsonConverter(RowDataToYtMapConverter converter) {
+        BinaryYsonEncoder encoder = new BinaryYsonEncoder();
+        return (reuse, value) -> encoder.encode(converter.convert(reuse, value));
+    }
+
+    static final class BinaryYsonEncoder implements Serializable {
+        private static final long serialVersionUID = 1L;
+        private static final int BUFFER_SIZE = 4096;
+
+        private transient ByteArrayOutputStream bytes;
+        private transient YsonBinaryWriter writer;
+
+        Object encode(Object value) {
+            if (value == null || value instanceof byte[]) {
+                return value;
+            }
+            YTreeNode node = value instanceof YTreeNode
+                    ? (YTreeNode) value
+                    : DefaultSerializationResolver.getInstance().toTree(value);
+            if (writer == null) {
+                bytes = new ByteArrayOutputStream(BUFFER_SIZE);
+                writer = new YsonBinaryWriter(bytes, BUFFER_SIZE);
+            }
+            YTreeNodeUtils.walk(node, writer, true);
+            writer.flush();
+            byte[] encoded = bytes.toByteArray();
+            bytes.reset();
+            return encoded;
+        }
     }
 }
