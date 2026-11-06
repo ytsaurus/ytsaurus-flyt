@@ -25,7 +25,8 @@ kind_warn_podman_pid_pressure() {
   pct=$((cur * 100 / max))
   if (( pct >= 85 )); then
     echo "WARN: Kind node PID usage is ${cur}/${max} (${pct}%). YTsaurus pods may fail with 'failed to create thread'." >&2
-    echo "      Fix: raise Podman pids_limit (see TROUBLESHOOTING.md), e.g. ~/.config/containers/containers.conf:" >&2
+    echo "      Fix now: podman update --pids-limit 16384 ${container}" >&2
+    echo "      Persistent for new nodes: raise Podman pids_limit (see TROUBLESHOOTING.md), e.g. ~/.config/containers/containers.conf:" >&2
     echo "        [containers]" >&2
     echo "        pids_limit = 16384" >&2
     echo "      Then recreate the Kind cluster." >&2

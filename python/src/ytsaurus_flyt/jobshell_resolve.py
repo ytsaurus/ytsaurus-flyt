@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import re
-from typing import List, Optional
+from typing import Any, List, Mapping, Optional
 
 from yt.wrapper import YtClient
+
+from ytsaurus_flyt.spec import TASKMANAGER_TASK
 
 # Embedded in Vanilla operation titles and used as list_operations filter substring.
 _FLYT_PROFILE_KEY = "flyt-profile"
@@ -60,6 +62,12 @@ def resolve_default_jobshell_argv(yt_client: YtClient, profile_name: str) -> Opt
     return None
 
 
+def runs_driver(job: Mapping[str, Any]) -> bool:
+    """The YT job running the pipeline script and serving the Web UI: anything but a TaskManager
+    (the MiniCluster job, the JobManager, or the ``flink`` task of operations from older flyt)."""
+    return str(job.get("task_name") or "").lower() != TASKMANAGER_TASK
+
+
 def _pick_running_job_id(yt_client: YtClient, operation_id: str) -> Optional[str]:
     resp = yt_client.list_jobs(
         operation_id,
@@ -72,12 +80,11 @@ def _pick_running_job_id(yt_client: YtClient, operation_id: str) -> Optional[str
     if not jobs:
         return None
 
-    for j in jobs:
-        tn = str(j.get("task_name") or "").lower()
-        if "jobmanager" in tn or "job_manager" in tn:
-            jid = j.get("id")
-            if jid:
-                return str(jid)
+    # The job running the script: the MiniCluster job or the JobManager, never a TaskManager.
+    for j in filter(runs_driver, jobs):
+        jid = j.get("id")
+        if jid:
+            return str(jid)
 
     first = jobs[0].get("id")
     return str(first) if first else None

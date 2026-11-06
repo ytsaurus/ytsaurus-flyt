@@ -24,7 +24,7 @@ unset _VENV_DIR
 
 # Set up flink/ directories (discover from PyFlink if not in layer)
 if [ ! -d "$FLINK_LIB_DIR" ]; then
-    _pyflink_err=$("$PYTHON_BIN" -c "import os, pyflink; print(os.path.dirname(os.path.abspath(pyflink.__file__)))" 2>&1)
+    _pyflink_err=$(pyflink_home 2>&1)
     _pyflink_rc=$?
     if [ $_pyflink_rc -eq 0 ]; then
         PYFLINK_HOME="$_pyflink_err"

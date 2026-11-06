@@ -299,7 +299,7 @@ class YTsaurusQueueDynamicTableFactoryTest {
     @Test
     void rejectsBlankRequiredValuesAndNonPositiveParallelism() {
         Configuration options = new Configuration();
-        options.setString("proxy", "hahn");
+        options.setString("proxy", "localhost:9013");
         options.setString("path", " ");
         options.setString("credentials-source", "env");
 

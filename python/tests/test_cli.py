@@ -6,6 +6,7 @@ import yaml
 from click.testing import CliRunner
 
 from ytsaurus_flyt.__main__ import cli
+from ytsaurus_flyt.config import FlytConfig
 from ytsaurus_flyt.profiles import default_cypress_base_path
 from ytsaurus_flyt.yt_client import env_yt_token
 
@@ -185,6 +186,25 @@ def test_validate_prints_profile_line(monkeypatch, tmp_path: Path) -> None:
     assert "Profile: 'myprof'" in result.output
 
 
+def test_validate_sizes_application_taskmanagers_from_the_profile_preset(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("FLYT_CONFIG_DIR", str(tmp_path))
+    profiles = tmp_path / "profiles"
+    profiles.mkdir(parents=True)
+    (profiles / "p.yaml").write_text(
+        "proxy: http://cluster.example:80\npool: default\npreset: large\ncluster_mode: application\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "active").write_text("p\n", encoding="utf-8")
+    seen: dict = {}
+    monkeypatch.setattr("ytsaurus_flyt.__main__.make_yt_client", lambda _p: object())
+    monkeypatch.setattr(
+        "ytsaurus_flyt.__main__.validate_flyt_config", lambda *a, **k: seen.update(k) or [("check", True, "ok")]
+    )
+    result = CliRunner().invoke(cli, ["validate"], catch_exceptions=False)
+    assert result.exit_code == 0, result.output
+    assert seen["preset"].cpu == 4  # large
+
+
 def test_profile_import_writes_and_overrides(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("FLYT_CONFIG_DIR", str(tmp_path))
     src = tmp_path / "incoming.yaml"
@@ -316,3 +336,95 @@ def test_run_detach_with_cache_wheel_opts_into_persistent(monkeypatch, tmp_path:
     assert result.exit_code == 0
     assert captured["sync"] is False
     assert captured["cache_wheel"] is True
+
+
+def test_run_application_flags_override_profile_config(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("FLYT_CONFIG_DIR", str(tmp_path))
+    _write_profile(tmp_path, "p1")
+    captured: dict = {}
+
+    def fake_launch(**kwargs):  # type: ignore[no-untyped-def]
+        captured.update(kwargs)
+
+    monkeypatch.setattr("ytsaurus_flyt.__main__.launch_vanilla_job", fake_launch)
+    monkeypatch.setattr("ytsaurus_flyt.__main__.make_yt_client", lambda _p: object())
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        [
+            "run",
+            "--mode",
+            "application",
+            "--taskmanagers",
+            "3",
+            "--jm-cpu",
+            "4",
+            "--tm-cpu",
+            "20",
+            "--wheel",
+            "svc.whl",
+            "x.py",
+        ],
+        catch_exceptions=False,
+    )
+    assert result.exit_code == 0, result.output
+    cfg = captured["config"]
+    assert cfg.cluster_mode == "application"
+    assert cfg.taskmanager_count == 3
+    assert cfg.jobmanager_cpu == 4
+    assert cfg.taskmanager_cpu == 20
+
+
+def test_run_taskmanagers_flag_sets_capacity(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("FLYT_CONFIG_DIR", str(tmp_path))
+    _write_profile(tmp_path, "p1")
+    captured: dict = {}
+    monkeypatch.setattr("ytsaurus_flyt.__main__.launch_vanilla_job", lambda **kw: captured.update(kw))
+    monkeypatch.setattr("ytsaurus_flyt.__main__.make_yt_client", lambda _p: object())
+
+    result = CliRunner().invoke(
+        cli,
+        ["run", "--mode", "application", "--taskmanagers", "5", "--wheel", "svc.whl", "x.py"],
+        catch_exceptions=False,
+    )
+    assert result.exit_code == 0, result.output
+    cfg = captured["config"]
+    assert cfg.taskmanager_count == 5
+    assert captured["preset"].name == "MICRO"  # the profile's preset sizes every TaskManager
+
+
+def test_run_without_mode_flag_keeps_profile_cluster_mode(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("FLYT_CONFIG_DIR", str(tmp_path))
+    profiles = tmp_path / "profiles"
+    profiles.mkdir(parents=True)
+    (profiles / "p1.yaml").write_text(
+        "proxy: http://cluster.example:80\npool: default\ncluster_mode: application\ntaskmanager_count: 2\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "active").write_text("p1\n", encoding="utf-8")
+    captured: dict = {}
+    monkeypatch.setattr("ytsaurus_flyt.__main__.launch_vanilla_job", lambda **kw: captured.update(kw))
+    monkeypatch.setattr("ytsaurus_flyt.__main__.make_yt_client", lambda _p: object())
+
+    result = CliRunner().invoke(cli, ["run", "--wheel", "svc.whl", "x.py"], catch_exceptions=False)
+    assert result.exit_code == 0, result.output
+    assert captured["config"].cluster_mode == "application"
+    assert captured["config"].taskmanager_count == 2
+    # minicluster stays the default when neither profile nor flag sets a mode
+    assert FlytConfig().cluster_mode == "minicluster"
+
+
+def test_validate_reports_an_unknown_profile_preset(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("FLYT_CONFIG_DIR", str(tmp_path))
+    profiles = tmp_path / "profiles"
+    profiles.mkdir(parents=True)
+    (profiles / "p.yaml").write_text(
+        "proxy: http://cluster.example:80\npool: default\npreset: larg\n", encoding="utf-8"
+    )
+    (tmp_path / "active").write_text("p\n", encoding="utf-8")
+    monkeypatch.setattr("ytsaurus_flyt.__main__.make_yt_client", lambda _p: object())
+    monkeypatch.setattr("ytsaurus_flyt.__main__.validate_flyt_config", lambda *a, **k: [("check", True, "ok")])
+    result = CliRunner().invoke(cli, ["validate"], catch_exceptions=False)
+    assert result.exit_code == 1
+    assert "[!!] preset: unknown preset 'larg'" in result.output

@@ -1,7 +1,7 @@
 # ytsaurus-flyt
 
-PyFlink on [YTsaurus](https://ytsaurus.tech/) [Vanilla](https://ytsaurus.tech/docs/en/user-guide/data-processing/operations/vanilla) in application mode.
-See [ARCHITECTURE.md](ARCHITECTURE.md) for internals.
+PyFlink on [YTsaurus](https://ytsaurus.tech/) [Vanilla](https://ytsaurus.tech/docs/en/user-guide/data-processing/operations/vanilla): one operation per pipeline, either as an in-JVM MiniCluster or as a Flink application cluster with separate TaskManagers.
+See [docs/application-mode.md](docs/application-mode.md) for the application cluster and [ARCHITECTURE.md](ARCHITECTURE.md) for internals.
 
 ## Install
 
@@ -51,6 +51,25 @@ python_bin: "/usr/bin/python3"
 
 Default `squashfs_layer_delivery` is `layer_paths`. For Kind local dev, use `sandbox_unpack` (see [examples/kind/README.md](examples/kind/README.md)).
 
+## Cluster modes
+
+`cluster_mode` in the profile (or `flyt run --mode`) picks the topology of the Vanilla operation:
+
+| Mode | Operation layout | Use it for |
+|---|---|---|
+| `minicluster` (default) | One `flink_minicluster` YT job runs the script; PyFlink starts JobManager and TaskManager in the same JVM. | Small pipelines, local Kind clusters. |
+| `application` | A `jobmanager` job runs the script through Flink's `PythonDriver` plus `taskmanager_count` TaskManager YT jobs. | Pipelines that need more than one container of CPU/RAM. |
+
+Application mode in a profile:
+
+```yaml
+cluster_mode: application
+taskmanager_count: 3          # --taskmanagers; capacity, like TaskManager replicas on Kubernetes
+preset: large                 # --preset; every TaskManager: 4 cpu = 4 task slots, 16G container
+```
+
+The preset that sizes the MiniCluster job sizes every TaskManager in application mode (its cpu is also the slot count, its memory the container); the JobManager gets 2 cpu and a 2g JVM. The cluster must hold the pipeline's highest operator parallelism in `taskmanager_count * slots`. Sizing, lifecycle and troubleshooting: [docs/application-mode.md](docs/application-mode.md).
+
 ## Commands
 
 | Command | Description |
@@ -70,6 +89,8 @@ Without `--wheel` / `--source-dir`, `flyt run` finds `pyproject.toml` next to th
 With `--wheel` only, pass the script path as it appears inside the unpacked wheel (e.g. `pipeline.py`).
 
 `--force-rebuild` ignores a cached SquashFS on Cypress and rebuilds the layer.
+
+`--mode application --taskmanagers N [--jm-cpu C --tm-cpu C]` runs the pipeline as an application cluster ([docs/application-mode.md](docs/application-mode.md)); flags override the profile for this run, `--preset` sizes every TaskManager.
 
 `-d` / `--detach` submits the operation, waits until it materializes, prints the tracking link and exits. Use `flyt ui --wait` afterwards to find the Flink Web UI. Add `--cache-wheel` to reuse the uploaded wheel across runs (needs `wheel_cache_prefix` or `cypress_base_path`).
 
@@ -93,6 +114,8 @@ Do not put the same basename in both lists.
 - Programmatic: `extra_secrets` on `get_secure_credentials` / `launch_vanilla_job` if secrets come from outside env.
 
 ## Presets
+
+`minicluster`: the one YT job's CPU, container memory and `-Xmx`. `application`: every TaskManager's CPU (= task slots) and container memory, the heap columns do not apply; the JobManager has fixed defaults ([docs/application-mode.md](docs/application-mode.md#sizing)).
 
 | Preset | CPU | RAM | Heap |
 |--------|-----|-----|------|
