@@ -33,6 +33,23 @@ ensure_block() {
     grep -E '^[[:space:]]*pids_limit[[:space:]]*=' "$target" || true
     return 0
   fi
+  # Podman's generated config (macOS) already has a bare [containers] table; a second
+  # one makes TOML decoding fail ("Key 'containers' has already been defined"), so
+  # insert the key under the existing header instead. BSD awk only (no GNU flags).
+  if grep -qE '^[[:space:]]*\[containers\][[:space:]]*$' "$target" 2>/dev/null; then
+    local tmp
+    tmp="$(mktemp "${target}.XXXXXX")"
+    awk '
+      { print }
+      !done && /^[[:space:]]*\[containers\][[:space:]]*$/ {
+        print "# Added by ensure-podman-pids-for-kind.sh (YTsaurus on Kind)"
+        print "pids_limit = 16384"
+        done = 1
+      }
+    ' "$target" >"$tmp" && mv "$tmp" "$target"
+    echo "Inserted pids_limit = 16384 into existing [containers] table in $target"
+    return 0
+  fi
   printf '\n# Added by ensure-podman-pids-for-kind.sh (YTsaurus on Kind)\n[containers]\npids_limit = 16384\n' >>"$target"
   echo "Appended [containers] pids_limit = 16384 to $target"
 }
