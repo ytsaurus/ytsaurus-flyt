@@ -1,5 +1,5 @@
 group = "tech.ytsaurus.flyt.connectors.ytsaurus"
-version = "1.12.5"
+version = "1.13.0"
 
 plugins {
     id("com.peterabeles.gversion") version "1.10.3"
@@ -40,6 +40,7 @@ dependencies {
     testImplementation("org.apache.flink:flink-connector-base:1.20.1")
     testImplementation("org.apache.flink:flink-core:1.20.1")
     testImplementation("org.apache.flink:flink-connector-test-utils:1.20.1")
+    testImplementation("org.apache.flink:flink-clients:1.20.1")
     testImplementation("org.apache.flink:flink-format-common:1.20.1")
     testImplementation("org.apache.flink:flink-table-common:1.20.1")
     testImplementation("org.apache.flink:flink-table-runtime:1.20.1")
@@ -83,6 +84,11 @@ tasks.shadowJar {
 
 tasks.withType<Checkstyle> {
     exclude("**/tech/ytsaurus/flyt/connectors/ytsaurus/YtConnectorInfo**")
+}
+
+tasks.test {
+    // Opt-in only, and the test itself additionally rejects non-loopback proxies.
+    systemProperty("yt.static.test.proxy", providers.gradleProperty("ytStaticTestProxy").orElse("").get())
 }
 
 publishing {
