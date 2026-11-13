@@ -45,3 +45,37 @@ def test_application_cluster_bundles_resources_and_config():
     assert cluster.flink_config["taskmanager.numberOfTaskSlots"] == "2"
     assert cluster.flink_config["parallelism.default"] == "4"
     assert cluster.flink_config["taskmanager.memory.process.size"] == f"{8 * 1024 - 512}m"
+
+
+def test_flink_keys_override_slots_memory_and_parallelism():
+    user = {
+        "taskmanager.numberOfTaskSlots": "3",
+        "taskmanager.memory.process.size": "6g",
+        "jobmanager.memory.process.size": "1g",
+        "parallelism.default": "4",
+    }
+    res = resolve_application_resources(_app_config(taskmanager_count=2), ClusterPreset.SMALL.params, user)
+    assert (res.taskmanager_cpu, res.slots, res.default_parallelism) == (2, 3, 4)  # cpu stays the preset's
+    assert res.taskmanager_params().memory == (6 * 1024 + 512) * _MIB  # container = process.size + overhead
+    assert res.jobmanager_params().memory == (1024 + 512) * _MIB
+
+
+def test_default_parallelism_above_the_capacity_is_rejected():
+    with pytest.raises(ValueError, match="does not fit into taskmanager_count \\* slots = 4"):
+        resolve_application_resources(
+            _app_config(taskmanager_count=2), ClusterPreset.SMALL.params, {"parallelism.default": "5"}
+        )
+
+
+@pytest.mark.parametrize(
+    "user, match",
+    [
+        ({"taskmanager.numberOfTaskSlots": "two"}, "must be an integer"),
+        ({"taskmanager.memory.process.size": "lots"}, "not a memory size"),
+        ({"taskmanager.memory.flink.size": "4g"}, "set taskmanager.memory.process.size as well"),
+        ({"jobmanager.memory.heap.size": "1g"}, "set jobmanager.memory.process.size as well"),
+    ],
+)
+def test_bad_flink_sizing_keys_are_rejected(user, match):
+    with pytest.raises(ValueError, match=match):
+        resolve_application_resources(_app_config(), ClusterPreset.SMALL.params, user)

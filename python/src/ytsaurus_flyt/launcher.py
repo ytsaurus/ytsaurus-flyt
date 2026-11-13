@@ -11,7 +11,7 @@ from yt.wrapper.run_operation_commands import run_operation
 
 from ytsaurus_flyt.config import FlytConfig, require_squashfs_runtime_config
 from ytsaurus_flyt.credentials import get_secure_credentials
-from ytsaurus_flyt.flink_conf import FLINK_REST_PORT
+from ytsaurus_flyt.flink_conf import FLINK_REST_PORT, flink_config_warnings, user_flink_config
 from ytsaurus_flyt.flink_lib_jars import (
     partition_flink_lib_jars_for_delivery,
     resolve_flink_lib_jars,
@@ -101,6 +101,9 @@ def launch_vanilla_job(
     )
 
     require_squashfs_runtime_config(config)
+    flink_options = user_flink_config(config, yt_client)
+    for warning in flink_config_warnings(config, flink_options):
+        logger.warning("Flink configuration: %s", warning)
 
     logger.info("Fetching credentials...")
     secure_vault = get_secure_credentials(yt_client, extra_secrets=extra_secrets)
@@ -177,6 +180,7 @@ def launch_vanilla_job(
             preset_params=preset_params,
             yt_client=yt_client,
             use_squashfs_sandbox_unpack=config.squashfs_layer_delivery == "sandbox_unpack",
+            flink_options=flink_options,
         )
 
         logger.info("Starting YT Vanilla operation...")

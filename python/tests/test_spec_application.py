@@ -196,7 +196,7 @@ def test_minicluster_spec_is_unchanged_by_application_fields():
     task = plain["tasks"][MINICLUSTER_TASK]
     assert "restart_completed_jobs" not in task  # exit 0 ends the operation in every mode
     assert "gang_options" not in task
-    assert task["environment"]["FLINK_ENV_JAVA_OPTS"].startswith("-Xmx2324M")
+    assert "env.java.default-opts.all: -Xmx2324M" in task["command"]
     assert "FLYT_YT_PROXY" not in task["environment"]
     assert "application/01_cluster_common.sh" not in task["command"]
     assert "minicluster/run.sh" in task["command"]
@@ -234,15 +234,33 @@ def test_rendered_run_scripts_are_valid_bash(mode, delivery, tmp_path):
         assert result.returncode == 0, f"{name}: {result.stderr}"
 
 
-def test_minicluster_job_runs_the_script_directly_without_flyt_flink_config():
-    spec = _minicluster_spec(FlytConfig(service_name="svc", java_home="/jdk", python_bin="/py"))
+def test_minicluster_job_runs_the_script_with_the_flink_config_as_its_context():
+    spec = _minicluster_spec(
+        FlytConfig(
+            service_name="svc", java_home="/jdk", python_bin="/py", flink_config_override={"pipeline.name": "wc"}
+        )
+    )
     cmd = spec["tasks"][MINICLUSTER_TASK]["command"]
-    assert "FLYT_FLINK_CONF_EOF" not in cmd
-    assert '"$PYTHON_BIN" "$@" 1>&2' in cmd
-    assert "http://${host}:27050" in cmd
-    assert "Pipeline must set rest.port=27050 and rest.bind-address=0.0.0.0" in cmd
+    assert cmd.index("common/06_write_flink_conf.sh") < cmd.index("minicluster/run.sh")
+    assert "pipeline.name: wc" in cmd
+    assert "rest.port: '27050'" in cmd
+    assert "StreamContextEnvironment.setAsContext" in cmd
+    assert '"$PYTHON_BIN" "$ROOT_DIR/flyt_minicluster.py" "$FLINK_CONF_DIR" "$@" 1>&2' in cmd
     assert 'announce_web_ui "$SLOT_IP"' in cmd
     assert "annotations" not in spec
+
+
+def test_both_modes_get_the_same_user_flink_options():
+    user = {"pipeline.name": "wc", "execution.checkpointing.interval": "30s", "restart-strategy.type": "fixed-delay"}
+    commands = [
+        _minicluster_spec(
+            FlytConfig(service_name="svc", java_home="/jdk", python_bin="/py", flink_config_override=user)
+        )["tasks"][MINICLUSTER_TASK]["command"],
+        *(t["command"] for t in _build(_app_config(flink_config_override=user))["tasks"].values()),
+    ]
+    for cmd in commands:
+        for key, value in user.items():
+            assert f"{key}: {value}" in cmd
 
 
 def test_application_jobmanager_runs_the_script_and_never_fails_after_the_driver():

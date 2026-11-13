@@ -127,9 +127,14 @@ def test_build_vanilla_operation_spec_java_opts_heap_only():
         secure_vault={},
         preset_params=_minicluster("14G"),
     )
-    env = builder.build()["tasks"][MINICLUSTER_TASK]["environment"]
+    task = builder.build()["tasks"][MINICLUSTER_TASK]
+    # The gateway ignores config.yaml's env.java.* when FLINK_ENV_JAVA_OPTS is set.
+    assert "FLINK_ENV_JAVA_OPTS" not in task["environment"]
     # MICRO preset -> cpu=2, so ActiveProcessorCount is pinned to 2.
-    assert env["FLINK_ENV_JAVA_OPTS"] == "-Xmx14G -XX:ActiveProcessorCount=2"
+    assert (
+        "env.java.default-opts.all: -Xmx14G -XX:ActiveProcessorCount=2 -XX:+ExitOnOutOfMemoryError "
+        "-Djava.net.preferIPv6Addresses=true" in task["command"]
+    )
 
 
 def test_build_vanilla_operation_spec_java_opts_with_off_heap():
@@ -143,5 +148,5 @@ def test_build_vanilla_operation_spec_java_opts_with_off_heap():
         secure_vault={},
         preset_params=_minicluster("14G", "8G"),
     )
-    env = builder.build()["tasks"][MINICLUSTER_TASK]["environment"]
-    assert env["FLINK_ENV_JAVA_OPTS"] == ("-Xmx14G -XX:MaxDirectMemorySize=8G -XX:ActiveProcessorCount=2")
+    cmd = builder.build()["tasks"][MINICLUSTER_TASK]["command"]
+    assert "env.java.default-opts.all: -Xmx14G -XX:MaxDirectMemorySize=8G -XX:ActiveProcessorCount=2 " in cmd

@@ -142,19 +142,19 @@ class FlytConfig:
     taskmanager_count: int = 1
     """Number of TaskManager YT jobs (``application`` mode only): the cluster's capacity, like the
     TaskManager ``replicas`` of a standalone Flink cluster on Kubernetes. Each TaskManager has one task slot
-    per cpu, so the cluster has ``taskmanager_count * taskmanager cpu`` slots; ``parallelism.default`` is all
-    of them. Size it for the highest operator parallelism of the pipeline.
+    per cpu unless ``taskmanager.numberOfTaskSlots`` says otherwise; ``parallelism.default`` defaults to every
+    slot of the cluster. Size it for the highest operator parallelism of the pipeline.
     """
 
     jobmanager_cpu: Optional[int] = None
-    """CPU limit of the JobManager YT job (``application`` mode; default 2). Its memory is fixed: a 2g Flink
-    JVM plus 512m for the PyFlink driver and helpers. The ``preset`` sizes the TaskManagers, not the JobManager.
+    """CPU limit of the JobManager YT job (``application`` mode; default 2). Its memory is a 2g Flink JVM
+    (``jobmanager.memory.process.size``) plus 512m for the PyFlink driver and helpers. The ``preset`` sizes the TaskManagers, not the JobManager.
     """
 
     taskmanager_cpu: Optional[int] = None
     """CPU limit of one TaskManager YT job (``application`` mode; default: the preset's cpu). It is also the
-    TaskManager's task slot count. The container memory is the preset's; the Flink JVM gets all of it but
-    512m for the non-JVM processes.
+    TaskManager's task slot count unless ``taskmanager.numberOfTaskSlots`` is set. The container memory is
+    the preset's, or ``taskmanager.memory.process.size`` + 512m for the non-JVM processes.
     """
 
     discovery_timeout: int = 300
@@ -171,6 +171,17 @@ class FlytConfig:
     such as a metrics agent that every JVM must reach on ``localhost``. Ignored in ``minicluster``
     mode (the profile may keep it while the mode is chosen per run).
     """
+
+    # --- Flink configuration (both modes) ---
+    base_flink_conf_path: str = ""
+    """Flink ``config.yaml`` (nested or flat keys): a local file or a Cypress file (``//...``). Merged over
+    flyt's defaults and under :attr:`flink_config_override`; the result is written to ``flink/conf/config.yaml``
+    of every YT job. The JobManager and TaskManagers read it in ``application`` mode, the MiniCluster gets
+    it as the script's context configuration, and options the script sets in code win in both modes.
+    """
+
+    flink_config_override: Dict[str, str] = field(default_factory=dict)
+    """Flink options applied over :attr:`base_flink_conf_path`; ``flyt run -D KEY=VALUE`` goes over both."""
 
     def __post_init__(self) -> None:
         d = (self.squashfs_layer_delivery or "").strip()
@@ -200,6 +211,8 @@ class FlytConfig:
             if value is None or int(value) < 1:
                 raise ValueError(f"{name} must be >= 1, got {value!r}")
             setattr(self, name, int(value))
+        self.flink_config_override = {str(k): str(v) for k, v in (self.flink_config_override or {}).items()}
+        self.base_flink_conf_path = (self.base_flink_conf_path or "").strip()
         self.job_yt_proxy = (self.job_yt_proxy or "").strip()
         self.sidecar_command = (self.sidecar_command or "").strip()
         self.embed_squashfs_layer_jar_basenames = _normalize_jar_basename_list(self.embed_squashfs_layer_jar_basenames)

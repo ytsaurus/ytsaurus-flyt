@@ -4,7 +4,7 @@ FLYT submits a PyFlink job as a YTsaurus Vanilla operation: one operation per pi
 
 Two topologies (`cluster_mode`):
 
-* `minicluster`: a single `flink_minicluster` task; the YT job runs `python <script>` and PyFlink starts an in-JVM MiniCluster. Heap comes from `FLINK_ENV_JAVA_OPTS` (preset); when the script exits 0 the operation completes.
+* `minicluster`: a single `flink_minicluster` task; the YT job runs the script through `flyt_minicluster.py`, which installs flyt's `config.yaml` as the context environment, and PyFlink starts an in-JVM MiniCluster. Heap comes from `env.java.default-opts.all` (preset); when the script exits 0 the operation completes.
 * `application`: a `jobmanager` task (one gang YT job) and a `taskmanager` task (`taskmanager_count` YT jobs). The JobManager YT job runs `standalone-job.sh --job-classname org.apache.flink.client.python.PythonDriver -py <script>`, i.e. Flink application mode with the PyFlink driver next to the JobManager JVM. The user guide is [docs/application-mode.md](docs/application-mode.md); the mechanics follow.
 
 ## Operation layout
@@ -86,7 +86,7 @@ List basenames in `embed_squashfs_layer_jar_basenames` (inside the layer) and/or
 
 ## Code layout
 
-The code is split so the CLI, YTsaurus submission, and layer/image build logic can be tested independently. YT job bootstrap is concatenated bash from `run_scripts/`: `common/` prepares the sandbox for every role, then `minicluster/run.sh` or the `application/` fragments with one entry script per role (`jobmanager.sh`, `taskmanager.sh`). `application` resolves the application cluster: the YT resources of the JobManager and TaskManagers, and `flink_conf` their shared `config.yaml` (minicluster jobs get none: the script configures its MiniCluster in code).
+The code is split so the CLI, YTsaurus submission, and layer/image build logic can be tested independently. YT job bootstrap is concatenated bash from `run_scripts/`: `common/` prepares the sandbox for every role, then `minicluster/run.sh` or the `application/` fragments with one entry script per role (`jobmanager.sh`, `taskmanager.sh`). `application` resolves the application cluster's YT resources; `flink_conf` builds the `config.yaml` of every YT job in both modes from flyt's defaults and the user's Flink configuration (`common/06_write_flink_conf.sh` writes it).
 
 ```mermaid
 graph LR

@@ -354,9 +354,20 @@ def validate(
         rows.insert(0, ("preset", False, f"unknown preset {preset_name!r}; use one of micro, small, large, xlarge"))
     ok_all = True
     for name, ok, msg in rows:
-        ok_all = ok_all and ok
-        click.echo(f"  [{'OK' if ok else '!!'}] {name}: {msg}")
+        ok_all = ok_all and ok is not False
+        mark = "WARN" if ok is None else ("OK" if ok else "!!")
+        click.echo(f"  [{mark}] {name}: {msg}")
     ctx.exit(0 if ok_all else 1)
+
+
+def _parse_flink_options(options: Tuple[str, ...]) -> Dict[str, str]:
+    parsed: Dict[str, str] = {}
+    for option in options:
+        key, sep, value = option.partition("=")
+        if not sep or not key.strip():
+            raise click.BadParameter(f"expected KEY=VALUE, got {option!r}", param_hint="-D")
+        parsed[key.strip()] = value.strip()
+    return parsed
 
 
 @cli.command(
@@ -406,7 +417,23 @@ def validate(
     "taskmanager_cpu",
     type=click.IntRange(min=1),
     default=None,
-    help="CPU, and task slots, per TaskManager YT job for --mode application (default: profile, else the preset's cpu).",
+    help="CPU, and task slots, per TaskManager YT job for --mode application (default: profile, else the preset's cpu); "
+    "taskmanager.numberOfTaskSlots overrides the slots.",
+)
+@click.option(
+    "--flink-conf",
+    "base_flink_conf_path",
+    default=None,
+    help="Flink config.yaml (local file or Cypress //path) for this run, in both modes; replaces the profile's "
+    "base_flink_conf_path and flink_config_override, flyt defaults still apply underneath.",
+)
+@click.option(
+    "-D",
+    "flink_options",
+    multiple=True,
+    metavar="KEY=VALUE",
+    help="Flink option for this run, in both modes, repeatable; applied over every other layer "
+    "(flyt defaults, the Flink config file, flink_config_override).",
 )
 @click.option("--wheel", "wheel_path", default=None)
 @click.option("--source-dir", "source_dir", default=None)
@@ -436,6 +463,8 @@ def run(
     taskmanager_count: Optional[int],
     jobmanager_cpu: Optional[int],
     taskmanager_cpu: Optional[int],
+    base_flink_conf_path: Optional[str],
+    flink_options: Tuple[str, ...],
     wheel_path: Optional[str],
     source_dir: Optional[str],
     cache_wheel: bool,
@@ -455,6 +484,13 @@ def run(
         "taskmanager_cpu": taskmanager_cpu,
     }
     cluster_overrides = {k: v for k, v in cluster_overrides.items() if v is not None}
+    if base_flink_conf_path is not None:
+        # The file replaces the profile's whole Flink configuration for this run.
+        cluster_overrides["base_flink_conf_path"] = base_flink_conf_path
+        cluster_overrides["flink_config_override"] = {}
+    if flink_options:
+        base = cluster_overrides.get("flink_config_override", cfg.flink_config_override)
+        cluster_overrides["flink_config_override"] = {**base, **_parse_flink_options(flink_options)}
     if cluster_overrides:
         try:
             cfg = dataclasses.replace(cfg, **cluster_overrides)

@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+import pytest
 import yaml
 from click.testing import CliRunner
 
@@ -428,3 +429,49 @@ def test_validate_reports_an_unknown_profile_preset(monkeypatch, tmp_path: Path)
     result = CliRunner().invoke(cli, ["validate"], catch_exceptions=False)
     assert result.exit_code == 1
     assert "[!!] preset: unknown preset 'larg'" in result.output
+
+
+def _run_capturing(monkeypatch, tmp_path: Path, profile_body: str, args: list) -> dict:
+    monkeypatch.setenv("FLYT_CONFIG_DIR", str(tmp_path))
+    profiles = tmp_path / "profiles"
+    profiles.mkdir(parents=True)
+    (profiles / "p1.yaml").write_text(
+        "proxy: http://cluster.example:80\npool: default\n" + profile_body, encoding="utf-8"
+    )
+    (tmp_path / "active").write_text("p1\n", encoding="utf-8")
+    captured: dict = {}
+    monkeypatch.setattr("ytsaurus_flyt.__main__.launch_vanilla_job", lambda **kw: captured.update(kw))
+    monkeypatch.setattr("ytsaurus_flyt.__main__.make_yt_client", lambda _p: object())
+    result = CliRunner().invoke(cli, ["run", *args, "--wheel", "svc.whl", "x.py"], catch_exceptions=False)
+    assert result.exit_code == 0, result.output
+    return captured
+
+
+_FLINK_PROFILE = "base_flink_conf_path: ./profile.yaml\nflink_config_override:\n  pipeline.name: profile\n  a: '1'\n"
+
+
+@pytest.mark.parametrize("mode", ["minicluster", "application"])
+def test_run_dynamic_flink_options_go_over_the_profile_in_both_modes(monkeypatch, tmp_path: Path, mode) -> None:
+    captured = _run_capturing(
+        monkeypatch, tmp_path, _FLINK_PROFILE, ["--mode", mode, "-D", "pipeline.name=run", "-D", "b=x=y"]
+    )
+    cfg = captured["config"]
+    assert cfg.base_flink_conf_path == "./profile.yaml"
+    assert cfg.flink_config_override == {"pipeline.name": "run", "a": "1", "b": "x=y"}
+
+
+def test_run_flink_conf_replaces_the_profile_flink_configuration(monkeypatch, tmp_path: Path) -> None:
+    captured = _run_capturing(monkeypatch, tmp_path, _FLINK_PROFILE, ["--flink-conf", "//conf.yaml", "-D", "b=2"])
+    cfg = captured["config"]
+    assert cfg.base_flink_conf_path == "//conf.yaml"
+    assert cfg.flink_config_override == {"b": "2"}
+
+
+def test_run_rejects_a_dynamic_option_without_a_value(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("FLYT_CONFIG_DIR", str(tmp_path))
+    _write_profile(tmp_path, "p1")
+    monkeypatch.setattr("ytsaurus_flyt.__main__.launch_vanilla_job", lambda **kw: None)
+    monkeypatch.setattr("ytsaurus_flyt.__main__.make_yt_client", lambda _p: object())
+    result = CliRunner().invoke(cli, ["run", "-D", "pipeline.name", "--wheel", "svc.whl", "x.py"])
+    assert result.exit_code != 0
+    assert "expected KEY=VALUE" in result.output

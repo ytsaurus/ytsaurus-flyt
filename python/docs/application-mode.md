@@ -2,7 +2,7 @@
 
 `cluster_mode: application` runs a pipeline as a Flink application cluster inside one YTsaurus Vanilla operation: a `jobmanager` job that executes the script through Flink's `PythonDriver`, plus `taskmanager_count` TaskManager YT jobs. Use it when a pipeline needs more CPU or memory than one container gives; `minicluster` (the default, one YT job with an in-JVM MiniCluster) stays the simpler choice for small pipelines and Kind clusters. Internals are in [ARCHITECTURE.md](../ARCHITECTURE.md).
 
-flyt is the YTsaurus counterpart of a standalone Flink cluster on Kubernetes in application mode: a fixed number of TaskManagers and one `config.yaml` that flyt generates for every container. The pipeline configures its Flink job in code, the same way in both modes (see [Flink options](#flink-options)).
+flyt is the YTsaurus counterpart of a standalone Flink cluster on Kubernetes in application mode: a fixed number of TaskManagers and one `config.yaml` that flyt generates for every container. Flink options come from the same places in both modes ([flink-configuration.md](flink-configuration.md)).
 
 ## Fields and flags
 
@@ -13,7 +13,7 @@ Profile fields; the flag overrides the profile for one `flyt run`.
 | `cluster_mode` | `--mode` | `minicluster` | `application` enables everything below |
 | `taskmanager_count` | `--taskmanagers` | 1 | TaskManager YT jobs: the cluster capacity, like TaskManager `replicas` on Kubernetes |
 | `preset` | `--preset` | `micro` | size of every TaskManager YT job: its cpu (and task slots) and container memory |
-| `taskmanager_cpu` | `--tm-cpu` | the preset's cpu | CPU, and task slots, of each TaskManager |
+| `taskmanager_cpu` | `--tm-cpu` | the preset's cpu | CPU, and task slots unless `taskmanager.numberOfTaskSlots` is set, of each TaskManager |
 | `jobmanager_cpu` | `--jm-cpu` | 2 | CPU of the JobManager container |
 | `discovery_timeout` | | 300 | seconds a TaskManager waits for the JobManager before failing, like Flink's `taskmanager.registration.timeout` |
 | `sidecar_command` | | | helper started in every JobManager/TaskManager container before Flink, e.g. a metrics agent |
@@ -34,12 +34,12 @@ The same `preset` sizes the single MiniCluster job in `minicluster` mode and eve
 
 | | cpu | Task slots | Container | Flink JVM (`*.memory.process.size`) |
 |---|---|---|---|---|
-| TaskManager | preset cpu, or `taskmanager_cpu` | = cpu | preset memory | container − 512m (bash, the discovery helper, a sidecar) |
-| JobManager | 2, or `jobmanager_cpu` | | 2g + 512m | 2g; the 512m is the PyFlink driver (the script and its imports) next to the JobManager JVM |
+| TaskManager | preset cpu, or `taskmanager_cpu` | = cpu, or `taskmanager.numberOfTaskSlots` | preset memory, or `taskmanager.memory.process.size` + 512m | container − 512m (bash, the discovery helper, a sidecar) |
+| JobManager | 2, or `jobmanager_cpu` | | 2g + 512m, or `jobmanager.memory.process.size` + 512m | 2g; the 512m is the PyFlink driver (the script and its imports) next to the JobManager JVM |
 
 The preset's `-Xmx`/direct memory apply to the MiniCluster only; a TaskManager's JVM is laid out by Flink's memory model.
 
-A standalone Flink cluster cannot ask YT for more TaskManagers, so the capacity is fixed at submit time: `taskmanager_count * slots`. `parallelism.default` is all of it. The capacity must cover the highest operator parallelism of the pipeline, including explicit `set_parallelism` calls: an operator that needs more slots waits for them and fails after `slot.request.timeout` (5 minutes by default). This is the same contract as TaskManager `replicas` in a standalone Kubernetes deployment; Flink's native Kubernetes mode adds TaskManagers for the job graph instead, which a fixed-size YT operation cannot do.
+A standalone Flink cluster cannot ask YT for more TaskManagers, so the capacity is fixed at submit time: `taskmanager_count * slots`. `parallelism.default` is all of it unless the Flink configuration sets a smaller one. The capacity must cover the highest operator parallelism of the pipeline, including explicit `set_parallelism` calls: an operator that needs more slots waits for them and fails after `slot.request.timeout` (5 minutes by default). This is the same contract as TaskManager `replicas` in a standalone Kubernetes deployment; Flink's native Kubernetes mode adds TaskManagers for the job graph instead, which a fixed-size YT operation cannot do.
 
 ## Memory
 
@@ -47,16 +47,13 @@ Python UDF workers live inside the TaskManager JVM's `process.size`: PyFlink res
 
 Direct memory: unlike the MiniCluster, where it defaults to the heap size, Flink caps a TaskManager's `-XX:MaxDirectMemorySize` at `framework.off-heap` (128m) plus `taskmanager.memory.task.off-heap.size`. Connectors with netty/gRPC buffers (including the YTsaurus connectors) need the latter; flyt sets it to 1/8 of the TaskManager JVM.
 
+Each of flyt's memory keys (`*.memory.process.size`, `taskmanager.memory.task.off-heap.size`, `taskmanager.memory.managed.fraction`) can be overridden in the Flink configuration. Any other `taskmanager.memory.*` key (`flink.size`, `task.heap.size`, `network.*`, ...) means you lay out Flink's memory model yourself: flyt then adds none of its TaskManager memory defaults and requires `taskmanager.memory.process.size`, which sizes the YT container. The same rule holds for `jobmanager.memory.*`.
+
 Every JVM runs with `-XX:+ExitOnOutOfMemoryError`, and TaskManagers with `taskmanager.jvm-exit-on-oom`, so an out-of-memory TaskManager dies and is restarted by YT instead of hanging in GC.
 
 ## Flink configuration
 
-flyt generates one `config.yaml` at submit time and writes it to `flink/conf/config.yaml` in every JobManager and TaskManager YT job, like a ConfigMap shared by every pod on Kubernetes; the effective file is printed at the top of every YT job's stderr. The distribution's `config.yaml`/`flink-conf.yaml` is replaced, so Flink >= 1.19 is required. It holds:
-
-- ports: `rest.port` 27050 (the Web UI), `jobmanager.rpc.port` 27051, `blob.server.port` 27052, random TaskManager RPC/data ports so TaskManagers can share an exec node; bind addresses `0.0.0.0`;
-- the sizes from [Sizing](#sizing) and [Memory](#memory), `parallelism.default = taskmanager_count * slots`;
-- `restart-strategy.type: exponential-delay` with Flink's defaults, no attempt limit (see [Discovery and lifecycle](#discovery-and-lifecycle));
-- `python.executable`/`python.client.executable` = `python_bin`; JVM flags `-Djava.net.preferIPv6Addresses=true`, `-XX:ActiveProcessorCount=<container cpu>`, `-XX:+ExitOnOutOfMemoryError`.
+The JobManager and every TaskManager start with the `config.yaml` that flyt assembles from its defaults and the user's Flink configuration ([flink-configuration.md](flink-configuration.md)), like a ConfigMap shared by every pod on Kubernetes. Besides the defaults of both modes, application mode adds `taskmanager.numberOfTaskSlots`, `parallelism.default = taskmanager_count * slots` and the sizes from [Sizing](#sizing) and [Memory](#memory); a `parallelism.default` above `taskmanager_count * slots` is refused.
 
 Per-container values are passed on the command line by the run scripts:
 
@@ -65,16 +62,12 @@ Per-container values are passed on the command line by the run scripts:
 | JobManager | `jobmanager.rpc.address`, `rest.address` (the YT job's cluster/default address), `flyt.yt.job-id=$YT_JOB_ID` |
 | TaskManager | `taskmanager.host`, `taskmanager.resource-id=$YT_JOB_ID`, the discovered `jobmanager.rpc.address`/`jobmanager.rpc.port` |
 
-### Flink options
-
-The pipeline sets its Flink options in code, as in `minicluster` (`StreamExecutionEnvironment.get_execution_environment(config)`, `t_env.get_config().set(...)`), and the same code works in both modes for job options: parallelism, checkpointing, restart strategy, `pipeline.*`, `table.*`, `python.*`. Cluster options (memory, slots, ports, metrics reporters, JVM flags) are read by the JobManager and TaskManagers when they start, before the script runs, so setting them in code has no effect in `application` mode; flyt's values above apply.
-
 ## Discovery and lifecycle
 
 How TaskManagers find the JobManager and how the gang operation restarts are described in [ARCHITECTURE.md](../ARCHITECTURE.md); what matters when operating a job:
 
 - A TaskManager polls for the JobManager up to `discovery_timeout` (default 300 s, Flink's own registration timeout), then fails and is restarted by YT; every such failure counts toward the operation's failed-job budget (`max_failed_job_count`, by default `max(10, 5 * taskmanager_count)`: about five failures per TaskManager, never fewer than minicluster's 10), so raise both on a pool where scheduling the JobManager takes long; a JobManager that never gets scheduled therefore fails the operation through that budget.
-- Flink restarts a failed job in the cluster (`exponential-delay`, Flink's defaults) without an attempt limit, so a job that keeps failing keeps retrying with a growing backoff instead of failing the operation. The pipeline can set its own restart strategy in code (e.g. `restart-strategy.exponential-delay.attempts-before-reset-backoff`).
+- Flink restarts a failed job in the cluster (`exponential-delay`, Flink's defaults) without an attempt limit, so a job that keeps failing keeps retrying with a growing backoff instead of failing the operation. Set another restart strategy in the Flink configuration or in code (e.g. `restart-strategy.exponential-delay.attempts-before-reset-backoff`).
 - Inside the YT jobs the proxy is the client proxy, the cluster's `/hosts` when the client proxy is a loopback address, or `job_yt_proxy`.
 - When the driver exits 0 (bounded sources finished, or the Flink job was cancelled or stopped from the Web UI) the operation completes: the JobManager calls `complete_operation` (retried for up to 2 minutes) and exits 0 whatever the answer, and every TaskManager also watches the JobManager job and exits 0 once it is completed, so the operation completes even when YT refuses the call (e.g. the token in `secure_vault` may not manage the operation). flyt never re-runs a finished pipeline, restarting operations is the orchestrator's job. A non-zero exit restarts the whole cluster with a new incarnation.
 - The Flink Web UI listens on port 27050 of the JobManager YT job: `flyt ui --wait` prints the URL.

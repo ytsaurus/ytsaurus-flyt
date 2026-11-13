@@ -1,7 +1,7 @@
 # ytsaurus-flyt
 
 PyFlink on [YTsaurus](https://ytsaurus.tech/) [Vanilla](https://ytsaurus.tech/docs/en/user-guide/data-processing/operations/vanilla): one operation per pipeline, either as an in-JVM MiniCluster or as a Flink application cluster with separate TaskManagers.
-See [docs/application-mode.md](docs/application-mode.md) for the application cluster and [ARCHITECTURE.md](ARCHITECTURE.md) for internals.
+See [docs/application-mode.md](docs/application-mode.md) for the application cluster, [docs/flink-configuration.md](docs/flink-configuration.md) for Flink options and [ARCHITECTURE.md](ARCHITECTURE.md) for internals.
 
 ## Install
 
@@ -91,6 +91,8 @@ With `--wheel` only, pass the script path as it appears inside the unpacked whee
 `--force-rebuild` ignores a cached SquashFS on Cypress and rebuilds the layer.
 
 `--mode application --taskmanagers N [--jm-cpu C --tm-cpu C]` runs the pipeline as an application cluster ([docs/application-mode.md](docs/application-mode.md)); flags override the profile for this run, `--preset` sizes every TaskManager.
+
+`--flink-conf FILE` and `-D KEY=VALUE` pass Flink options for this run, in both modes; with the profile's `base_flink_conf_path` and `flink_config_override` they make up the job's `config.yaml` ([docs/flink-configuration.md](docs/flink-configuration.md)).
 
 `-d` / `--detach` submits the operation, waits until it materializes, prints the tracking link and exits. Use `flyt ui --wait` afterwards to find the Flink Web UI. Add `--cache-wheel` to reuse the uploaded wheel across runs (needs `wheel_cache_prefix` or `cypress_base_path`).
 

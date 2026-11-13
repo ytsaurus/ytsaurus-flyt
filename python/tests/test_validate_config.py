@@ -31,3 +31,23 @@ def test_validate_minicluster_has_no_application_rows():
     rows = validate_flyt_config(FlytConfig())
     assert _named(rows, "cluster_mode") == [(True, "minicluster (single job, in-JVM MiniCluster)")]
     assert not _named(rows, "discovery_timeout")
+
+
+def test_validate_reads_the_flink_config_in_both_modes(tmp_path):
+    conf = tmp_path / "flink.yaml"
+    conf.write_text("taskmanager.numberOfTaskSlots: 3\nrest.port: 8081\n")
+    for mode in ("minicluster", "application"):
+        rows = validate_flyt_config(FlytConfig(cluster_mode=mode, base_flink_conf_path=str(conf)))
+        flink_rows = _named(rows, "flink config.yaml")
+        assert flink_rows[0] == (True, f"{conf}, 2 user option(s)")
+        assert any(ok is None and "rest.port" in msg for ok, msg in flink_rows)  # a warning, not a failure
+    rows = validate_flyt_config(FlytConfig(cluster_mode="application", base_flink_conf_path=str(conf)))
+    assert "x 3 slot(s)" in _named(rows, "cluster_mode")[0][1]
+
+
+def test_validate_fails_on_a_missing_flink_config_file(tmp_path):
+    rows = validate_flyt_config(
+        FlytConfig(cluster_mode="application", base_flink_conf_path=str(tmp_path / "nope.yaml"))
+    )
+    assert _named(rows, "flink config.yaml")[0][0] is False
+    assert not _named(rows, "cluster_mode")
