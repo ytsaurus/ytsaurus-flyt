@@ -50,8 +50,13 @@ TASKMANAGER_TASK_OFF_HEAP_FRACTION = 0.125
 TASKMANAGER_MANAGED_MEMORY_FRACTION = "0.1"
 # A JVM that survives an OutOfMemoryError hangs in GC, misses heartbeats and is never restarted by YT.
 JVM_EXIT_ON_OOM_OPT = "-XX:+ExitOnOutOfMemoryError"
-# YT exec nodes are IPv6-first.
-JVM_PREFER_IPV6_OPT = "-Djava.net.preferIPv6Addresses=true"
+# JVM flags of every Flink process: YT exec nodes are IPv6-first; a container's locale may be POSIX;
+# Python UDFs might need netty's reflective direct-buffer access on Java 9+.
+JVM_COMMON_OPTS = (
+    "-Djava.net.preferIPv6Addresses=true",
+    "-Dfile.encoding=UTF-8",
+    "-Dio.netty.tryReflectionSetAccessible=true",
+)
 
 # Set per container by the run scripts (slot address, discovered JobManager, YT job id); never
 # taken from the user's configuration, the way Flink on Kubernetes strips them from its ConfigMap.
@@ -143,6 +148,11 @@ def _common_defaults(config: FlytConfig) -> Dict[str, str]:
         # Task-thread OOMs kill the JVM (Flink option); ExitOnOutOfMemoryError covers every other thread.
         # Either way YT restarts the job and Flink recovers instead of hanging.
         "taskmanager.jvm-exit-on-oom": "true",
+        # Flink's 50 s heartbeat timeout loses TaskManagers on shared exec nodes to GC pauses and
+        # network hiccups; a TaskManager is still declared dead after 9 failed heartbeat RPCs.
+        "heartbeat.timeout": "120000",
+        "heartbeat.interval": "5000",
+        "heartbeat.rpc-failure-threshold": "9",
         "python.executable": config.python_bin,
         "python.client.executable": config.python_bin,
     }
@@ -181,7 +191,7 @@ def cluster_flink_config(
         props,
         user,
         {
-            all_opts: JVM_PREFER_IPV6_OPT,
+            all_opts: " ".join(JVM_COMMON_OPTS),
             # The processor count is the container cpu.
             jm_opts: f"-XX:ActiveProcessorCount={resources.jobmanager_cpu} {JVM_EXIT_ON_OOM_OPT}",
             tm_opts: f"-XX:ActiveProcessorCount={resources.taskmanager_cpu} {JVM_EXIT_ON_OOM_OPT}",
@@ -201,7 +211,7 @@ def minicluster_flink_config(config: FlytConfig, preset: ClusterParams, user: Ma
         # Bounds NIO/netty direct buffers (gRPC connectors); otherwise the JVM
         # defaults MaxDirectMemorySize to ~the max heap size.
         jvm_opts.append(f"-XX:MaxDirectMemorySize={preset.off_heap_size}")
-    jvm_opts += [f"-XX:ActiveProcessorCount={preset.cpu}", JVM_EXIT_ON_OOM_OPT, JVM_PREFER_IPV6_OPT]
+    jvm_opts += [f"-XX:ActiveProcessorCount={preset.cpu}", JVM_EXIT_ON_OOM_OPT, *JVM_COMMON_OPTS]
     _apply_user_and_owned(props, user, {JVM_DEFAULT_OPTS_KEYS[0]: " ".join(jvm_opts)})
     return props
 

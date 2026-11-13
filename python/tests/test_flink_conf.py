@@ -46,7 +46,9 @@ def test_cluster_flink_config_sets_ports_memory_slots_and_jvm_flags():
     assert props["taskmanager.memory.managed.fraction"] == "0.1"  # the Python UDF workers' budget
     assert props["python.executable"] == props["python.client.executable"] == "/py"
     # default-opts: env.java.opts.* of the user come after them and win
-    assert props["env.java.default-opts.all"] == "-Djava.net.preferIPv6Addresses=true"
+    assert props["env.java.default-opts.all"] == (
+        "-Djava.net.preferIPv6Addresses=true -Dfile.encoding=UTF-8 -Dio.netty.tryReflectionSetAccessible=true"
+    )
     assert props["env.java.default-opts.jobmanager"] == "-XX:ActiveProcessorCount=4 -XX:+ExitOnOutOfMemoryError"
     assert props["env.java.default-opts.taskmanager"] == "-XX:ActiveProcessorCount=2 -XX:+ExitOnOutOfMemoryError"
     assert props["taskmanager.jvm-exit-on-oom"] == "true"
@@ -56,6 +58,7 @@ def test_minicluster_flink_config_sizes_the_job_jvm_by_the_preset():
     props = _mini_props()
     assert props["env.java.default-opts.all"] == (
         "-Xmx2324M -XX:ActiveProcessorCount=2 -XX:+ExitOnOutOfMemoryError -Djava.net.preferIPv6Addresses=true"
+        " -Dfile.encoding=UTF-8 -Dio.netty.tryReflectionSetAccessible=true"
     )
     assert props["parallelism.default"] == "2"  # micro: 2 cpu
     # the MiniCluster picks its slots from the job graph; its JVM is not sized by Flink's memory model
@@ -69,12 +72,16 @@ def test_both_modes_share_ports_restarts_and_python():
         "rest.bind-address",
         "restart-strategy.type",
         "taskmanager.jvm-exit-on-oom",
+        "heartbeat.timeout",
+        "heartbeat.interval",
+        "heartbeat.rpc-failure-threshold",
         "python.executable",
         "python.client.executable",
     )
     app, mini = _props(), _mini_props()
     assert {k: app[k] for k in shared} == {k: mini[k] for k in shared}
     assert mini["restart-strategy.type"] == "exponential-delay"
+    assert mini["heartbeat.timeout"] == "120000"
 
 
 @pytest.mark.parametrize("props_of", [_props, _mini_props])

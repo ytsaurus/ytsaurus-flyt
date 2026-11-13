@@ -107,7 +107,7 @@ def test_application_run_scripts_launch_standalone_job_and_taskmanager():
     assert '"-Dflyt.yt.job-id=$YT_JOB_ID"' in jm_cmd
     assert '"-Dtaskmanager.host=$CLUSTER_IP"' in tm_cmd
     assert '"-Dtaskmanager.resource-id=$YT_JOB_ID"' in tm_cmd
-    assert "publish" not in jm_cmd and "heartbeat" not in jm_cmd
+    assert not any('"${FLYT_HELPER[@]}" ' + c in jm_cmd for c in ("publish", "heartbeat"))
     assert "complete-operation" in jm_cmd
     assert "application/taskmanager.sh" not in jm_cmd
     assert 'taskmanager.sh" start-foreground' in tm_cmd

@@ -41,6 +41,7 @@ Both modes, overridable:
 |---|---|---|
 | `restart-strategy.type` | `exponential-delay` (no attempt limit) | without checkpointing Flink would not restart a failed job at all: the script would fail and YT would restart the whole job |
 | `taskmanager.jvm-exit-on-oom` | `true` | an out-of-memory JVM dies and is restarted by YT instead of hanging in GC |
+| `heartbeat.timeout`, `heartbeat.interval`, `heartbeat.rpc-failure-threshold` | `120000`, `5000`, `9` | Flink's 50 s timeout loses TaskManagers on shared exec nodes to GC pauses and network hiccups |
 | `python.executable`, `python.client.executable` | `python_bin` | the layer's interpreter |
 | `parallelism.default` | every cpu: the job's cpu in `minicluster`, `taskmanager_count * slots` in `application` | |
 
@@ -62,7 +63,7 @@ A value from any layer is ignored, with a warning unless it equals flyt's own:
 | `taskmanager.rpc.port`, `taskmanager.data.port` | `0` (random) | fixed ports collide when TaskManagers share an exec node |
 | `rest.bind-port` | not set | the REST server binds on `rest.port` |
 | `jobmanager.rpc.address`, `rest.address`, `taskmanager.host`, `taskmanager.resource-id` | per container | set by the run scripts ([application mode](application-mode.md#flink-configuration)) |
-| `env.java.default-opts.all` / `.jobmanager` / `.taskmanager` | `-Djava.net.preferIPv6Addresses=true`, `-XX:ActiveProcessorCount=<container cpu>`, `-XX:+ExitOnOutOfMemoryError`; in `minicluster` also the preset's `-Xmx` and `-XX:MaxDirectMemorySize` | YT exec nodes are IPv6-first; the JVM must see the container cpu and exit on an OOM |
+| `env.java.default-opts.all` / `.jobmanager` / `.taskmanager` | `-Djava.net.preferIPv6Addresses=true`, `-Dfile.encoding=UTF-8`, `-Dio.netty.tryReflectionSetAccessible=true`, `-XX:ActiveProcessorCount=<container cpu>`, `-XX:+ExitOnOutOfMemoryError`; in `minicluster` also the preset's `-Xmx` and `-XX:MaxDirectMemorySize` | YT exec nodes are IPv6-first; a container's locale may be POSIX; Python UDFs might need netty's direct buffers on Java 9+; the JVM must see the container cpu and exit on an OOM |
 
 The platform JVM flags still yield to yours: Flink (and PyFlink's gateway, which runs the MiniCluster) puts `env.java.opts.*` after `env.java.default-opts.*` and the JVM takes the last occurrence of a flag, so `env.java.opts.all: -Xmx6g` raises a MiniCluster's heap and `env.java.opts.taskmanager: -XX:ActiveProcessorCount=8` changes a TaskManager's processor count. A MiniCluster is one JVM: the gateway reads only `env.java.opts.all`, and `env.java.opts.jobmanager`/`.taskmanager` have no effect there (warning).
 
