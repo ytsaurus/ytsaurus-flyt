@@ -357,12 +357,12 @@ def test_run_application_flags_override_profile_config(monkeypatch, tmp_path: Pa
             "run",
             "--mode",
             "application",
-            "--taskmanagers",
-            "3",
-            "--jm-cpu",
-            "4",
-            "--tm-cpu",
-            "20",
+            "-D",
+            "flyt.taskmanager.replicas=3",
+            "-D",
+            "flyt.jobmanager.cpu.cores=4",
+            "-D",
+            "flyt.taskmanager.cpu.cores=20",
             "--wheel",
             "svc.whl",
             "x.py",
@@ -372,27 +372,29 @@ def test_run_application_flags_override_profile_config(monkeypatch, tmp_path: Pa
     assert result.exit_code == 0, result.output
     cfg = captured["config"]
     assert cfg.cluster_mode == "application"
-    assert cfg.taskmanager_count == 3
-    assert cfg.jobmanager_cpu == 4
-    assert cfg.taskmanager_cpu == 20
+    assert cfg.flink_config_override == {
+        "flyt.taskmanager.replicas": "3",
+        "flyt.jobmanager.cpu.cores": "4",
+        "flyt.taskmanager.cpu.cores": "20",
+    }
 
 
-def test_run_taskmanagers_flag_sets_capacity(monkeypatch, tmp_path: Path) -> None:
+def test_run_taskmanagers_is_shorthand_for_the_replicas_option(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("FLYT_CONFIG_DIR", str(tmp_path))
     _write_profile(tmp_path, "p1")
     captured: dict = {}
     monkeypatch.setattr("ytsaurus_flyt.__main__.launch_vanilla_job", lambda **kw: captured.update(kw))
     monkeypatch.setattr("ytsaurus_flyt.__main__.make_yt_client", lambda _p: object())
 
-    result = CliRunner().invoke(
-        cli,
-        ["run", "--mode", "application", "--taskmanagers", "5", "--wheel", "svc.whl", "x.py"],
-        catch_exceptions=False,
-    )
+    args = ["run", "--mode", "application", "--taskmanagers", "5", "--wheel", "svc.whl", "x.py"]
+    result = CliRunner().invoke(cli, args, catch_exceptions=False)
     assert result.exit_code == 0, result.output
-    cfg = captured["config"]
-    assert cfg.taskmanager_count == 5
-    assert captured["preset"] is None  # no preset in the profile: micro applies unless the run sizes TaskManagers
+    assert captured["config"].flink_config_override == {"flyt.taskmanager.replicas": "5"}
+
+    args = ["run", "--taskmanagers", "5", "-D", "flyt.taskmanager.replicas=3", "--wheel", "svc.whl", "x.py"]
+    result = CliRunner().invoke(cli, args)
+    assert result.exit_code != 0
+    assert "--taskmanagers and -D flyt.taskmanager.replicas set the same option" in result.output
 
 
 def test_run_without_mode_flag_keeps_profile_cluster_mode(monkeypatch, tmp_path: Path) -> None:
@@ -400,7 +402,7 @@ def test_run_without_mode_flag_keeps_profile_cluster_mode(monkeypatch, tmp_path:
     profiles = tmp_path / "profiles"
     profiles.mkdir(parents=True)
     (profiles / "p1.yaml").write_text(
-        "proxy: http://cluster.example:80\npool: default\ncluster_mode: application\ntaskmanager_count: 2\n",
+        "proxy: http://cluster.example:80\npool: default\ncluster_mode: application\n",
         encoding="utf-8",
     )
     (tmp_path / "active").write_text("p1\n", encoding="utf-8")
@@ -411,7 +413,6 @@ def test_run_without_mode_flag_keeps_profile_cluster_mode(monkeypatch, tmp_path:
     result = CliRunner().invoke(cli, ["run", "--wheel", "svc.whl", "x.py"], catch_exceptions=False)
     assert result.exit_code == 0, result.output
     assert captured["config"].cluster_mode == "application"
-    assert captured["config"].taskmanager_count == 2
     # minicluster stays the default when neither profile nor flag sets a mode
     assert FlytConfig().cluster_mode == "minicluster"
 

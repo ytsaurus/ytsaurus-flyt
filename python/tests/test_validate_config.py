@@ -11,7 +11,8 @@ def _named(rows, name):
 
 def test_validate_prints_the_application_cluster_sized_by_the_preset():
     rows = validate_flyt_config(
-        FlytConfig(cluster_mode="application", taskmanager_count=2), preset=ClusterPreset.LARGE.params
+        FlytConfig(cluster_mode="application", flink_config_override={"flyt.taskmanager.replicas": "2"}),
+        preset=ClusterPreset.LARGE.params,
     )
     ((ok, msg),) = _named(rows, "cluster_mode")
     assert ok is True
@@ -34,11 +35,12 @@ def test_validate_minicluster_has_no_application_rows():
 
 
 def test_validate_minicluster_sized_as_one_taskmanager():
-    cfg = FlytConfig(taskmanager_cpu=3, flink_config_override={"taskmanager.memory.process.size": "6g"})
+    sizing = {"flyt.taskmanager.cpu.cores": "3", "taskmanager.memory.process.size": "6g"}
+    cfg = FlytConfig(flink_config_override=sizing)
     assert _named(validate_flyt_config(cfg), "cluster_mode") == [(True, "minicluster: one TaskManager (3 cpu, 6144m)")]
     bad = FlytConfig(flink_config_override={"taskmanager.memory.task.heap.size": "1g"})
     ((ok, msg),) = _named(validate_flyt_config(bad), "cluster_mode")
-    assert ok is False and "needs taskmanager_cpu (--tm-cpu) and taskmanager.memory.process.size" in msg
+    assert ok is False and "needs taskmanager.memory.process.size" in msg
 
 
 def test_validate_reads_the_flink_config_in_both_modes(tmp_path):

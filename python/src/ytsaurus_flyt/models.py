@@ -146,8 +146,7 @@ class TaskmanagerParams:
 
     ``count`` TaskManager YT jobs are started, each with ``slots`` task slots; the default
     job parallelism becomes ``count * slots``. ``process_memory`` is
-    ``taskmanager.memory.process.size``, which is also the YT container, the way a Kubernetes pod gets
-    ``process.size``.
+    ``taskmanager.memory.process.size``, which is also the YT container.
     """
 
     cpu: int

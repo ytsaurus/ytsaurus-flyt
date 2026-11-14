@@ -29,9 +29,9 @@ def _app_config(**overrides) -> FlytConfig:
         java_home="/jdk",
         python_bin="/py",
         cluster_mode="application",
-        taskmanager_count=2,
     )
     base.update(overrides)
+    base["flink_config_override"] = {"flyt.taskmanager.replicas": "2", **overrides.get("flink_config_override", {})}
     return FlytConfig(**base)
 
 
@@ -159,7 +159,9 @@ def test_application_sandbox_unpack_keeps_unpack_fragment_and_drops_layer_paths(
 
 
 def test_application_spec_sizes_taskmanagers_from_the_preset_and_the_jobmanager_from_defaults():
-    spec = _build(_app_config(jobmanager_cpu=4), preset=ClusterPreset.LARGE.params)
+    spec = _build(
+        _app_config(flink_config_override={"flyt.jobmanager.cpu.cores": "4"}), preset=ClusterPreset.LARGE.params
+    )
     assert spec["tasks"][JOBMANAGER_TASK]["memory_limit"] == (2 * 1024 + 512) * 1024**2  # 2g JVM + the driver
     assert spec["tasks"][JOBMANAGER_TASK]["cpu_limit"] == 4
     assert spec["tasks"][TASKMANAGER_TASK]["memory_limit"] == 16 * 1024**3
@@ -183,8 +185,6 @@ def test_minicluster_spec_is_unchanged_by_application_fields():
     with_app_fields = _minicluster_spec(
         FlytConfig(
             **base,
-            taskmanager_count=5,
-            jobmanager_cpu=4,
             discovery_timeout=60,
             sidecar_command="agent",
             job_yt_proxy="http://jobs-proxy",
@@ -204,8 +204,9 @@ def test_minicluster_spec_is_unchanged_by_application_fields():
 
 
 def test_minicluster_job_sized_as_one_taskmanager():
-    base = dict(service_name="svc", java_home="/jdk", python_bin="/py", taskmanager_cpu=3)
-    cfg = FlytConfig(**base, flink_config_override={"taskmanager.memory.process.size": "6g"})
+    base = dict(service_name="svc", java_home="/jdk", python_bin="/py")
+    sizing = {"flyt.taskmanager.cpu.cores": "3", "taskmanager.memory.process.size": "6g"}
+    cfg = FlytConfig(**base, flink_config_override=sizing)
     task = _minicluster_spec(cfg, preset=None)["tasks"][MINICLUSTER_TASK]
     assert (task["cpu_limit"], task["memory_limit"]) == (3, 6 * 1024 * 1024 * 1024)
     # Flink's BashJavaUtils lays out the JVM in the job instead of the preset's -Xmx

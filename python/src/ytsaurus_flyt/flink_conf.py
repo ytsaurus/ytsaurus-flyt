@@ -29,6 +29,11 @@ TM_TASK_OFF_HEAP_KEY = "taskmanager.memory.task.off-heap.size"
 TM_MANAGED_FRACTION_KEY = "taskmanager.memory.managed.fraction"
 TM_MEMORY_PREFIX = "taskmanager.memory."
 JM_MEMORY_PREFIX = "jobmanager.memory."
+TM_CPU_CORES_KEY = "taskmanager.cpu.cores"
+# flyt's own options in the Flink configuration: the YT resources of the cluster.
+FLYT_JM_CPU_KEY = "flyt.jobmanager.cpu.cores"
+FLYT_TM_CPU_KEY = "flyt.taskmanager.cpu.cores"
+FLYT_TM_REPLICAS_KEY = "flyt.taskmanager.replicas"
 # jvm-overhead.min/max/fraction under each role's prefix: flyt keeps min (and max) at JVM_OVERHEAD_MIN or above.
 _JVM_OVERHEAD_KEYS = ("jvm-overhead.min", "jvm-overhead.max", "jvm-overhead.fraction")
 # The memory keys flyt sets itself, plus the overhead that only carves process.size. Any other key under the
@@ -65,7 +70,7 @@ JVM_COMMON_OPTS = (
 )
 
 # Set per container by the run scripts (slot address, discovered JobManager, YT job id); never
-# taken from the user's configuration, the way Flink on Kubernetes strips them from its ConfigMap.
+# taken from the user's configuration.
 RUNTIME_FLINK_KEYS = frozenset(
     {"jobmanager.rpc.address", "rest.address", "taskmanager.host", "taskmanager.resource-id"}
 )
@@ -226,6 +231,7 @@ def cluster_flink_config(
             tm_opts: f"-XX:ActiveProcessorCount={resources.taskmanager_cpu} {JVM_EXIT_ON_OOM_OPT}",
         },
     )
+    props[TM_CPU_CORES_KEY] = str(resources.taskmanager_cpu)
     props.update(_jvm_overhead_floor(props))
     return props
 
@@ -260,6 +266,7 @@ def minicluster_flink_config(
         _taskmanager_memory_defaults(props, user, process_memory)
     jvm_opts += [f"-XX:ActiveProcessorCount={cpu}", JVM_EXIT_ON_OOM_OPT, *JVM_COMMON_OPTS]
     _apply_user_and_owned(props, user, {JVM_DEFAULT_OPTS_KEYS[0]: " ".join(jvm_opts)})
+    props[TM_CPU_CORES_KEY] = str(cpu)
     if preset is None:
         props.update(_jvm_overhead_floor(props, (TM_MEMORY_PREFIX,)))
     return props
@@ -278,6 +285,11 @@ def flink_config_warnings(config: FlytConfig, user: Mapping[str, str]) -> List[s
         for key, value in sorted(FLYT_NETWORK_OPTIONS.items())
         if key in user and str(user[key]).strip() != value
     ]
+    if TM_CPU_CORES_KEY in user:
+        out.append(
+            f"{TM_CPU_CORES_KEY} is the TaskManager's container cpu, set by flyt from {FLYT_TM_CPU_KEY} or the preset; "
+            f"{user[TM_CPU_CORES_KEY]!r} from the Flink configuration is ignored"
+        )
     out += [
         f"{key} carries flyt's platform JVM flags and is ignored; put JVM options into "
         f"{key.replace('default-opts', 'opts')}, where a later flag overrides flyt's"

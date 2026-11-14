@@ -17,6 +17,7 @@ import yaml
 
 from ytsaurus_flyt.cli_helpers import find_pyproject_for_job, job_command_relative_to_project, resolve_proxy_pool
 from ytsaurus_flyt.config import DEFAULT_JAVA_HOME, ClusterMode, FlytConfig
+from ytsaurus_flyt.flink_conf import FLYT_TM_REPLICAS_KEY
 from ytsaurus_flyt.flink_lib_jars import (
     download_flink_lib_jars,
     partition_flink_lib_jars_for_delivery,
@@ -31,7 +32,7 @@ from ytsaurus_flyt.layer_builder import (
     ensure_unsquashfs_tool_remote,
     upload_squashfs_layer,
 )
-from ytsaurus_flyt.models import DEFAULT_JOBMANAGER_CPU, ClusterPreset
+from ytsaurus_flyt.models import ClusterPreset
 from ytsaurus_flyt.profiles import (
     default_cypress_base_path,
     list_profile_names,
@@ -138,7 +139,7 @@ def profile_cli() -> None:
 @click.option(
     "--preset",
     default=None,
-    help="Preset that sizes the jobs (default: none in the profile, micro unless the run sizes them itself).",
+    help="Preset that sizes the jobs (default: none).",
 )
 @click.option(
     "--cypress-base-path",
@@ -391,8 +392,8 @@ def _parse_flink_options(options: Tuple[str, ...]) -> Dict[str, str]:
     type=click.Choice(["micro", "small", "large", "xlarge"], case_sensitive=False),
     default=None,
     help="Resource preset: the MiniCluster YT job, or every TaskManager YT job for --mode application "
-    "(cpu = task slots, memory = container). Default: from profile, else micro; not combinable with --tm-cpu "
-    "and taskmanager.memory.* keys, which size the TaskManager themselves.",
+    "(cpu = task slots, memory = container). Default: from profile, else micro; none with fine-grained resource "
+    "configuration (flyt.taskmanager.cpu.cores and taskmanager.memory.* keys), which it does not combine with.",
 )
 @click.option(
     "--mode",
@@ -404,26 +405,9 @@ def _parse_flink_options(options: Tuple[str, ...]) -> Dict[str, str]:
 )
 @click.option(
     "--taskmanagers",
-    "taskmanager_count",
     type=click.IntRange(min=1),
     default=None,
-    help="TaskManager YT job count for --mode application; the cluster has count * TaskManager cpu task slots "
-    "(default: profile, else 1).",
-)
-@click.option(
-    "--jm-cpu",
-    "jobmanager_cpu",
-    type=click.IntRange(min=1),
-    default=None,
-    help=f"CPU of the JobManager YT job for --mode application (default: profile, else {DEFAULT_JOBMANAGER_CPU}).",
-)
-@click.option(
-    "--tm-cpu",
-    "taskmanager_cpu",
-    type=click.IntRange(min=1),
-    default=None,
-    help="CPU, and task slots, per TaskManager YT job, or of the minicluster job; sizes them without a preset, "
-    "together with taskmanager.memory.process.size. taskmanager.numberOfTaskSlots overrides the slots.",
+    help=f"TaskManager YT jobs for --mode application: shorthand for -D {FLYT_TM_REPLICAS_KEY}=N.",
 )
 @click.option(
     "--flink-conf",
@@ -465,9 +449,7 @@ def run(
     pool: Optional[str],
     preset: Optional[str],
     cluster_mode: Optional[str],
-    taskmanager_count: Optional[int],
-    jobmanager_cpu: Optional[int],
-    taskmanager_cpu: Optional[int],
+    taskmanagers: Optional[int],
     base_flink_conf_path: Optional[str],
     flink_options: Tuple[str, ...],
     wheel_path: Optional[str],
@@ -484,18 +466,20 @@ def run(
     cfg, profile_data = _load_flyt_config_from_profile(ctx)
     cluster_overrides = {
         "cluster_mode": cluster_mode,
-        "taskmanager_count": taskmanager_count,
-        "jobmanager_cpu": jobmanager_cpu,
-        "taskmanager_cpu": taskmanager_cpu,
     }
     cluster_overrides = {k: v for k, v in cluster_overrides.items() if v is not None}
     if base_flink_conf_path is not None:
         # The file replaces the profile's whole Flink configuration for this run.
         cluster_overrides["base_flink_conf_path"] = base_flink_conf_path
         cluster_overrides["flink_config_override"] = {}
-    if flink_options:
+    run_options = _parse_flink_options(flink_options)
+    if taskmanagers is not None:
+        if FLYT_TM_REPLICAS_KEY in run_options:
+            raise click.UsageError(f"--taskmanagers and -D {FLYT_TM_REPLICAS_KEY} set the same option; pass one")
+        run_options[FLYT_TM_REPLICAS_KEY] = str(taskmanagers)
+    if run_options:
         base = cluster_overrides.get("flink_config_override", cfg.flink_config_override)
-        cluster_overrides["flink_config_override"] = {**base, **_parse_flink_options(flink_options)}
+        cluster_overrides["flink_config_override"] = {**base, **run_options}
     if cluster_overrides:
         try:
             cfg = dataclasses.replace(cfg, **cluster_overrides)

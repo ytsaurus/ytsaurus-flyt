@@ -1,6 +1,7 @@
 """The YT resources of a run and the ``config.yaml`` of its jobs. A TaskManager, and the MiniCluster job,
-which is one TaskManager, is sized either by a preset or by ``taskmanager_cpu`` and the user's
-``taskmanager.memory.*`` keys, never by both; the JobManager by flyt's defaults and ``jobmanager.memory.*``.
+which is one TaskManager, is sized either by a preset or by ``flyt.taskmanager.cpu.cores`` and the user's
+``taskmanager.memory.*`` keys, never by both; the JobManager by flyt's defaults, ``flyt.jobmanager.cpu.cores``
+and ``jobmanager.memory.*``.
 """
 
 from __future__ import annotations
@@ -11,6 +12,9 @@ from typing import Dict, Mapping, Optional
 from ytsaurus_flyt.config import FlytConfig
 from ytsaurus_flyt.flink_conf import (
     DEFAULT_PARALLELISM_KEY,
+    FLYT_JM_CPU_KEY,
+    FLYT_TM_CPU_KEY,
+    FLYT_TM_REPLICAS_KEY,
     JM_MEMORY_DEFAULT_KEYS,
     JM_MEMORY_PREFIX,
     JM_PROCESS_SIZE_KEY,
@@ -65,24 +69,27 @@ def _process_memory(user: Mapping[str, str], key: str, prefix: str, flyt_keys: f
     return None
 
 
+def taskmanager_replicas(user: Mapping[str, str]) -> int:
+    """TaskManager YT jobs of an application cluster: ``flyt.taskmanager.replicas``, 1 by default."""
+    return _int_option(user, FLYT_TM_REPLICAS_KEY) or 1
+
+
 @dataclass(frozen=True)
 class TaskmanagerSize:
     """One TaskManager, or the MiniCluster job: its cpu, its container (= ``process.size``) and the preset
-    that sized it, None when ``taskmanager_cpu`` and ``taskmanager.memory.process.size`` did."""
+    that sized it, None when ``taskmanager.memory.process.size`` did."""
 
     cpu: int
     memory: int
     preset: Optional[ClusterParams]
 
 
-def resolve_taskmanager_size(
-    config: FlytConfig, preset: Optional[ClusterParams], user: Mapping[str, str]
-) -> TaskmanagerSize:
+def resolve_taskmanager_size(preset: Optional[ClusterParams], user: Mapping[str, str]) -> TaskmanagerSize:
     """A preset (micro when none is given) or the user's own sizing; a preset is a starting point, so
-    combining it with ``taskmanager_cpu`` or any ``taskmanager.memory.*`` key is an error."""
-    own = (["taskmanager_cpu"] if config.taskmanager_cpu is not None else []) + sorted(
-        k for k in user if k.startswith(TM_MEMORY_PREFIX)
-    )
+    combining it with ``flyt.taskmanager.cpu.cores`` or any ``taskmanager.memory.*`` key is an error.
+    Without a preset the cpu defaults to the task slots, 1 unless set."""
+    cpu = _int_option(user, FLYT_TM_CPU_KEY)
+    own = ([FLYT_TM_CPU_KEY] if cpu is not None else []) + sorted(k for k in user if k.startswith(TM_MEMORY_PREFIX))
     if not own:
         preset = preset or ClusterPreset.MICRO.params
         _check_room_for_jvm("TaskManager", preset.memory_bytes())
@@ -92,15 +99,12 @@ def resolve_taskmanager_size(
             f"{', '.join(own)} size the TaskManager without a preset; remove the preset (--preset, "
             f"preset in the profile) or these settings"
         )
-    missing = (["taskmanager_cpu (--tm-cpu)"] if config.taskmanager_cpu is None else []) + (
-        [TM_PROCESS_SIZE_KEY] if TM_PROCESS_SIZE_KEY not in user else []
-    )
-    if missing:
-        raise ValueError(f"a TaskManager sized without a preset needs {' and '.join(missing)}")
+    if TM_PROCESS_SIZE_KEY not in user:
+        raise ValueError(f"a TaskManager sized without a preset needs {TM_PROCESS_SIZE_KEY}")
     process_memory = _process_memory(user, TM_PROCESS_SIZE_KEY, TM_MEMORY_PREFIX, TM_MEMORY_DEFAULT_KEYS)
     assert process_memory is not None
     _check_room_for_jvm("TaskManager", process_memory)
-    return TaskmanagerSize(cpu=config.taskmanager_cpu, memory=process_memory, preset=None)
+    return TaskmanagerSize(cpu=cpu or _int_option(user, TASK_SLOTS_KEY) or 1, memory=process_memory, preset=None)
 
 
 def _check_room_for_jvm(role: str, process_memory: int) -> None:
@@ -149,13 +153,13 @@ class ApplicationResources:
 
 
 def resolve_application_resources(
-    config: FlytConfig, preset: Optional[ClusterParams] = None, user: Optional[Mapping[str, str]] = None
+    preset: Optional[ClusterParams] = None, user: Optional[Mapping[str, str]] = None
 ) -> ApplicationResources:
     """Every TaskManager is sized by :func:`resolve_taskmanager_size`, with one slot per cpu; the JobManager
-    gets flyt's defaults (cpu from ``jobmanager_cpu``). The user's Flink options
+    gets flyt's defaults (cpu from ``flyt.jobmanager.cpu.cores``). The user's Flink options
     (:func:`~ytsaurus_flyt.flink_conf.user_flink_config`) override slots, JVM sizes and the default parallelism."""
     user = user or {}
-    taskmanager = resolve_taskmanager_size(config, preset, user)
+    taskmanager = resolve_taskmanager_size(preset, user)
     taskmanager_cpu = taskmanager.cpu
     slots = _int_option(user, TASK_SLOTS_KEY) or taskmanager_cpu
     taskmanager_process_memory = taskmanager.memory
@@ -164,18 +168,19 @@ def resolve_application_resources(
         or DEFAULT_JOBMANAGER_PROCESS_MEMORY
     )
     _check_room_for_jvm("JobManager", jobmanager_process_memory)
-    capacity = config.taskmanager_count * slots
+    taskmanager_count = taskmanager_replicas(user)
+    capacity = taskmanager_count * slots
     default_parallelism = _int_option(user, DEFAULT_PARALLELISM_KEY) or capacity
     if default_parallelism > capacity:
         # A standalone cluster cannot grow: the job would wait for slots and fail after slot.request.timeout.
         raise ValueError(
-            f"{DEFAULT_PARALLELISM_KEY} {default_parallelism} does not fit into taskmanager_count * slots = "
-            f"{capacity}; raise taskmanager_count or {TASK_SLOTS_KEY}"
+            f"{DEFAULT_PARALLELISM_KEY} {default_parallelism} does not fit into {FLYT_TM_REPLICAS_KEY} * slots = "
+            f"{capacity}; raise {FLYT_TM_REPLICAS_KEY} or {TASK_SLOTS_KEY}"
         )
     return ApplicationResources(
-        taskmanager_count=config.taskmanager_count,
+        taskmanager_count=taskmanager_count,
         slots=slots,
-        jobmanager_cpu=config.jobmanager_cpu if config.jobmanager_cpu is not None else DEFAULT_JOBMANAGER_CPU,
+        jobmanager_cpu=_int_option(user, FLYT_JM_CPU_KEY) or DEFAULT_JOBMANAGER_CPU,
         jobmanager_process_memory=jobmanager_process_memory,
         taskmanager_cpu=taskmanager_cpu,
         taskmanager_process_memory=taskmanager_process_memory,
@@ -197,7 +202,7 @@ def application_cluster(
     """Resolve the application cluster from the profile, the preset that sizes each TaskManager and the
     user's Flink options."""
     user = user or {}
-    resources = resolve_application_resources(config, preset, user)
+    resources = resolve_application_resources(preset, user)
     return ApplicationCluster(resources=resources, flink_config=cluster_flink_config(config, resources, user))
 
 
@@ -218,7 +223,7 @@ def minicluster_job(
     """The MiniCluster job is one TaskManager, sized as every TaskManager of application mode
     (:func:`resolve_taskmanager_size`)."""
     user = user or {}
-    size = resolve_taskmanager_size(config, preset, user)
+    size = resolve_taskmanager_size(preset, user)
     process_memory = None if size.preset is not None else size.memory
     return MiniClusterJob(
         cpu=size.cpu,

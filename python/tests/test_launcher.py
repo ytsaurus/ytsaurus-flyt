@@ -78,16 +78,17 @@ def test_launch_passes_the_preset_and_the_client_to_the_spec(monkeypatch):
 def test_failed_job_budget_scales_with_taskmanagers():
     from ytsaurus_flyt.launcher import _make_operation_params
 
-    def budget(**kw):
-        return _make_operation_params(FlytConfig(**kw), "pool").max_failed_job_count
+    def budget(replicas=None, **kw):
+        user = {"flyt.taskmanager.replicas": str(replicas)} if replicas else {}
+        return _make_operation_params(FlytConfig(**kw), "pool", user).max_failed_job_count
 
-    assert budget(taskmanager_count=4) == 10  # minicluster
-    assert budget(cluster_mode="application", taskmanager_count=1) == 10
-    assert budget(cluster_mode="application", taskmanager_count=2) == 10
-    assert budget(cluster_mode="application", taskmanager_count=4) == 20
-    assert budget(cluster_mode="application", taskmanager_count=10) == 50
+    assert budget(4) == 10  # minicluster
+    assert budget(cluster_mode="application") == 10
+    assert budget(2, cluster_mode="application") == 10
+    assert budget(4, cluster_mode="application") == 20
+    assert budget(10, cluster_mode="application") == 50
     # an explicit value is the operation's limit as is, in both modes
-    assert budget(cluster_mode="application", taskmanager_count=10, max_failed_job_count=3) == 3
+    assert budget(10, cluster_mode="application", max_failed_job_count=3) == 3
     assert budget(max_failed_job_count=3) == 3
 
 

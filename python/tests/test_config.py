@@ -150,9 +150,6 @@ class TestClusterModeConfig:
         config = FlytConfig()
         assert config.cluster_mode == "minicluster"
         assert config.is_application_cluster is False
-        assert config.taskmanager_count == 1
-        assert config.taskmanager_cpu is None
-        assert config.jobmanager_cpu is None
         assert config.discovery_timeout == 300
         assert config.max_failed_job_count is None
 
@@ -174,19 +171,10 @@ class TestClusterModeConfig:
         assert config.to_dict()["cluster_mode"] == "application"
         assert "cluster_mode: application" in config.to_yaml()
 
-    def test_invalid_taskmanager_cpu(self):
-        with pytest.raises(ValueError, match="taskmanager_cpu"):
-            FlytConfig(taskmanager_cpu=0)
-        with pytest.raises(ValueError, match="jobmanager_cpu"):
-            FlytConfig(jobmanager_cpu=0)
-
     def test_from_yaml_application_fields(self):
         yaml_content = """
 cluster_mode: application
-taskmanager_count: 3
 discovery_timeout: 120
-taskmanager_cpu: 6
-jobmanager_cpu: 3
 """
         with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
             f.write(yaml_content)
@@ -194,13 +182,7 @@ jobmanager_cpu: 3
             config = FlytConfig.from_yaml(f.name)
         os.unlink(f.name)
         assert config.is_application_cluster
-        assert config.taskmanager_count == 3
-        assert (config.taskmanager_cpu, config.jobmanager_cpu) == (6, 3)
         assert config.discovery_timeout == 120
-
-    def test_invalid_taskmanager_count(self):
-        with pytest.raises(ValueError, match="taskmanager_count"):
-            FlytConfig(taskmanager_count=0)
 
     def test_sidecar_command_is_kept_in_any_mode(self):
         assert FlytConfig(cluster_mode="application", sidecar_command=" agent ").sidecar_command == "agent"
