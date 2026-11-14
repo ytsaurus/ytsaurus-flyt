@@ -68,6 +68,23 @@ def test_minicluster_flink_config_sizes_the_job_jvm_by_the_preset():
     assert not [k for k in props if ".memory." in k]
 
 
+def test_minicluster_sized_by_taskmanager_process_size_gets_taskmanager_memory_defaults():
+    props = minicluster_flink_config(
+        _config(cluster_mode="minicluster"),
+        ClusterPreset.MICRO.params,
+        {},
+        cpu=3,
+        process_memory=6 * 1024 * 1024 * 1024,
+    )
+    assert props["taskmanager.memory.process.size"] == "6144m"
+    assert props["taskmanager.memory.managed.fraction"] == "0.1"
+    assert props["taskmanager.memory.jvm-overhead.min"] == "512m"
+    assert "jobmanager.memory.jvm-overhead.min" not in props
+    assert props["parallelism.default"] == "3"
+    # the run script prepends the JVM flags Flink derives; the preset's -Xmx is gone
+    assert props["env.java.default-opts.all"].startswith("-XX:ActiveProcessorCount=3 ")
+
+
 def test_both_modes_share_ports_restarts_and_python():
     shared = (
         "rest.port",
@@ -151,12 +168,24 @@ def test_jvm_overhead_is_never_below_flyt_minimum():
 
 
 def test_flink_config_warnings_cover_owned_and_mode_ignored_keys():
-    user = {"rest.port": "8081", "rest.address": "x", "taskmanager.memory.process.size": "8g"}
+    user = {"rest.port": "8081", "rest.address": "x", "jobmanager.memory.process.size": "8g"}
     app = flink_config_warnings(_config(), user)
     mini = flink_config_warnings(_config(cluster_mode="minicluster"), user)
     assert any("rest.port" in w for w in app) and any("rest.address" in w for w in app)
-    assert not any("taskmanager.memory.process.size" in w for w in app)
-    assert any("taskmanager.memory.process.size has no effect in minicluster" in w for w in mini)
+    assert not any("jobmanager.memory.process.size" in w for w in app)
+    assert any("jobmanager.memory.process.size has no effect in minicluster" in w for w in mini)
+    # TaskManager memory keys size a MiniCluster only together with process.size
+    overhead = {"taskmanager.memory.jvm-overhead.min": "256m"}
+    assert any(
+        "without taskmanager.memory.process.size" in w
+        for w in flink_config_warnings(_config(cluster_mode="minicluster"), overhead)
+    )
+    sized = flink_config_warnings(
+        _config(cluster_mode="minicluster"), {**overhead, "taskmanager.memory.process.size": "6g"}
+    )
+    assert sized == [
+        "taskmanager.memory.jvm-overhead.min is raised to 512m: the YT container is process.size, and the JVM overhead holds the processes outside the JVM as well"
+    ]
     assert flink_config_warnings(_config(), {"rest.port": "27050"}) == []  # flyt's own value is fine
 
 

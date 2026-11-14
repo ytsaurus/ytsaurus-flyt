@@ -13,7 +13,7 @@ Profile fields; the flag overrides the profile for one `flyt run`.
 | `cluster_mode` | `--mode` | `minicluster` | `application` enables everything below |
 | `taskmanager_count` | `--taskmanagers` | 1 | TaskManager YT jobs: the cluster capacity, like TaskManager `replicas` on Kubernetes |
 | `preset` | `--preset` | `micro` | size of every TaskManager YT job: its cpu (and task slots) and container memory |
-| `taskmanager_cpu` | `--tm-cpu` | the preset's cpu | CPU, and task slots unless `taskmanager.numberOfTaskSlots` is set, of each TaskManager |
+| `taskmanager_cpu` | `--tm-cpu` | the preset's cpu | CPU, and task slots unless `taskmanager.numberOfTaskSlots` is set, of each TaskManager (and of the `minicluster` job) |
 | `jobmanager_cpu` | `--jm-cpu` | 2 | CPU of the JobManager container |
 | `discovery_timeout` | | 300 | seconds a TaskManager waits for the JobManager before failing, like Flink's `taskmanager.registration.timeout` |
 | `sidecar_command` | | | helper started in every JobManager/TaskManager container before Flink, e.g. a metrics agent |

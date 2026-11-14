@@ -9,7 +9,7 @@ read it in ``application`` mode, the MiniCluster gets it as the script's context
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional, Tuple
 
 import yaml
 
@@ -90,10 +90,7 @@ JVM_DEFAULT_OPTS_KEYS = (
     "env.java.default-opts.jobmanager",
     "env.java.default-opts.taskmanager",
 )
-# Container sizes come from these keys in application mode only; the MiniCluster lives in the
-# job's JVM, sized by the preset.
-_PROCESS_SIZE_KEYS = (JM_PROCESS_SIZE_KEY, TM_PROCESS_SIZE_KEY, "taskmanager.memory.flink.size")
-# The PyFlink gateway that runs a MiniCluster is one JVM: it reads only env.java.*.all.
+# The PyFlink gateway that runs a MiniCluster is one JVM: per-role JVM options do not apply to it.
 _ROLE_JVM_OPTS_KEYS = ("env.java.opts.jobmanager", "env.java.opts.taskmanager")
 
 
@@ -174,11 +171,13 @@ def _apply_user_and_owned(props: Dict[str, str], user: Mapping[str, str], jvm_op
     props.update(jvm_opts)
 
 
-def _jvm_overhead_floor(props: Mapping[str, str]) -> Dict[str, str]:
+def _jvm_overhead_floor(
+    props: Mapping[str, str], prefixes: Tuple[str, ...] = (JM_MEMORY_PREFIX, TM_MEMORY_PREFIX)
+) -> Dict[str, str]:
     """``*.memory.jvm-overhead.min``/``.max`` raised to :data:`JVM_OVERHEAD_MIN` where ``props`` has less;
     an unset max stays Flink's 1g."""
     out: Dict[str, str] = {}
-    for prefix in (JM_MEMORY_PREFIX, TM_MEMORY_PREFIX):
+    for prefix in prefixes:
         min_key, max_key = prefix + "jvm-overhead.min", prefix + "jvm-overhead.max"
         if min_key not in props or _memory_option(props, min_key) < JVM_OVERHEAD_MIN:
             out[min_key] = _mebibytes(JVM_OVERHEAD_MIN)
@@ -195,6 +194,13 @@ def _memory_option(props: Mapping[str, str], key: str) -> int:
         raise ValueError(f"{key} is not a memory size: {raw!r}") from e
 
 
+def _taskmanager_memory_defaults(props: Dict[str, str], user: Mapping[str, str], process_size: int) -> None:
+    if not custom_memory_keys(user, TM_MEMORY_PREFIX, TM_MEMORY_DEFAULT_KEYS):
+        props[TM_PROCESS_SIZE_KEY] = _mebibytes(process_size)
+        props[TM_TASK_OFF_HEAP_KEY] = _mebibytes(int(process_size * TASKMANAGER_TASK_OFF_HEAP_FRACTION))
+        props[TM_MANAGED_FRACTION_KEY] = TASKMANAGER_MANAGED_MEMORY_FRACTION
+
+
 def cluster_flink_config(
     config: FlytConfig, resources: ApplicationResources, user: Mapping[str, str]
 ) -> Dict[str, str]:
@@ -208,11 +214,7 @@ def cluster_flink_config(
     props[DEFAULT_PARALLELISM_KEY] = str(resources.default_parallelism)
     if not custom_memory_keys(user, JM_MEMORY_PREFIX, JM_MEMORY_DEFAULT_KEYS):
         props[JM_PROCESS_SIZE_KEY] = _mebibytes(resources.jobmanager_process_memory)
-    if not custom_memory_keys(user, TM_MEMORY_PREFIX, TM_MEMORY_DEFAULT_KEYS):
-        tm_process_size = resources.taskmanager_process_memory
-        props[TM_PROCESS_SIZE_KEY] = _mebibytes(tm_process_size)
-        props[TM_TASK_OFF_HEAP_KEY] = _mebibytes(int(tm_process_size * TASKMANAGER_TASK_OFF_HEAP_FRACTION))
-        props[TM_MANAGED_FRACTION_KEY] = TASKMANAGER_MANAGED_MEMORY_FRACTION
+    _taskmanager_memory_defaults(props, user, resources.taskmanager_process_memory)
     all_opts, jm_opts, tm_opts = JVM_DEFAULT_OPTS_KEYS
     _apply_user_and_owned(
         props,
@@ -228,19 +230,35 @@ def cluster_flink_config(
     return props
 
 
-def minicluster_flink_config(config: FlytConfig, preset: ClusterParams, user: Mapping[str, str]) -> Dict[str, str]:
-    """The ``config.yaml`` of a MiniCluster job: the same layers as :func:`cluster_flink_config`; the
-    preset sizes the job's JVM, which the PyFlink gateway starts with ``env.java.*``."""
+def minicluster_flink_config(
+    config: FlytConfig,
+    preset: ClusterParams,
+    user: Mapping[str, str],
+    *,
+    cpu: Optional[int] = None,
+    process_memory: Optional[int] = None,
+) -> Dict[str, str]:
+    """The ``config.yaml`` of a MiniCluster job: the same layers as :func:`cluster_flink_config`. The preset
+    sizes the job's JVM, which the PyFlink gateway starts with ``env.java.*``; with ``process_memory``
+    (``taskmanager.memory.process.size``) the job is one TaskManager instead, and the run script adds the
+    JVM flags Flink derives for it."""
+    cpu = cpu or preset.cpu
     props = _common_defaults(config)
     # Every cpu of the job, like every slot of an application cluster (and like PyFlink's local default).
-    props[DEFAULT_PARALLELISM_KEY] = str(preset.cpu)
-    jvm_opts = [f"-Xmx{preset.max_heap_size}"]
-    if preset.off_heap_size:
-        # Bounds NIO/netty direct buffers (gRPC connectors); otherwise the JVM
-        # defaults MaxDirectMemorySize to ~the max heap size.
-        jvm_opts.append(f"-XX:MaxDirectMemorySize={preset.off_heap_size}")
-    jvm_opts += [f"-XX:ActiveProcessorCount={preset.cpu}", JVM_EXIT_ON_OOM_OPT, *JVM_COMMON_OPTS]
+    props[DEFAULT_PARALLELISM_KEY] = str(cpu)
+    jvm_opts: List[str] = []
+    if process_memory is None:
+        jvm_opts.append(f"-Xmx{preset.max_heap_size}")
+        if preset.off_heap_size:
+            # Bounds NIO/netty direct buffers (gRPC connectors); otherwise the JVM
+            # defaults MaxDirectMemorySize to ~the max heap size.
+            jvm_opts.append(f"-XX:MaxDirectMemorySize={preset.off_heap_size}")
+    else:
+        _taskmanager_memory_defaults(props, user, process_memory)
+    jvm_opts += [f"-XX:ActiveProcessorCount={cpu}", JVM_EXIT_ON_OOM_OPT, *JVM_COMMON_OPTS]
     _apply_user_and_owned(props, user, {JVM_DEFAULT_OPTS_KEYS[0]: " ".join(jvm_opts)})
+    if process_memory is not None:
+        props.update(_jvm_overhead_floor(props, (TM_MEMORY_PREFIX,)))
     return props
 
 
@@ -263,24 +281,29 @@ def flink_config_warnings(config: FlytConfig, user: Mapping[str, str]) -> List[s
         for key in JVM_DEFAULT_OPTS_KEYS
         if key in user
     ]
-    if config.is_application_cluster:
+    if config.is_application_cluster or TM_PROCESS_SIZE_KEY in user:
+        prefixes = (JM_MEMORY_PREFIX, TM_MEMORY_PREFIX) if config.is_application_cluster else (TM_MEMORY_PREFIX,)
         out += [
             f"{key} is raised to {value}: the YT container is process.size, and the JVM overhead holds "
             f"the processes outside the JVM as well"
-            for key, value in sorted(_jvm_overhead_floor(user).items())
+            for key, value in sorted(_jvm_overhead_floor(user, prefixes).items())
             if key in user
         ]
-    else:
+    if not config.is_application_cluster:
         out += [
-            f"{key} has no effect in minicluster mode: the preset sizes the job's JVM "
-            f"(override -Xmx in env.java.opts.all)"
-            for key in _PROCESS_SIZE_KEYS
-            if key in user
+            f"{key} has no effect in minicluster mode: the job is one TaskManager, sized by the preset or "
+            f"{TM_PROCESS_SIZE_KEY}"
+            for key in sorted(user)
+            if key.startswith(JM_MEMORY_PREFIX)
         ]
+        if TM_PROCESS_SIZE_KEY not in user:
+            out += [
+                f"{key} has no effect in minicluster mode without {TM_PROCESS_SIZE_KEY}: the preset sizes the job"
+                for key in sorted(user)
+                if key.startswith(TM_MEMORY_PREFIX)
+            ]
         out += [
-            f"{key} has no effect in minicluster mode: the job is one JVM, use env.java.opts.all"
-            for key in _ROLE_JVM_OPTS_KEYS
-            if key in user
+            f"{key} has no effect in minicluster mode: the job is one JVM" for key in _ROLE_JVM_OPTS_KEYS if key in user
         ]
         if TASK_SLOTS_KEY in user:
             out.append(

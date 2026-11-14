@@ -185,7 +185,6 @@ def test_minicluster_spec_is_unchanged_by_application_fields():
             **base,
             taskmanager_count=5,
             jobmanager_cpu=4,
-            taskmanager_cpu=8,
             discovery_timeout=60,
             sidecar_command="agent",
             job_yt_proxy="http://jobs-proxy",
@@ -201,6 +200,18 @@ def test_minicluster_spec_is_unchanged_by_application_fields():
     assert "application/01_cluster_common.sh" not in task["command"]
     assert "minicluster/run.sh" in task["command"]
     assert "annotations" not in plain
+    assert "minicluster/00_taskmanager_memory.sh" not in task["command"]
+
+
+def test_minicluster_job_sized_as_one_taskmanager():
+    base = dict(service_name="svc", java_home="/jdk", python_bin="/py", taskmanager_cpu=3)
+    cfg = FlytConfig(**base, flink_config_override={"taskmanager.memory.process.size": "6g"})
+    task = _minicluster_spec(cfg)["tasks"][MINICLUSTER_TASK]
+    assert (task["cpu_limit"], task["memory_limit"]) == (3, 6 * 1024 * 1024 * 1024)
+    # Flink's BashJavaUtils lays out the JVM in the job instead of the preset's -Xmx
+    assert "minicluster/00_taskmanager_memory.sh" in task["command"]
+    assert "parseResourceParamsAndExportLogs GET_TM_RESOURCE_PARAMS" in task["command"]
+    assert "-Xmx" not in task["command"].split("env.java.default-opts.all:")[1].splitlines()[0]
 
 
 def test_application_jobmanager_takes_python_executables_from_the_config():

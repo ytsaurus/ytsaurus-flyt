@@ -33,6 +33,14 @@ def test_validate_minicluster_has_no_application_rows():
     assert not _named(rows, "discovery_timeout")
 
 
+def test_validate_minicluster_sized_as_one_taskmanager():
+    cfg = FlytConfig(taskmanager_cpu=3, flink_config_override={"taskmanager.memory.process.size": "6g"})
+    assert _named(validate_flyt_config(cfg), "cluster_mode") == [(True, "minicluster: one TaskManager (3 cpu, 6144m)")]
+    bad = FlytConfig(flink_config_override={"taskmanager.memory.task.heap.size": "1g"})
+    ((ok, msg),) = _named(validate_flyt_config(bad), "cluster_mode")
+    assert ok is False and "set taskmanager.memory.process.size as well" in msg
+
+
 def test_validate_reads_the_flink_config_in_both_modes(tmp_path):
     conf = tmp_path / "flink.yaml"
     conf.write_text("taskmanager.numberOfTaskSlots: 3\nrest.port: 8081\n")

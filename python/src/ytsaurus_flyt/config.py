@@ -152,9 +152,9 @@ class FlytConfig:
     """
 
     taskmanager_cpu: Optional[int] = None
-    """CPU limit of one TaskManager YT job (``application`` mode; default: the preset's cpu). It is also the
-    TaskManager's task slot count unless ``taskmanager.numberOfTaskSlots`` is set. The container memory is
-    the preset's, or ``taskmanager.memory.process.size``.
+    """CPU limit of one TaskManager YT job (default: the preset's cpu), and of the ``minicluster`` job, which is
+    one TaskManager. It is also the TaskManager's task slot count unless ``taskmanager.numberOfTaskSlots`` is set.
+    The container memory is the preset's, or ``taskmanager.memory.process.size``.
     """
 
     discovery_timeout: int = 300

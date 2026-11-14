@@ -117,7 +117,7 @@ Do not put the same basename in both lists.
 
 ## Presets
 
-`minicluster`: the one YT job's CPU, container memory and `-Xmx`. `application`: every TaskManager's CPU (= task slots) and container memory, the heap columns do not apply; the JobManager has fixed defaults ([docs/application-mode.md](docs/application-mode.md#sizing)).
+`minicluster`: the one YT job's CPU, container memory and `-Xmx`; `--tm-cpu` and the Flink key `taskmanager.memory.process.size` size the job as one TaskManager instead ([docs/flink-configuration.md](docs/flink-configuration.md#minicluster-memory)). `application`: every TaskManager's CPU (= task slots) and container memory, the heap columns do not apply; the JobManager has fixed defaults ([docs/application-mode.md](docs/application-mode.md#sizing)).
 
 | Preset | CPU | RAM | Heap |
 |--------|-----|-----|------|

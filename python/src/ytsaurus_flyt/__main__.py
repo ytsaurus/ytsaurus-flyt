@@ -417,8 +417,8 @@ def _parse_flink_options(options: Tuple[str, ...]) -> Dict[str, str]:
     "taskmanager_cpu",
     type=click.IntRange(min=1),
     default=None,
-    help="CPU, and task slots, per TaskManager YT job for --mode application (default: profile, else the preset's cpu); "
-    "taskmanager.numberOfTaskSlots overrides the slots.",
+    help="CPU, and task slots, per TaskManager YT job, or of the minicluster job (default: profile, else the preset's "
+    "cpu); taskmanager.numberOfTaskSlots overrides the slots.",
 )
 @click.option(
     "--flink-conf",

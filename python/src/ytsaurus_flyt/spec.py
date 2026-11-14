@@ -10,16 +10,15 @@ from typing import Any, Dict, List, Mapping, Optional
 from yt.wrapper import YtClient
 from yt.wrapper.spec_builders import VanillaSpecBuilder
 
-from ytsaurus_flyt.application import application_cluster
+from ytsaurus_flyt.application import application_cluster, minicluster_job
 from ytsaurus_flyt.config import FlytConfig
 from ytsaurus_flyt.flink_conf import (
     FLINK_REST_PORT,
-    minicluster_flink_config,
     render_flink_config_yaml,
     user_flink_config,
 )
 from ytsaurus_flyt.job_proxy import job_yt_proxy
-from ytsaurus_flyt.models import ClusterParams, OperationParams
+from ytsaurus_flyt.models import MIB, ClusterParams, OperationParams
 from ytsaurus_flyt.yt_client import proxy_url_from_client
 
 logger = logging.getLogger(__name__)
@@ -63,7 +62,9 @@ def _extract_service_name(job_command: str) -> str:
     return "unknown"
 
 
-def _script_fragments(*, use_squashfs_sandbox_unpack: bool, role: Optional[str]) -> List[str]:
+def _script_fragments(
+    *, use_squashfs_sandbox_unpack: bool, role: Optional[str], flink_memory: bool = False
+) -> List[str]:
     """Ordered run-script fragments for a MiniCluster job or an application-mode role."""
     ordered = ["common/00_set_essentials.sh"]
     if use_squashfs_sandbox_unpack:
@@ -78,6 +79,8 @@ def _script_fragments(*, use_squashfs_sandbox_unpack: bool, role: Optional[str])
         "common/06_write_flink_conf.sh",
     ]
     if role is None:
+        if flink_memory:
+            ordered.append("minicluster/00_taskmanager_memory.sh")
         ordered.append("minicluster/run.sh")
     elif role == JOBMANAGER_TASK:
         ordered += ["application/01_cluster_common.sh", "application/02_start_sidecar.sh", "application/jobmanager.sh"]
@@ -96,6 +99,7 @@ def _build_run_script(
     use_squashfs_sandbox_unpack: bool = False,
     role: Optional[str] = None,
     flink_config: Mapping[str, str],
+    flink_memory: bool = False,
 ) -> str:
     result_script = ["#!/bin/bash", "set -e"]
     # Values are substituted into the templates, not re-formatted, so braces in them are safe.
@@ -123,7 +127,9 @@ def _build_run_script(
             }
         )
 
-    for name in _script_fragments(use_squashfs_sandbox_unpack=use_squashfs_sandbox_unpack, role=role):
+    for name in _script_fragments(
+        use_squashfs_sandbox_unpack=use_squashfs_sandbox_unpack, role=role, flink_memory=flink_memory
+    ):
         script_path = _RUN_SCRIPTS_DIR / name
         result_script.append(f"echo 'Running {name}...' 1>&2")
         with open(script_path, encoding="utf-8") as script_file:
@@ -207,7 +213,12 @@ def build_vanilla_operation_spec(
         flink_config = cluster.flink_config
     else:
         # JVM flags go to config.yaml (env.java.*): FLINK_ENV_JAVA_OPTS would make the gateway ignore them.
-        flink_config = minicluster_flink_config(config, preset_params, flink_options)
+        minicluster = minicluster_job(config, preset_params, flink_options)
+        if minicluster.flink_memory:
+            logger.info(
+                "MiniCluster job: %d cpu, %dm sized as one TaskManager", minicluster.cpu, minicluster.memory // MIB
+            )
+        flink_config = minicluster.flink_config
     environment.update(config.extra_environment)
 
     common_task_spec: Dict[str, Any] = {
@@ -271,10 +282,11 @@ def build_vanilla_operation_spec(
                 service_name,
                 use_squashfs_sandbox_unpack=use_squashfs_sandbox_unpack,
                 flink_config=flink_config,
+                flink_memory=minicluster.flink_memory,
             ),
             job_count=1,
-            cpu=preset_params.cpu,
-            memory=preset_params.memory_bytes(),
+            cpu=minicluster.cpu,
+            memory=minicluster.memory,
             task_spec=common_task_spec,
             layer_paths=operation_params.layer_paths,
         )

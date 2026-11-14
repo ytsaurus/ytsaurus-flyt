@@ -7,7 +7,7 @@ from typing import Dict, List, Optional, Tuple
 
 from yt.wrapper import YtClient
 
-from ytsaurus_flyt.application import application_cluster
+from ytsaurus_flyt.application import application_cluster, minicluster_job
 from ytsaurus_flyt.config import (
     SQUASHFS_VALIDATE_RUNTIME_PACKAGES_MSG,
     SQUASHFS_VALIDATE_RUNTIME_VERSION_MSG,
@@ -15,7 +15,7 @@ from ytsaurus_flyt.config import (
 )
 from ytsaurus_flyt.container_runtime import get_container_runtime_command
 from ytsaurus_flyt.flink_conf import flink_config_warnings, user_flink_config
-from ytsaurus_flyt.models import ClusterParams, ClusterPreset
+from ytsaurus_flyt.models import MIB, ClusterParams, ClusterPreset
 
 
 def _check_mksquashfs() -> Tuple[bool, str]:
@@ -68,6 +68,17 @@ def _application_rows(config: FlytConfig, preset: ClusterParams, user: Dict[str,
     ]
 
 
+def _minicluster_row(config: FlytConfig, preset: ClusterParams, user: Dict[str, str]) -> _Row:
+    """The MiniCluster job exactly as ``flyt run`` sizes it."""
+    try:
+        job = minicluster_job(config, preset, user)
+    except ValueError as e:
+        return ("cluster_mode", False, f"minicluster: {e}")
+    if not job.flink_memory:
+        return ("cluster_mode", True, "minicluster (single job, in-JVM MiniCluster)")
+    return ("cluster_mode", True, f"minicluster: one TaskManager ({job.cpu} cpu, {job.memory // MIB}m)")
+
+
 def validate_flyt_config(
     config: FlytConfig,
     *,
@@ -84,8 +95,8 @@ def validate_flyt_config(
     if config.is_application_cluster:
         if user is not None:
             rows.extend(_application_rows(config, preset or ClusterPreset.MICRO.params, user))
-    else:
-        rows.append(("cluster_mode", True, "minicluster (single job, in-JVM MiniCluster)"))
+    elif user is not None:
+        rows.append(_minicluster_row(config, preset or ClusterPreset.MICRO.params, user))
     rows.extend(flink_rows)
 
     ok_pkgs = bool(config.runtime_python_packages)

@@ -1,6 +1,6 @@
-"""The application cluster of a run: the YT resources of its JobManager and TaskManagers and the
-``config.yaml`` they all share. TaskManagers are sized by the preset, the JobManager by flyt's defaults;
-the Flink keys of the user's configuration (slots, ``*.memory.process.size``) win over both.
+"""The YT resources of a run and the ``config.yaml`` of its jobs. TaskManagers, and the MiniCluster job,
+which is one TaskManager, are sized by the preset, the JobManager by flyt's defaults; the Flink keys of the
+user's configuration (slots, ``*.memory.process.size``) win over both.
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ from ytsaurus_flyt.flink_conf import (
     TM_PROCESS_SIZE_KEY,
     cluster_flink_config,
     custom_memory_keys,
+    minicluster_flink_config,
 )
 from ytsaurus_flyt.models import (
     DEFAULT_JOBMANAGER_CPU,
@@ -61,6 +62,13 @@ def _process_memory(user: Mapping[str, str], key: str, prefix: str, flyt_keys: f
             f"set {key} as well: it sizes the YT container"
         )
     return None
+
+
+def _check_room_for_jvm(role: str, process_memory: int) -> None:
+    if process_memory <= JVM_OVERHEAD_MIN:
+        raise ValueError(
+            f"{role} memory {process_memory // MIB}m leaves no JVM next to the {JVM_OVERHEAD_MIN // MIB}m JVM overhead"
+        )
 
 
 @dataclass(frozen=True)
@@ -117,11 +125,8 @@ def resolve_application_resources(
         _process_memory(user, JM_PROCESS_SIZE_KEY, JM_MEMORY_PREFIX, JM_MEMORY_DEFAULT_KEYS)
         or DEFAULT_JOBMANAGER_PROCESS_MEMORY
     )
-    for role, size in (("TaskManager", taskmanager_process_memory), ("JobManager", jobmanager_process_memory)):
-        if size <= JVM_OVERHEAD_MIN:
-            raise ValueError(
-                f"{role} memory {size // MIB}m leaves no JVM next to the {JVM_OVERHEAD_MIN // MIB}m JVM overhead"
-            )
+    _check_room_for_jvm("TaskManager", taskmanager_process_memory)
+    _check_room_for_jvm("JobManager", jobmanager_process_memory)
     capacity = config.taskmanager_count * slots
     default_parallelism = _int_option(user, DEFAULT_PARALLELISM_KEY) or capacity
     if default_parallelism > capacity:
@@ -157,3 +162,32 @@ def application_cluster(
     user = user or {}
     resources = resolve_application_resources(config, taskmanager_size, user)
     return ApplicationCluster(resources=resources, flink_config=cluster_flink_config(config, resources, user))
+
+
+@dataclass(frozen=True)
+class MiniClusterJob:
+    """The MiniCluster YT job: its cpu, its container (``memory``) and its ``config.yaml``.
+    ``flink_memory`` means the run script lays out the JVM by Flink's TaskManager memory model."""
+
+    cpu: int
+    memory: int
+    flink_memory: bool
+    flink_config: Dict[str, str]
+
+
+def minicluster_job(
+    config: FlytConfig, preset: ClusterParams, user: Optional[Mapping[str, str]] = None
+) -> MiniClusterJob:
+    """The MiniCluster job is one TaskManager: ``taskmanager_cpu`` and ``taskmanager.memory.process.size``
+    override the preset's cpu and container, as they do for every TaskManager in application mode."""
+    user = user or {}
+    cpu = config.taskmanager_cpu if config.taskmanager_cpu is not None else preset.cpu
+    process_memory = _process_memory(user, TM_PROCESS_SIZE_KEY, TM_MEMORY_PREFIX, TM_MEMORY_DEFAULT_KEYS)
+    if process_memory is not None:
+        _check_room_for_jvm("MiniCluster", process_memory)
+    return MiniClusterJob(
+        cpu=cpu,
+        memory=process_memory if process_memory is not None else preset.memory_bytes(),
+        flink_memory=process_memory is not None,
+        flink_config=minicluster_flink_config(config, preset, user, cpu=cpu, process_memory=process_memory),
+    )
