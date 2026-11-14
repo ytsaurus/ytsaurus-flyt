@@ -36,7 +36,7 @@ def parse_memory(memory: Union[str, int]) -> int:
 
 
 # Application-mode JobManager defaults: its load barely depends on the job (dispatcher, REST, blob
-# server, plan compilation). TaskManagers are sized by the preset.
+# server, plan compilation). Its options are jobmanager.memory.process.size and flyt.jobmanager.cpu.cores.
 DEFAULT_JOBMANAGER_CPU = 2
 DEFAULT_JOBMANAGER_PROCESS_MEMORY = parse_memory("2560M")
 # The YT container is process.size, so Flink's jvm-overhead holds the JVM's native memory and every process
@@ -47,7 +47,7 @@ JVM_OVERHEAD_MIN = parse_memory("512M")
 @dataclass(frozen=True)
 class ClusterParams:
     """Size of a flyt job: the MiniCluster YT job, or every TaskManager YT job in application mode
-    (``cpu`` is then also its task slot count, ``memory`` its container). ``max_heap_size`` (``-Xmx``)
+    (``cpu`` is then also its default task slot count, ``memory`` its container). ``max_heap_size`` (``-Xmx``)
     and ``off_heap_size`` (``-XX:MaxDirectMemorySize``) apply to the MiniCluster JVM only."""
 
     cpu: int
@@ -120,49 +120,3 @@ class OperationParams:
     description: Optional[str] = None
     max_failed_job_count: Optional[int] = None
     acl: Optional[List[Dict[str, Any]]] = None
-
-
-@dataclass
-class JobmanagerParams:
-    """The JobManager YT job of ``cluster_mode: application``: ``process_memory`` is
-    ``jobmanager.memory.process.size``, which is also the container."""
-
-    cpu: int
-    process_memory: int
-
-    def __post_init__(self) -> None:
-        if self.process_memory < 1:
-            raise ValueError(f"JobmanagerParams.process_memory must be positive, got {self.process_memory}")
-
-    @property
-    def memory(self) -> int:
-        """YT ``memory_limit`` of the JobManager job."""
-        return self.process_memory
-
-
-@dataclass
-class TaskmanagerParams:
-    """Parameters for the Flink TaskManager task (``cluster_mode: application`` only).
-
-    ``count`` TaskManager YT jobs are started, each with ``slots`` task slots; the default
-    job parallelism becomes ``count * slots``. ``process_memory`` is
-    ``taskmanager.memory.process.size``, which is also the YT container.
-    """
-
-    cpu: int
-    process_memory: int
-    count: int
-    slots: int
-
-    def __post_init__(self) -> None:
-        if self.count < 1:
-            raise ValueError(f"TaskmanagerParams.count must be >= 1, got {self.count}")
-        if self.slots < 1:
-            raise ValueError(f"TaskmanagerParams.slots must be >= 1, got {self.slots}")
-        if self.process_memory < 1:
-            raise ValueError(f"TaskmanagerParams.process_memory must be positive, got {self.process_memory}")
-
-    @property
-    def memory(self) -> int:
-        """YT ``memory_limit`` of one TaskManager YT job."""
-        return self.process_memory

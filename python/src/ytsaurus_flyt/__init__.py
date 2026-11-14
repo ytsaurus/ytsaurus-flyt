@@ -8,9 +8,7 @@ from ytsaurus_flyt.config import ClusterMode, FlytConfig
 from ytsaurus_flyt.models import (
     ClusterParams,
     ClusterPreset,
-    JobmanagerParams,
     OperationParams,
-    TaskmanagerParams,
 )
 
 __all__ = [
@@ -21,9 +19,7 @@ __all__ = [
     "ApplicationResources",
     "ClusterParams",
     "ClusterPreset",
-    "JobmanagerParams",
     "OperationParams",
-    "TaskmanagerParams",
     "build_vanilla_operation_spec",
     "ensure_runtime_layer",
     "FlinkLibJarsResolveResult",

@@ -22,22 +22,22 @@ def _with_cpu(user, cpu):
 
 def test_preset_sizes_every_taskmanager_and_jobmanager_keeps_defaults():
     res = resolve_application_resources(ClusterPreset.LARGE.params, {_REPLICAS: "3"})
-    assert (res.taskmanager_cpu, res.slots) == (4, 4)  # one slot per cpu
-    assert res.taskmanager_process_memory == 16 * 1024 * _MIB  # container = process.size = preset memory
-    assert res.taskmanager_params().memory == 16 * 1024 * _MIB
+    assert (res.taskmanager_size.cpu, res.slots) == (4, 4)  # one slot per cpu
+    assert res.taskmanager_size.memory == 16 * 1024 * _MIB  # container = process.size = preset memory
+    assert res.taskmanager_size.memory == 16 * 1024 * _MIB
     assert (res.jobmanager_cpu, res.jobmanager_process_memory) == (2, 2560 * _MIB)
-    assert res.jobmanager_params().memory == 2560 * _MIB
+    assert res.jobmanager_process_memory == 2560 * _MIB
     assert res.default_parallelism == 12
 
 
 def test_own_sizing_takes_cpu_and_process_size_instead_of_a_preset():
     user = {_REPLICAS: "2", _TM_CPU: "6", _JM_CPU: "4", "taskmanager.memory.process.size": "8g"}
     res = resolve_application_resources(None, user)
-    assert (res.taskmanager_cpu, res.slots, res.default_parallelism) == (6, 6, 12)
-    assert res.taskmanager_process_memory == 8 * 1024 * _MIB
+    assert (res.taskmanager_size.cpu, res.slots, res.default_parallelism) == (6, 6, 12)
+    assert res.taskmanager_size.memory == 8 * 1024 * _MIB
     assert res.jobmanager_cpu == 4
     # without any own sizing the micro preset applies
-    assert resolve_application_resources().taskmanager_cpu == ClusterPreset.MICRO.params.cpu
+    assert resolve_application_resources().taskmanager_size.cpu == ClusterPreset.MICRO.params.cpu
 
 
 @pytest.mark.parametrize(
@@ -58,6 +58,7 @@ def test_a_preset_does_not_combine_with_own_sizing(cpu, user, match):
     [
         (6, {}, "needs taskmanager.memory.process.size"),
         (6, {"taskmanager.memory.flink.size": "4g"}, "needs taskmanager.memory.process.size"),
+        (6, {"taskmanager.memory.process.size": ""}, "needs taskmanager.memory.process.size"),
         (6, {"taskmanager.memory.process.size": "lots"}, "not a memory size"),
     ],
 )
@@ -69,11 +70,11 @@ def test_own_sizing_needs_process_size(cpu, user, match):
 def test_own_sizing_cpu_defaults_to_the_slots():
     size = {"taskmanager.memory.process.size": "4g"}
     res = resolve_application_resources(None, size)
-    assert (res.taskmanager_cpu, res.slots) == (1, 1)
+    assert (res.taskmanager_size.cpu, res.slots) == (1, 1)
     res = resolve_application_resources(None, {**size, "taskmanager.numberOfTaskSlots": "4"})
-    assert (res.taskmanager_cpu, res.slots) == (4, 4)
+    assert (res.taskmanager_size.cpu, res.slots) == (4, 4)
     res = resolve_application_resources(None, {**size, _TM_CPU: "2", "taskmanager.numberOfTaskSlots": "4"})
-    assert (res.taskmanager_cpu, res.slots) == (2, 4)
+    assert (res.taskmanager_size.cpu, res.slots) == (2, 4)
 
 
 def test_preset_too_small_for_a_taskmanager_jvm_is_rejected():
@@ -103,9 +104,9 @@ def test_flink_keys_override_slots_memory_and_parallelism():
         _TM_CPU: "2",
     }
     res = resolve_application_resources(None, user)
-    assert (res.taskmanager_cpu, res.slots, res.default_parallelism) == (2, 3, 4)
-    assert res.taskmanager_params().memory == 6 * 1024 * _MIB  # container = process.size
-    assert res.jobmanager_params().memory == 1024 * _MIB
+    assert (res.taskmanager_size.cpu, res.slots, res.default_parallelism) == (2, 3, 4)
+    assert res.taskmanager_size.memory == 6 * 1024 * _MIB  # container = process.size
+    assert res.jobmanager_process_memory == 1024 * _MIB
 
 
 def test_default_parallelism_above_the_capacity_is_rejected():

@@ -2,6 +2,8 @@
 
 Layers, later wins: flyt's defaults (partly per mode), the user's Flink configuration
 (``base_flink_conf_path``, ``flink_config_override``, ``flyt run -D``), then the keys flyt owns.
+This module holds what both modes share; :mod:`ytsaurus_flyt.application` and :mod:`ytsaurus_flyt.minicluster`
+build their ``config.yaml`` from it.
 The result is written to ``flink/conf/config.yaml`` of every YT job: the JobManager and TaskManagers
 read it in ``application`` mode, the MiniCluster gets it as the script's context configuration.
 """
@@ -14,12 +16,15 @@ from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional, Tuple
 import yaml
 
 from ytsaurus_flyt.config import FlytConfig
-from ytsaurus_flyt.models import JVM_OVERHEAD_MIN, MIB, ClusterParams, parse_memory
+from ytsaurus_flyt.models import JVM_OVERHEAD_MIN, MIB, parse_memory
 
 if TYPE_CHECKING:
     from yt.wrapper import YtClient
 
-    from ytsaurus_flyt.application import ApplicationResources
+
+class FlinkConfigError(ValueError):
+    """The user's Flink configuration or the cluster sized from it is invalid."""
+
 
 TASK_SLOTS_KEY = "taskmanager.numberOfTaskSlots"
 DEFAULT_PARALLELISM_KEY = "parallelism.default"
@@ -36,9 +41,7 @@ FLYT_TM_CPU_KEY = "flyt.taskmanager.cpu.cores"
 FLYT_TM_REPLICAS_KEY = "flyt.taskmanager.replicas"
 # jvm-overhead.min/max/fraction under each role's prefix: flyt keeps min (and max) at JVM_OVERHEAD_MIN or above.
 _JVM_OVERHEAD_KEYS = ("jvm-overhead.min", "jvm-overhead.max", "jvm-overhead.fraction")
-# The memory keys flyt sets itself, plus the overhead that only carves process.size. Any other key under the
-# role's prefix means the user configures Flink's memory model: flyt then adds none of these defaults
-# instead of second-guessing Flink.
+# Keys flyt sets itself plus the overhead; any other memory key of the role turns flyt's memory defaults off.
 TM_MEMORY_DEFAULT_KEYS = frozenset(
     {TM_PROCESS_SIZE_KEY, TM_TASK_OFF_HEAP_KEY, TM_MANAGED_FRACTION_KEY}
     | {TM_MEMORY_PREFIX + k for k in _JVM_OVERHEAD_KEYS}
@@ -123,11 +126,17 @@ def load_flink_conf_file(path: str, yt_client: Optional[YtClient] = None) -> Dic
         raw = yt_client.read_file(path).read()
         text = raw.decode("utf-8") if isinstance(raw, bytes) else str(raw)
     else:
-        with open(os.path.expanduser(path), "r", encoding="utf-8") as f:
-            text = f.read()
-    data = yaml.safe_load(text) or {}
+        try:
+            with open(os.path.expanduser(path), "r", encoding="utf-8") as f:
+                text = f.read()
+        except OSError as e:
+            raise FlinkConfigError(f"base_flink_conf_path {path!r}: {e.strerror or e}") from e
+    try:
+        data = yaml.safe_load(text) or {}
+    except yaml.YAMLError as e:
+        raise FlinkConfigError(f"base_flink_conf_path {path!r} is not valid YAML: {e}") from e
     if not isinstance(data, Mapping):
-        raise ValueError(f"base_flink_conf_path {path!r} must contain a YAML mapping, got {type(data).__name__}")
+        raise FlinkConfigError(f"base_flink_conf_path {path!r} must contain a YAML mapping, got {type(data).__name__}")
     return flatten_flink_config(data)
 
 
@@ -139,15 +148,15 @@ def user_flink_config(config: FlytConfig, yt_client: Optional[YtClient] = None) 
     return merged
 
 
-def custom_memory_keys(user: Mapping[str, str], prefix: str, flyt_keys: frozenset) -> List[str]:
-    return sorted(k for k in user if k.startswith(prefix) and k not in flyt_keys)
+def custom_memory_keys(user: Mapping[str, str], prefix: str, exclude_keys: frozenset) -> List[str]:
+    return sorted(k for k in user if k.startswith(prefix) and k not in exclude_keys)
 
 
-def _mebibytes(size_bytes: int) -> str:
+def mebibytes(size_bytes: int) -> str:
     return f"{max(int(size_bytes) // MIB, 1)}m"
 
 
-def _common_defaults(config: FlytConfig) -> Dict[str, str]:
+def common_defaults(config: FlytConfig) -> Dict[str, str]:
     """flyt's defaults that do not depend on the mode; the user's configuration overrides any of them."""
     return {
         # Without checkpointing Flink defaults to no restarts: a failure would end the script and turn
@@ -166,7 +175,7 @@ def _common_defaults(config: FlytConfig) -> Dict[str, str]:
     }
 
 
-def _apply_user_and_owned(props: Dict[str, str], user: Mapping[str, str], jvm_opts: Mapping[str, str]) -> None:
+def apply_user_and_owned(props: Dict[str, str], user: Mapping[str, str], jvm_opts: Mapping[str, str]) -> None:
     props.update(user)
     for key in RUNTIME_FLINK_KEYS | {REST_BIND_PORT_KEY}:
         props.pop(key, None)
@@ -176,7 +185,7 @@ def _apply_user_and_owned(props: Dict[str, str], user: Mapping[str, str], jvm_op
     props.update(jvm_opts)
 
 
-def _jvm_overhead_floor(
+def jvm_overhead_floor(
     props: Mapping[str, str], prefixes: Tuple[str, ...] = (JM_MEMORY_PREFIX, TM_MEMORY_PREFIX)
 ) -> Dict[str, str]:
     """``*.memory.jvm-overhead.min``/``.max`` raised to :data:`JVM_OVERHEAD_MIN` where ``props`` has less;
@@ -184,92 +193,39 @@ def _jvm_overhead_floor(
     out: Dict[str, str] = {}
     for prefix in prefixes:
         min_key, max_key = prefix + "jvm-overhead.min", prefix + "jvm-overhead.max"
-        if min_key not in props or _memory_option(props, min_key) < JVM_OVERHEAD_MIN:
-            out[min_key] = _mebibytes(JVM_OVERHEAD_MIN)
-        if max_key in props and _memory_option(props, max_key) < JVM_OVERHEAD_MIN:
-            out[max_key] = _mebibytes(JVM_OVERHEAD_MIN)
+        if min_key not in props or memory_option(props, min_key) < JVM_OVERHEAD_MIN:
+            out[min_key] = mebibytes(JVM_OVERHEAD_MIN)
+        if max_key in props and memory_option(props, max_key) < JVM_OVERHEAD_MIN:
+            out[max_key] = mebibytes(JVM_OVERHEAD_MIN)
     return out
 
 
-def _memory_option(props: Mapping[str, str], key: str) -> int:
+def memory_option(props: Mapping[str, str], key: str) -> int:
     raw = str(props[key]).strip().replace(" ", "")
     try:
         return parse_memory(raw)
     except ValueError as e:
-        raise ValueError(f"{key} is not a memory size: {raw!r}") from e
+        raise FlinkConfigError(f"{key} is not a memory size: {raw!r}") from e
 
 
-def _taskmanager_memory_defaults(props: Dict[str, str], user: Mapping[str, str], process_size: int) -> None:
+def int_option(user: Mapping[str, str], key: str) -> Optional[int]:
+    raw = str(user.get(key) or "").strip()
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except ValueError as e:
+        raise FlinkConfigError(f"{key} must be an integer, got {raw!r}") from e
+    if value < 1:
+        raise FlinkConfigError(f"{key} must be >= 1, got {raw!r}")
+    return value
+
+
+def taskmanager_memory_defaults(props: Dict[str, str], user: Mapping[str, str], process_size: int) -> None:
     if not custom_memory_keys(user, TM_MEMORY_PREFIX, TM_MEMORY_DEFAULT_KEYS):
-        props[TM_PROCESS_SIZE_KEY] = _mebibytes(process_size)
-        props[TM_TASK_OFF_HEAP_KEY] = _mebibytes(int(process_size * TASKMANAGER_TASK_OFF_HEAP_FRACTION))
+        props[TM_PROCESS_SIZE_KEY] = mebibytes(process_size)
+        props[TM_TASK_OFF_HEAP_KEY] = mebibytes(int(process_size * TASKMANAGER_TASK_OFF_HEAP_FRACTION))
         props[TM_MANAGED_FRACTION_KEY] = TASKMANAGER_MANAGED_MEMORY_FRACTION
-
-
-def cluster_flink_config(
-    config: FlytConfig, resources: ApplicationResources, user: Mapping[str, str]
-) -> Dict[str, str]:
-    """The ``config.yaml`` shared by the JobManager and TaskManagers in application mode.
-
-    Per-container keys (``jobmanager.rpc.address``, ``rest.address``, ``taskmanager.host``,
-    ``taskmanager.resource-id``) are not here: the run scripts pass them on the command line.
-    """
-    props = _common_defaults(config)
-    props[TASK_SLOTS_KEY] = str(resources.slots)
-    props[DEFAULT_PARALLELISM_KEY] = str(resources.default_parallelism)
-    if not custom_memory_keys(user, JM_MEMORY_PREFIX, JM_MEMORY_DEFAULT_KEYS):
-        props[JM_PROCESS_SIZE_KEY] = _mebibytes(resources.jobmanager_process_memory)
-    _taskmanager_memory_defaults(props, user, resources.taskmanager_process_memory)
-    all_opts, jm_opts, tm_opts = JVM_DEFAULT_OPTS_KEYS
-    _apply_user_and_owned(
-        props,
-        user,
-        {
-            all_opts: " ".join(JVM_COMMON_OPTS),
-            # The processor count is the container cpu.
-            jm_opts: f"-XX:ActiveProcessorCount={resources.jobmanager_cpu} {JVM_EXIT_ON_OOM_OPT}",
-            tm_opts: f"-XX:ActiveProcessorCount={resources.taskmanager_cpu} {JVM_EXIT_ON_OOM_OPT}",
-        },
-    )
-    props[TM_CPU_CORES_KEY] = str(resources.taskmanager_cpu)
-    props.update(_jvm_overhead_floor(props))
-    return props
-
-
-def minicluster_flink_config(
-    config: FlytConfig,
-    preset: Optional[ClusterParams],
-    user: Mapping[str, str],
-    *,
-    cpu: Optional[int] = None,
-    process_memory: Optional[int] = None,
-) -> Dict[str, str]:
-    """The ``config.yaml`` of a MiniCluster job: the same layers as :func:`cluster_flink_config`. The preset
-    sizes the job's JVM, which the PyFlink gateway starts with ``env.java.*``; without one, ``cpu`` and
-    ``process_memory`` (``taskmanager.memory.process.size``) make the job one TaskManager, and the run script
-    adds the JVM flags Flink derives for it."""
-    if preset is None and (cpu is None or process_memory is None):
-        raise ValueError("a MiniCluster without a preset needs cpu and process_memory")
-    cpu = cpu or preset.cpu
-    props = _common_defaults(config)
-    # Every cpu of the job, like every slot of an application cluster (and like PyFlink's local default).
-    props[DEFAULT_PARALLELISM_KEY] = str(cpu)
-    jvm_opts: List[str] = []
-    if preset is not None:
-        jvm_opts.append(f"-Xmx{preset.max_heap_size}")
-        if preset.off_heap_size:
-            # Bounds NIO/netty direct buffers (gRPC connectors); otherwise the JVM
-            # defaults MaxDirectMemorySize to ~the max heap size.
-            jvm_opts.append(f"-XX:MaxDirectMemorySize={preset.off_heap_size}")
-    else:
-        assert process_memory is not None
-        _taskmanager_memory_defaults(props, user, process_memory)
-    jvm_opts += [f"-XX:ActiveProcessorCount={cpu}", JVM_EXIT_ON_OOM_OPT, *JVM_COMMON_OPTS]
-    _apply_user_and_owned(props, user, {JVM_DEFAULT_OPTS_KEYS[0]: " ".join(jvm_opts)})
-    props[TM_CPU_CORES_KEY] = str(cpu)
-    if preset is None:
-        props.update(_jvm_overhead_floor(props, (TM_MEMORY_PREFIX,)))
-    return props
 
 
 def flink_config_warnings(config: FlytConfig, user: Mapping[str, str]) -> List[str]:
@@ -301,7 +257,7 @@ def flink_config_warnings(config: FlytConfig, user: Mapping[str, str]) -> List[s
         out += [
             f"{key} is raised to {value}: the YT container is process.size, and the JVM overhead holds "
             f"the processes outside the JVM as well"
-            for key, value in sorted(_jvm_overhead_floor(user, prefixes).items())
+            for key, value in sorted(jvm_overhead_floor(user, prefixes).items())
             if key in user
         ]
     if not config.is_application_cluster:
@@ -314,10 +270,15 @@ def flink_config_warnings(config: FlytConfig, user: Mapping[str, str]) -> List[s
         out += [
             f"{key} has no effect in minicluster mode: the job is one JVM" for key in _ROLE_JVM_OPTS_KEYS if key in user
         ]
+        out += [
+            f"{key} has no effect in minicluster mode: the job is one TaskManager"
+            for key in (FLYT_JM_CPU_KEY, FLYT_TM_REPLICAS_KEY)
+            if key in user
+        ]
         if TASK_SLOTS_KEY in user:
             out.append(
-                f"{TASK_SLOTS_KEY} is not needed in minicluster mode: the MiniCluster gets one slot per "
-                f"subtask of the widest operator; fewer slots fail the job, set {DEFAULT_PARALLELISM_KEY} instead"
+                f"{TASK_SLOTS_KEY} is not needed in minicluster mode: the MiniCluster gets as many slots as the "
+                f"job graph's max parallelism; fewer slots fail the job, set {DEFAULT_PARALLELISM_KEY} instead"
             )
     return out
 

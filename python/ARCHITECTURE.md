@@ -86,17 +86,30 @@ List basenames in `embed_squashfs_layer_jar_basenames` (inside the layer) and/or
 
 ## Code layout
 
-The code is split so the CLI, YTsaurus submission, and layer/image build logic can be tested independently. YT job bootstrap is concatenated bash from `run_scripts/`: `common/` prepares the sandbox for every role, then `minicluster/run.sh` or the `application/` fragments with one entry script per role (`jobmanager.sh`, `taskmanager.sh`). `application` resolves the application cluster's YT resources; `flink_conf` builds the `config.yaml` of every YT job in both modes from flyt's defaults and the user's Flink configuration (`common/06_write_flink_conf.sh` writes it).
-
+The code is split so the CLI, YTsaurus submission, and layer/image build logic can be tested independently. YT job bootstrap is concatenated bash from `run_scripts/`: `common/` prepares the sandbox for every role, then `minicluster/run.sh` or the `application/` fragments with one entry script per role (`jobmanager.sh`, `taskmanager.sh`). `sizing` sizes one TaskManager (a preset or the user's own sizing), `application` resolves the application cluster's YT resources from it, `minicluster` the MiniCluster job; each of them builds the `config.yaml` of its YT jobs from what `flink_conf` shares between the modes: flyt's defaults, the user's Flink configuration and the keys flyt owns.
 ```mermaid
 graph LR
-    m[__main__] --> L[launcher]
-    L --> cfg[config]
-    L --> app[application]
-    L --> fc[flink_conf]
-    L --> sp[spec]
-    app --> fc
-    sp --> fc
-    L --> lb[layer_builder]
-    L --> jlib[flink_lib_jars]
+    subgraph cli[CLI]
+        direction TB
+        m[__main__] --> pr[profiles]
+        m --> vc[validate_config]
+    end
+    subgraph build[Build]
+        lb[layer_builder] --> jlib[flink_lib_jars]
+        lb --> wu[wheel_utils]
+    end
+    subgraph conf[Flink configuration]
+        app[application] --> sz[sizing]
+        mc[minicluster] --> sz
+        app & mc & sz --> fc[flink_conf]
+    end
+    subgraph launch[Launch]
+        L[launcher] --> sp[spec]
+    end
+    cli --> L
+    sp --> app & mc & fc
+    cli -- install, build-layer, wheel --> build
+    L --> build
+
 ```
+Not drawn: `config` and `models`, used by almost every module; `ui_tracker` and `jobshell_resolve`, which find the Flink UI and the driver job of a running operation for `flyt run`, `flyt ui` and `flyt jobshell`; and the helpers `job_proxy` (the YT proxy of application-mode jobs), `yt_client`, `credentials`, `cli_helpers`, `container_runtime` and `jar_utils`; `__init__` only re-exports the public API.

@@ -137,7 +137,8 @@ class FlytConfig:
     """``minicluster``: one YT job runs the PyFlink script with an in-JVM MiniCluster (JobManager and
     TaskManager share a single JVM). ``application``: a Flink application cluster with a
     ``jobmanager`` task (one gang YT job) and a ``taskmanager`` task with ``flyt.taskmanager.replicas`` jobs.
-    The cluster's resources are Flink options (``flyt.*`` keys, ``taskmanager.memory.*``), see ``flink_conf``.
+    The cluster's resources are Flink options (``flyt.*`` keys, ``taskmanager.memory.*``), see ``sizing`` and
+    ``application``.
     """
 
     discovery_timeout: int = 300

@@ -13,6 +13,7 @@ from ytsaurus_flyt.spec import (
     MINICLUSTER_TASK,
     TASKMANAGER_TASK,
     build_vanilla_operation_spec,
+    resolve_flink_cluster,
 )
 
 _MICRO = ClusterPreset.MICRO.params
@@ -43,7 +44,7 @@ def _build(config: FlytConfig, preset=_MICRO, **kwargs):
         config=config,
         operation_params=_op(),
         secure_vault={},
-        preset_params=preset,
+        cluster=resolve_flink_cluster(config, preset),
         **kwargs,
     ).build()
 
@@ -149,7 +150,7 @@ def test_application_sandbox_unpack_keeps_unpack_fragment_and_drops_layer_paths(
         operation_params=OperationParams(file_paths=["//tmp/runtime.squashfs", "//tmp/wheel.whl"], pool="pool"),
         secure_vault={},
         use_squashfs_sandbox_unpack=True,
-        preset_params=_MICRO,
+        cluster=resolve_flink_cluster(cfg, _MICRO),
         yt_client=_CLIENT,
     ).build()
     for task in spec["tasks"].values():
@@ -175,7 +176,7 @@ def _minicluster_spec(cfg: FlytConfig, preset=_MICRO) -> dict:
         config=cfg,
         operation_params=_op(),
         secure_vault={},
-        preset_params=preset,
+        cluster=resolve_flink_cluster(cfg, preset),
     ).build()
 
 
@@ -236,7 +237,7 @@ def test_rendered_run_scripts_are_valid_bash(mode, delivery, tmp_path):
             config=cfg,
             operation_params=_op(),
             secure_vault={},
-            preset_params=_MICRO,
+            cluster=resolve_flink_cluster(cfg, _MICRO),
             use_squashfs_sandbox_unpack=unpack,
         ).build()
     for name, task in spec["tasks"].items():

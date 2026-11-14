@@ -61,3 +61,10 @@ def test_validate_fails_on_a_missing_flink_config_file(tmp_path):
     )
     assert _named(rows, "flink config.yaml")[0][0] is False
     assert not _named(rows, "cluster_mode")
+
+
+def test_validate_fails_on_an_invalid_memory_size_in_the_flink_config():
+    override = {"taskmanager.memory.jvm-overhead.min": "abc"}
+    rows = validate_flyt_config(FlytConfig(cluster_mode="application", flink_config_override=override))
+    assert _named(rows, "flink config.yaml")[0][0] is False
+    assert "not a memory size" in _named(rows, "flink config.yaml")[0][1]

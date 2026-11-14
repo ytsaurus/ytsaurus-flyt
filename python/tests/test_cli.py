@@ -426,10 +426,13 @@ def test_validate_reports_an_unknown_profile_preset(monkeypatch, tmp_path: Path)
     )
     (tmp_path / "active").write_text("p\n", encoding="utf-8")
     monkeypatch.setattr("ytsaurus_flyt.__main__.make_yt_client", lambda _p: object())
-    monkeypatch.setattr("ytsaurus_flyt.__main__.validate_flyt_config", lambda *a, **k: [("check", True, "ok")])
+    rows = [("check", True, "ok"), ("cluster_mode", True, "application: sized as micro")]
+    monkeypatch.setattr("ytsaurus_flyt.__main__.validate_flyt_config", lambda *a, **k: rows)
     result = CliRunner().invoke(cli, ["validate"], catch_exceptions=False)
     assert result.exit_code == 1
     assert "[!!] preset: unknown preset 'larg'" in result.output
+    assert "[OK] check: ok" in result.output
+    assert "cluster_mode" not in result.output  # sized without the profile's preset
 
 
 def _run_capturing(monkeypatch, tmp_path: Path, profile_body: str, args: list) -> dict:
@@ -466,6 +469,29 @@ def test_run_flink_conf_replaces_the_profile_flink_configuration(monkeypatch, tm
     cfg = captured["config"]
     assert cfg.base_flink_conf_path == "//conf.yaml"
     assert cfg.flink_config_override == {"b": "2"}
+
+
+def test_run_reports_only_flink_configuration_errors_as_messages(monkeypatch, tmp_path: Path) -> None:
+    from ytsaurus_flyt.flink_conf import FlinkConfigError
+
+    monkeypatch.setenv("FLYT_CONFIG_DIR", str(tmp_path))
+    _write_profile(tmp_path, "p1")
+    monkeypatch.setattr("ytsaurus_flyt.__main__.make_yt_client", lambda _p: object())
+    args = ["run", "--wheel", "svc.whl", "x.py"]
+
+    def raise_(error):  # type: ignore[no-untyped-def]
+        def launch(**kw):  # type: ignore[no-untyped-def]
+            raise error
+
+        return launch
+
+    monkeypatch.setattr("ytsaurus_flyt.__main__.launch_vanilla_job", raise_(FlinkConfigError("bad sizing")))
+    result = CliRunner().invoke(cli, args)
+    assert result.exit_code == 1 and "Error: bad sizing" in result.output
+
+    monkeypatch.setattr("ytsaurus_flyt.__main__.launch_vanilla_job", raise_(ValueError("a bug")))
+    result = CliRunner().invoke(cli, args)
+    assert isinstance(result.exception, ValueError) and "Error: a bug" not in result.output
 
 
 def test_run_rejects_a_dynamic_option_without_a_value(monkeypatch, tmp_path: Path) -> None:

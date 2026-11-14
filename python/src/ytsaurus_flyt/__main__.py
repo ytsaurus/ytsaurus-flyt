@@ -17,7 +17,7 @@ import yaml
 
 from ytsaurus_flyt.cli_helpers import find_pyproject_for_job, job_command_relative_to_project, resolve_proxy_pool
 from ytsaurus_flyt.config import DEFAULT_JAVA_HOME, ClusterMode, FlytConfig
-from ytsaurus_flyt.flink_conf import FLYT_TM_REPLICAS_KEY
+from ytsaurus_flyt.flink_conf import FLYT_TM_REPLICAS_KEY, FlinkConfigError
 from ytsaurus_flyt.flink_lib_jars import (
     download_flink_lib_jars,
     partition_flink_lib_jars_for_delivery,
@@ -112,11 +112,10 @@ def _resolve_connection(
 
 
 def _default_profile_body(proxy: str, pool: str, preset: Optional[str], cypress: str) -> Dict[str, Any]:
-    body: Dict[str, Any] = {"proxy": proxy, "pool": pool}
-    if preset:
-        body["preset"] = preset
     return {
-        **body,
+        "proxy": proxy,
+        "pool": pool,
+        **({"preset": preset} if preset else {}),
         "cypress_base_path": cypress,
         "squashfs_layer_delivery": "layer_paths",
         "runtime_python_packages": ["apache-flink==1.20.1"],
@@ -356,6 +355,8 @@ def validate(
         cfg, proxy=px or None, yt_client=yt_client, preset=preset_member.params if preset_member else None
     )
     if pst and preset_member is None:
+        # The cluster was sized without the preset the profile names: its rows would describe another run.
+        rows = [row for row in rows if row[0] != "cluster_mode"]
         rows.insert(0, ("preset", False, f"unknown preset {pst!r}; use one of micro, small, large, xlarge"))
     ok_all = True
     for name, ok, msg in rows:
@@ -392,7 +393,7 @@ def _parse_flink_options(options: Tuple[str, ...]) -> Dict[str, str]:
     type=click.Choice(["micro", "small", "large", "xlarge"], case_sensitive=False),
     default=None,
     help="Resource preset: the MiniCluster YT job, or every TaskManager YT job for --mode application "
-    "(cpu = task slots, memory = container). Default: from profile, else micro; none with fine-grained resource "
+    "(cpu and container memory). Default: from profile, else micro; none with fine-grained resource "
     "configuration (flyt.taskmanager.cpu.cores and taskmanager.memory.* keys), which it does not combine with.",
 )
 @click.option(
@@ -464,10 +465,7 @@ def run(
     _echo_profile_line(ctx)
     job_command = shlex.join(list(job_argv))
     cfg, profile_data = _load_flyt_config_from_profile(ctx)
-    cluster_overrides = {
-        "cluster_mode": cluster_mode,
-    }
-    cluster_overrides = {k: v for k, v in cluster_overrides.items() if v is not None}
+    cluster_overrides: Dict[str, Any] = {"cluster_mode": cluster_mode} if cluster_mode is not None else {}
     if base_flink_conf_path is not None:
         # The file replaces the profile's whole Flink configuration for this run.
         cluster_overrides["base_flink_conf_path"] = base_flink_conf_path
@@ -488,14 +486,10 @@ def run(
     proxy_f, pool_f = _resolve_connection(profile_data, proxy, pool)
     _, _, pst = resolve_connection_from_profile(profile_data)
     preset_s = (preset or "").strip().lower() or (pst or "").strip().lower()
-    preset_enum: Optional[ClusterPreset] = None
-    if preset_s:
-        try:
-            preset_enum = ClusterPreset[preset_s.upper()]
-        except KeyError as e:
-            raise click.ClickException(
-                "Invalid preset %r. Use one of: micro, small, large, xlarge." % (preset_s,)
-            ) from e
+    try:
+        preset_enum = ClusterPreset[preset_s.upper()] if preset_s else None
+    except KeyError as e:
+        raise click.ClickException("Invalid preset %r. Use one of: micro, small, large, xlarge." % (preset_s,)) from e
 
     with contextlib.ExitStack() as stack:
         project_root: Optional[str] = None
@@ -540,7 +534,7 @@ def run(
                     force_rebuild_layer=force_rebuild_layer,
                     profile_name=resolve_effective_profile_name(gp),
                 )
-            except ValueError as e:
+            except FlinkConfigError as e:
                 raise click.ClickException(str(e)) from e
 
 

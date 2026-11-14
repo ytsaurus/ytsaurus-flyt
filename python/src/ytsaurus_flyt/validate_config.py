@@ -7,7 +7,7 @@ from typing import Dict, List, Optional, Tuple
 
 from yt.wrapper import YtClient
 
-from ytsaurus_flyt.application import application_cluster, minicluster_job
+from ytsaurus_flyt.application import ApplicationCluster
 from ytsaurus_flyt.config import (
     SQUASHFS_VALIDATE_RUNTIME_PACKAGES_MSG,
     SQUASHFS_VALIDATE_RUNTIME_VERSION_MSG,
@@ -16,6 +16,7 @@ from ytsaurus_flyt.config import (
 from ytsaurus_flyt.container_runtime import get_container_runtime_command
 from ytsaurus_flyt.flink_conf import flink_config_warnings, user_flink_config
 from ytsaurus_flyt.models import MIB, ClusterParams
+from ytsaurus_flyt.spec import flink_cluster
 
 
 def _check_mksquashfs() -> Tuple[bool, str]:
@@ -48,35 +49,30 @@ def _flink_config_rows(
     """The user's Flink options as ``flyt run`` reads them, with their warnings (both modes)."""
     try:
         user = user_flink_config(config, yt_client)
-    except (OSError, ValueError) as e:
-        return [("flink config.yaml", False, f"{config.base_flink_conf_path}: {e}")], None
+        warnings = flink_config_warnings(config, user)
+    except ValueError as e:
+        return [("flink config.yaml", False, str(e))], None
     source = config.base_flink_conf_path or "no file"
     rows: List[_Row] = [("flink config.yaml", True, f"{source}, {len(user)} user option(s)")]
-    rows.extend(("flink config.yaml", None, warning) for warning in flink_config_warnings(config, user))
+    rows.extend(("flink config.yaml", None, warning) for warning in warnings)
     return rows, user
 
 
-def _application_rows(config: FlytConfig, preset: Optional[ClusterParams], user: Dict[str, str]) -> List[_Row]:
-    """The application cluster exactly as ``flyt run`` resolves it."""
+def _cluster_rows(config: FlytConfig, preset: Optional[ClusterParams], user: Dict[str, str]) -> List[_Row]:
+    """The cluster exactly as ``flyt run`` resolves it (:func:`~ytsaurus_flyt.spec.flink_cluster`)."""
+    mode = config.cluster_mode.value
     try:
-        resources = application_cluster(config, preset, user).resources
+        cluster = flink_cluster(config, preset, user)
     except ValueError as e:
-        return [("cluster_mode", False, f"application: {e}")]
-    return [
-        ("cluster_mode", True, f"application: {resources.summary()}"),
-        ("discovery_timeout", True, f"{config.discovery_timeout}s for TaskManagers to find the JobManager"),
-    ]
-
-
-def _minicluster_row(config: FlytConfig, preset: Optional[ClusterParams], user: Dict[str, str]) -> _Row:
-    """The MiniCluster job exactly as ``flyt run`` sizes it."""
-    try:
-        job = minicluster_job(config, preset, user)
-    except ValueError as e:
-        return ("cluster_mode", False, f"minicluster: {e}")
-    if not job.flink_memory:
-        return ("cluster_mode", True, "minicluster (single job, in-JVM MiniCluster)")
-    return ("cluster_mode", True, f"minicluster: one TaskManager ({job.cpu} cpu, {job.memory // MIB}m)")
+        return [("cluster_mode", False, f"{mode}: {e}")]
+    if isinstance(cluster, ApplicationCluster):
+        return [
+            ("cluster_mode", True, f"{mode}: {cluster.resources.summary()}"),
+            ("discovery_timeout", True, f"{config.discovery_timeout}s for TaskManagers to find the JobManager"),
+        ]
+    if not cluster.flink_memory:
+        return [("cluster_mode", True, f"{mode} (single job, in-JVM MiniCluster)")]
+    return [("cluster_mode", True, f"{mode}: one TaskManager ({cluster.cpu} cpu, {cluster.memory // MIB}m)")]
 
 
 def validate_flyt_config(
@@ -92,11 +88,8 @@ def validate_flyt_config(
 
     rows.append(("Runtime mode", True, "SquashFS"))
     flink_rows, user = _flink_config_rows(config, yt_client)
-    if config.is_application_cluster:
-        if user is not None:
-            rows.extend(_application_rows(config, preset, user))
-    elif user is not None:
-        rows.append(_minicluster_row(config, preset, user))
+    if user is not None:
+        rows.extend(_cluster_rows(config, preset, user))
     rows.extend(flink_rows)
 
     ok_pkgs = bool(config.runtime_python_packages)

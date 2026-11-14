@@ -2,7 +2,7 @@
 
 from ytsaurus_flyt.config import FlytConfig
 from ytsaurus_flyt.models import ClusterParams, OperationParams
-from ytsaurus_flyt.spec import MINICLUSTER_TASK, _build_run_script, build_vanilla_operation_spec
+from ytsaurus_flyt.spec import MINICLUSTER_TASK, _build_run_script, build_vanilla_operation_spec, resolve_flink_cluster
 
 
 def _minicluster(max_heap: str = "2324M", off_heap=None) -> ClusterParams:
@@ -64,7 +64,7 @@ def test_build_vanilla_operation_spec_layer_paths_and_tmpfs():
         job_command="p.py",
         config=config,
         operation_params=op,
-        preset_params=_minicluster(),
+        cluster=resolve_flink_cluster(config, _minicluster()),
         secure_vault={},
         use_squashfs_sandbox_unpack=False,
     )
@@ -87,7 +87,7 @@ def test_build_vanilla_operation_spec_sandbox_unpack_no_layer_paths_in_task():
         job_command="p.py",
         config=config,
         operation_params=op,
-        preset_params=_minicluster(),
+        cluster=resolve_flink_cluster(config, _minicluster()),
         secure_vault={},
         use_squashfs_sandbox_unpack=True,
     )
@@ -105,7 +105,7 @@ def test_build_vanilla_operation_spec_environment_no_hardcoded_flink_paths():
         job_command="p.py",
         config=config,
         operation_params=op,
-        preset_params=_minicluster(),
+        cluster=resolve_flink_cluster(config, _minicluster()),
         secure_vault={},
     )
     spec = builder.build()
@@ -125,7 +125,7 @@ def test_build_vanilla_operation_spec_java_opts_heap_only():
         config=config,
         operation_params=op,
         secure_vault={},
-        preset_params=_minicluster("14G"),
+        cluster=resolve_flink_cluster(config, _minicluster("14G")),
     )
     task = builder.build()["tasks"][MINICLUSTER_TASK]
     # The gateway ignores config.yaml's env.java.* when FLINK_ENV_JAVA_OPTS is set.
@@ -146,7 +146,7 @@ def test_build_vanilla_operation_spec_java_opts_with_off_heap():
         config=config,
         operation_params=op,
         secure_vault={},
-        preset_params=_minicluster("14G", "8G"),
+        cluster=resolve_flink_cluster(config, _minicluster("14G", "8G")),
     )
     cmd = builder.build()["tasks"][MINICLUSTER_TASK]["command"]
     assert "env.java.default-opts.all: -Xmx14G -XX:MaxDirectMemorySize=8G -XX:ActiveProcessorCount=2 " in cmd
