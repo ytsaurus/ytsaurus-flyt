@@ -15,7 +15,7 @@ chmod +x "$FLINK_HOME"/bin/*.sh 2>/dev/null || true
 # classpath; the distribution keeps it in opt/.
 for _jar in "$FLINK_OPT_DIR"/flink-python*.jar; do
     if [ -f "$_jar" ] && [ ! -f "$FLINK_LIB_DIR/$(basename "$_jar")" ]; then
-        cp "$_jar" "$FLINK_LIB_DIR"/
+        ln -s "$_jar" "$FLINK_LIB_DIR"/
     fi
 done
 unset _jar
