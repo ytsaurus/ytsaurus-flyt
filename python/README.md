@@ -68,7 +68,7 @@ taskmanager_count: 3          # --taskmanagers; capacity, like TaskManager repli
 preset: large                 # --preset; every TaskManager: 4 cpu = 4 task slots, 16G container
 ```
 
-The preset that sizes the MiniCluster job sizes every TaskManager in application mode (its cpu is also the slot count, its memory the container); the JobManager gets 2 cpu and a 2g JVM. The cluster must hold the pipeline's highest operator parallelism in `taskmanager_count * slots`. Sizing, lifecycle and troubleshooting: [docs/application-mode.md](docs/application-mode.md).
+The preset that sizes the MiniCluster job sizes every TaskManager in application mode (its cpu is also the slot count, its memory the container); the JobManager gets 2 cpu and 2560m. The cluster must hold the pipeline's highest operator parallelism in `taskmanager_count * slots`. Sizing, lifecycle and troubleshooting: [docs/application-mode.md](docs/application-mode.md).
 
 ## Commands
 

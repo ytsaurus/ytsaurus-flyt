@@ -147,14 +147,14 @@ class FlytConfig:
     """
 
     jobmanager_cpu: Optional[int] = None
-    """CPU limit of the JobManager YT job (``application`` mode; default 2). Its memory is a 2g Flink JVM
-    (``jobmanager.memory.process.size``) plus 512m for the PyFlink driver and helpers. The ``preset`` sizes the TaskManagers, not the JobManager.
+    """CPU limit of the JobManager YT job (``application`` mode; default 2). Its memory is
+    ``jobmanager.memory.process.size``, 2560m by default. The ``preset`` sizes the TaskManagers, not the JobManager.
     """
 
     taskmanager_cpu: Optional[int] = None
     """CPU limit of one TaskManager YT job (``application`` mode; default: the preset's cpu). It is also the
     TaskManager's task slot count unless ``taskmanager.numberOfTaskSlots`` is set. The container memory is
-    the preset's, or ``taskmanager.memory.process.size`` + 512m for the non-JVM processes.
+    the preset's, or ``taskmanager.memory.process.size``.
     """
 
     discovery_timeout: int = 300

@@ -34,8 +34,8 @@ The same `preset` sizes the single MiniCluster job in `minicluster` mode and eve
 
 | | cpu | Task slots | Container | Flink JVM (`*.memory.process.size`) |
 |---|---|---|---|---|
-| TaskManager | preset cpu, or `taskmanager_cpu` | = cpu, or `taskmanager.numberOfTaskSlots` | preset memory, or `taskmanager.memory.process.size` + 512m | container − 512m (bash, the discovery helper, a sidecar) |
-| JobManager | 2, or `jobmanager_cpu` | | 2g + 512m, or `jobmanager.memory.process.size` + 512m | 2g; the 512m is the PyFlink driver (the script and its imports) next to the JobManager JVM |
+| TaskManager | preset cpu, or `taskmanager_cpu` | = cpu, or `taskmanager.numberOfTaskSlots` | preset memory, or `taskmanager.memory.process.size` | = container |
+| JobManager | 2, or `jobmanager_cpu` | | 2560m, or `jobmanager.memory.process.size` | = container |
 
 The preset's `-Xmx`/direct memory apply to the MiniCluster only; a TaskManager's JVM is laid out by Flink's memory model.
 
@@ -43,11 +43,13 @@ A standalone Flink cluster cannot ask YT for more TaskManagers, so the capacity 
 
 ## Memory
 
+The YT container is `*.memory.process.size`, as a pod on Kubernetes. Flink's JVM overhead (`*.memory.jvm-overhead.*`, 10% of `process.size`) is the part of it no JVM flag caps: the JVM's native memory and, on YT, everything else in the container (bash, the discovery helper, a sidecar, the PyFlink driver on the JobManager, Python UDF workers above their managed memory budget). flyt keeps `jvm-overhead.min` (and `jvm-overhead.max`, if set) at 512m or above for both roles; a lower value is raised with a warning.
+
 Python UDF workers live inside the TaskManager JVM's `process.size`: PyFlink reserves managed memory for them (`python.fn-execution.memory.managed`). flyt jobs keep state on the heap, so managed memory is only the Python workers' budget: flyt sets `taskmanager.memory.managed.fraction` to 0.1 instead of Flink's 0.4, which leaves the rest to task heap.
 
 Direct memory: unlike the MiniCluster, where it defaults to the heap size, Flink caps a TaskManager's `-XX:MaxDirectMemorySize` at `framework.off-heap` (128m) plus `taskmanager.memory.task.off-heap.size`. Connectors with netty/gRPC buffers (including the YTsaurus connectors) need the latter; flyt sets it to 1/8 of the TaskManager JVM.
 
-Each of flyt's memory keys (`*.memory.process.size`, `taskmanager.memory.task.off-heap.size`, `taskmanager.memory.managed.fraction`) can be overridden in the Flink configuration. Any other `taskmanager.memory.*` key (`flink.size`, `task.heap.size`, `network.*`, ...) means you lay out Flink's memory model yourself: flyt then adds none of its TaskManager memory defaults and requires `taskmanager.memory.process.size`, which sizes the YT container. The same rule holds for `jobmanager.memory.*`.
+Each of flyt's memory keys (`*.memory.process.size`, `taskmanager.memory.task.off-heap.size`, `taskmanager.memory.managed.fraction`) and the JVM overhead (`*.memory.jvm-overhead.*`, above the 512m minimum) can be overridden in the Flink configuration. Any other `taskmanager.memory.*` key (`flink.size`, `task.heap.size`, `network.*`, ...) means you lay out Flink's memory model yourself: flyt then adds none of its TaskManager memory defaults and requires `taskmanager.memory.process.size`, which sizes the YT container. The same rule holds for `jobmanager.memory.*`.
 
 Every JVM runs with `-XX:+ExitOnOutOfMemoryError`, and TaskManagers with `taskmanager.jvm-exit-on-oom`, so an out-of-memory TaskManager dies and is restarted by YT instead of hanging in GC.
 

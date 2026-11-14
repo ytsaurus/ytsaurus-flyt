@@ -109,7 +109,7 @@ class TestTaskmanagerParams:
 
         tm = TaskmanagerParams(cpu=2, process_memory=parse_memory("4G"), count=1, slots=1)
         assert (tm.cpu, tm.process_memory, tm.count, tm.slots) == (2, parse_memory("4G"), 1, 1)
-        assert tm.memory == parse_memory("4G") + parse_memory("512M")  # container = JVM + fixed overhead
+        assert tm.memory == parse_memory("4G")  # container = process.size
 
     def test_rejects_zero_count_or_slots(self):
         from ytsaurus_flyt.models import TaskmanagerParams
@@ -121,8 +121,8 @@ class TestTaskmanagerParams:
 
 
 class TestJobmanagerParams:
-    def test_container_is_jvm_plus_driver_overhead(self):
-        jm = JobmanagerParams(cpu=2, process_memory=parse_memory("2G"))
-        assert (jm.cpu, jm.process_memory, jm.memory) == (2, parse_memory("2G"), parse_memory("2560M"))
+    def test_container_is_process_size(self):
+        jm = JobmanagerParams(cpu=2, process_memory=parse_memory("2560M"))
+        assert (jm.cpu, jm.process_memory, jm.memory) == (2, parse_memory("2560M"), parse_memory("2560M"))
         with pytest.raises(ValueError, match="process_memory"):
             JobmanagerParams(cpu=2, process_memory=0)

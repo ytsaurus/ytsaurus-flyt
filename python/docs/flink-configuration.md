@@ -50,7 +50,7 @@ Per mode, overridable through Flink keys:
 | | `minicluster` | `application` |
 |---|---|---|
 | Task slots | one per subtask of the widest operator (the job graph's max parallelism) | one per TaskManager cpu; `taskmanager.numberOfTaskSlots` sets them |
-| Memory | the preset sizes the job's JVM (`-Xmx`, direct memory); Flink's `*.memory.process.size`/`flink.size` have no effect (warning) | the preset sizes every TaskManager (`taskmanager.memory.process.size` = container − 512m), the JobManager gets 2g; the Flink keys override them and size the YT containers ([details](application-mode.md#memory)) |
+| Memory | the preset sizes the job's JVM (`-Xmx`, direct memory); Flink's `*.memory.process.size`/`flink.size` have no effect (warning) | the preset sizes every TaskManager (`taskmanager.memory.process.size` = container), the JobManager gets 2560m; the Flink keys override them and size the YT containers; `jvm-overhead.min` is at least 512m ([details](application-mode.md#memory)) |
 
 ## Keys flyt owns
 

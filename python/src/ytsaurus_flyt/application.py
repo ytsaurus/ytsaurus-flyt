@@ -24,8 +24,8 @@ from ytsaurus_flyt.flink_conf import (
 from ytsaurus_flyt.models import (
     DEFAULT_JOBMANAGER_CPU,
     DEFAULT_JOBMANAGER_PROCESS_MEMORY,
+    JVM_OVERHEAD_MIN,
     MIB,
-    TASKMANAGER_CONTAINER_OVERHEAD,
     ClusterParams,
     JobmanagerParams,
     TaskmanagerParams,
@@ -112,14 +112,16 @@ def resolve_application_resources(
     slots = _int_option(user, TASK_SLOTS_KEY) or taskmanager_cpu
     taskmanager_process_memory = _process_memory(user, TM_PROCESS_SIZE_KEY, TM_MEMORY_PREFIX, TM_MEMORY_DEFAULT_KEYS)
     if taskmanager_process_memory is None:
-        # The container is the preset memory: the Flink JVM plus the fixed overhead for bash, the helper and a sidecar.
-        taskmanager_process_memory = taskmanager_size.memory_bytes() - TASKMANAGER_CONTAINER_OVERHEAD
-        if taskmanager_process_memory < 1:
+        taskmanager_process_memory = taskmanager_size.memory_bytes()
+    jobmanager_process_memory = (
+        _process_memory(user, JM_PROCESS_SIZE_KEY, JM_MEMORY_PREFIX, JM_MEMORY_DEFAULT_KEYS)
+        or DEFAULT_JOBMANAGER_PROCESS_MEMORY
+    )
+    for role, size in (("TaskManager", taskmanager_process_memory), ("JobManager", jobmanager_process_memory)):
+        if size <= JVM_OVERHEAD_MIN:
             raise ValueError(
-                f"preset memory {taskmanager_size.memory} leaves no TaskManager JVM next to the "
-                f"{TASKMANAGER_CONTAINER_OVERHEAD // MIB}m container overhead"
+                f"{role} memory {size // MIB}m leaves no JVM next to the {JVM_OVERHEAD_MIN // MIB}m JVM overhead"
             )
-    jobmanager_process_memory = _process_memory(user, JM_PROCESS_SIZE_KEY, JM_MEMORY_PREFIX, JM_MEMORY_DEFAULT_KEYS)
     capacity = config.taskmanager_count * slots
     default_parallelism = _int_option(user, DEFAULT_PARALLELISM_KEY) or capacity
     if default_parallelism > capacity:
@@ -132,7 +134,7 @@ def resolve_application_resources(
         taskmanager_count=config.taskmanager_count,
         slots=slots,
         jobmanager_cpu=config.jobmanager_cpu if config.jobmanager_cpu is not None else DEFAULT_JOBMANAGER_CPU,
-        jobmanager_process_memory=jobmanager_process_memory or DEFAULT_JOBMANAGER_PROCESS_MEMORY,
+        jobmanager_process_memory=jobmanager_process_memory,
         taskmanager_cpu=taskmanager_cpu,
         taskmanager_process_memory=taskmanager_process_memory,
         default_parallelism=default_parallelism,

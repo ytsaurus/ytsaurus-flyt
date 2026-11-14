@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional
 import yaml
 
 from ytsaurus_flyt.config import FlytConfig
-from ytsaurus_flyt.models import MIB, ClusterParams
+from ytsaurus_flyt.models import JVM_OVERHEAD_MIN, MIB, ClusterParams, parse_memory
 
 if TYPE_CHECKING:
     from yt.wrapper import YtClient
@@ -29,10 +29,16 @@ TM_TASK_OFF_HEAP_KEY = "taskmanager.memory.task.off-heap.size"
 TM_MANAGED_FRACTION_KEY = "taskmanager.memory.managed.fraction"
 TM_MEMORY_PREFIX = "taskmanager.memory."
 JM_MEMORY_PREFIX = "jobmanager.memory."
-# The memory keys flyt sets itself. Any other key under the role's prefix means the user configures
-# Flink's memory model: flyt then adds none of these defaults instead of second-guessing Flink.
-TM_MEMORY_DEFAULT_KEYS = frozenset({TM_PROCESS_SIZE_KEY, TM_TASK_OFF_HEAP_KEY, TM_MANAGED_FRACTION_KEY})
-JM_MEMORY_DEFAULT_KEYS = frozenset({JM_PROCESS_SIZE_KEY})
+# jvm-overhead.min/max/fraction under each role's prefix: flyt keeps min (and max) at JVM_OVERHEAD_MIN or above.
+_JVM_OVERHEAD_KEYS = ("jvm-overhead.min", "jvm-overhead.max", "jvm-overhead.fraction")
+# The memory keys flyt sets itself, plus the overhead that only carves process.size. Any other key under the
+# role's prefix means the user configures Flink's memory model: flyt then adds none of these defaults
+# instead of second-guessing Flink.
+TM_MEMORY_DEFAULT_KEYS = frozenset(
+    {TM_PROCESS_SIZE_KEY, TM_TASK_OFF_HEAP_KEY, TM_MANAGED_FRACTION_KEY}
+    | {TM_MEMORY_PREFIX + k for k in _JVM_OVERHEAD_KEYS}
+)
+JM_MEMORY_DEFAULT_KEYS = frozenset({JM_PROCESS_SIZE_KEY} | {JM_MEMORY_PREFIX + k for k in _JVM_OVERHEAD_KEYS})
 
 # JobManager ports are fixed (one JobManager per operation, own slot IP); TaskManager ports are
 # random so several TaskManagers can share an exec node without porto network isolation.
@@ -168,6 +174,27 @@ def _apply_user_and_owned(props: Dict[str, str], user: Mapping[str, str], jvm_op
     props.update(jvm_opts)
 
 
+def _jvm_overhead_floor(props: Mapping[str, str]) -> Dict[str, str]:
+    """``*.memory.jvm-overhead.min``/``.max`` raised to :data:`JVM_OVERHEAD_MIN` where ``props`` has less;
+    an unset max stays Flink's 1g."""
+    out: Dict[str, str] = {}
+    for prefix in (JM_MEMORY_PREFIX, TM_MEMORY_PREFIX):
+        min_key, max_key = prefix + "jvm-overhead.min", prefix + "jvm-overhead.max"
+        if min_key not in props or _memory_option(props, min_key) < JVM_OVERHEAD_MIN:
+            out[min_key] = _mebibytes(JVM_OVERHEAD_MIN)
+        if max_key in props and _memory_option(props, max_key) < JVM_OVERHEAD_MIN:
+            out[max_key] = _mebibytes(JVM_OVERHEAD_MIN)
+    return out
+
+
+def _memory_option(props: Mapping[str, str], key: str) -> int:
+    raw = str(props[key]).strip().replace(" ", "")
+    try:
+        return parse_memory(raw)
+    except ValueError as e:
+        raise ValueError(f"{key} is not a memory size: {raw!r}") from e
+
+
 def cluster_flink_config(
     config: FlytConfig, resources: ApplicationResources, user: Mapping[str, str]
 ) -> Dict[str, str]:
@@ -197,6 +224,7 @@ def cluster_flink_config(
             tm_opts: f"-XX:ActiveProcessorCount={resources.taskmanager_cpu} {JVM_EXIT_ON_OOM_OPT}",
         },
     )
+    props.update(_jvm_overhead_floor(props))
     return props
 
 
@@ -235,7 +263,14 @@ def flink_config_warnings(config: FlytConfig, user: Mapping[str, str]) -> List[s
         for key in JVM_DEFAULT_OPTS_KEYS
         if key in user
     ]
-    if not config.is_application_cluster:
+    if config.is_application_cluster:
+        out += [
+            f"{key} is raised to {value}: the YT container is process.size, and the JVM overhead holds "
+            f"the processes outside the JVM as well"
+            for key, value in sorted(_jvm_overhead_floor(user).items())
+            if key in user
+        ]
+    else:
         out += [
             f"{key} has no effect in minicluster mode: the preset sizes the job's JVM "
             f"(override -Xmx in env.java.opts.all)"

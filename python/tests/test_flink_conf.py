@@ -40,9 +40,11 @@ def test_cluster_flink_config_sets_ports_memory_slots_and_jvm_flags():
     assert props["taskmanager.rpc.port"] == props["taskmanager.data.port"] == "0"
     assert props["taskmanager.numberOfTaskSlots"] == "2"  # micro: 2 cpu
     assert props["parallelism.default"] == "6"
-    assert props["jobmanager.memory.process.size"] == "2048m"
-    assert props["taskmanager.memory.process.size"] == "3584m"  # 4G container - 512m
-    assert props["taskmanager.memory.task.off-heap.size"] == "448m"  # 1/8 of the TaskManager JVM
+    assert props["jobmanager.memory.process.size"] == "2560m"
+    assert props["taskmanager.memory.process.size"] == "4096m"  # the 4G container
+    assert props["jobmanager.memory.jvm-overhead.min"] == props["taskmanager.memory.jvm-overhead.min"] == "512m"
+    assert "taskmanager.memory.jvm-overhead.max" not in props  # Flink's 1g
+    assert props["taskmanager.memory.task.off-heap.size"] == "512m"  # 1/8 of the TaskManager JVM
     assert props["taskmanager.memory.managed.fraction"] == "0.1"  # the Python UDF workers' budget
     assert props["python.executable"] == props["python.client.executable"] == "/py"
     # default-opts: env.java.opts.* of the user come after them and win
@@ -127,7 +129,25 @@ def test_custom_taskmanager_memory_model_drops_flyt_memory_defaults():
     assert props["taskmanager.memory.process.size"] == "6g"
     assert "taskmanager.memory.managed.fraction" not in props
     assert "taskmanager.memory.task.off-heap.size" not in props
-    assert props["jobmanager.memory.process.size"] == "2048m"
+    assert props["jobmanager.memory.process.size"] == "2560m"
+
+
+def test_jvm_overhead_is_never_below_flyt_minimum():
+    user = {
+        "taskmanager.memory.jvm-overhead.min": "256m",
+        "taskmanager.memory.jvm-overhead.max": "300m",
+        "jobmanager.memory.jvm-overhead.min": "1g",
+        "jobmanager.memory.jvm-overhead.fraction": "0.2",
+    }
+    props = _props(user)
+    assert props["taskmanager.memory.jvm-overhead.min"] == props["taskmanager.memory.jvm-overhead.max"] == "512m"
+    assert props["jobmanager.memory.jvm-overhead.min"] == "1g"  # above the minimum: kept
+    assert props["jobmanager.memory.jvm-overhead.fraction"] == "0.2"
+    # overhead keys only carve process.size: flyt keeps its memory defaults
+    assert props["taskmanager.memory.managed.fraction"] == "0.1"
+    warnings = flink_config_warnings(_config(), user)
+    assert len(warnings) == 2
+    assert all(w.startswith("taskmanager.memory.jvm-overhead.") and "raised to 512m" in w for w in warnings)
 
 
 def test_flink_config_warnings_cover_owned_and_mode_ignored_keys():

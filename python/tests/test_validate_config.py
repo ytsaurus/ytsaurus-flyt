@@ -15,7 +15,7 @@ def test_validate_prints_the_application_cluster_sized_by_the_preset():
     )
     ((ok, msg),) = _named(rows, "cluster_mode")
     assert ok is True
-    assert "2 TaskManager(s) x 4 slot(s) (4 cpu, 15872m JVM each), parallelism.default 8" in msg
+    assert "2 TaskManager(s) x 4 slot(s) (4 cpu, 16384m JVM each), parallelism.default 8" in msg
     assert _named(rows, "discovery_timeout")
 
 
