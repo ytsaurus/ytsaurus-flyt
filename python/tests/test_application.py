@@ -25,12 +25,41 @@ def test_preset_sizes_every_taskmanager_and_jobmanager_keeps_defaults():
     assert res.default_parallelism == 12
 
 
-def test_cpu_fields_override_the_preset_and_the_jobmanager_default():
+def test_own_sizing_takes_cpu_and_process_size_instead_of_a_preset():
     cfg = _app_config(taskmanager_count=2, taskmanager_cpu=6, jobmanager_cpu=4)
-    res = resolve_application_resources(cfg, ClusterPreset.SMALL.params)
+    res = resolve_application_resources(cfg, None, {"taskmanager.memory.process.size": "8g"})
     assert (res.taskmanager_cpu, res.slots, res.default_parallelism) == (6, 6, 12)
     assert res.taskmanager_process_memory == 8 * 1024 * _MIB
     assert res.jobmanager_cpu == 4
+    # without any own sizing the micro preset applies
+    assert resolve_application_resources(_app_config()).taskmanager_cpu == ClusterPreset.MICRO.params.cpu
+
+
+@pytest.mark.parametrize(
+    "cpu, user, match",
+    [
+        (6, {"taskmanager.memory.process.size": "8g"}, "taskmanager_cpu, taskmanager.memory.process.size size"),
+        (None, {"taskmanager.memory.jvm-overhead.min": "1g"}, "remove the preset"),
+        (6, {}, "remove the preset"),
+    ],
+)
+def test_a_preset_does_not_combine_with_own_sizing(cpu, user, match):
+    with pytest.raises(ValueError, match=match):
+        resolve_application_resources(_app_config(taskmanager_cpu=cpu), ClusterPreset.SMALL.params, user)
+
+
+@pytest.mark.parametrize(
+    "cpu, user, match",
+    [
+        (6, {}, "needs taskmanager.memory.process.size"),
+        (None, {"taskmanager.memory.process.size": "8g"}, "needs taskmanager_cpu \\(--tm-cpu\\)"),
+        (6, {"taskmanager.memory.flink.size": "4g"}, "needs taskmanager.memory.process.size"),
+        (6, {"taskmanager.memory.process.size": "lots"}, "not a memory size"),
+    ],
+)
+def test_own_sizing_needs_both_cpu_and_process_size(cpu, user, match):
+    with pytest.raises(ValueError, match=match):
+        resolve_application_resources(_app_config(taskmanager_cpu=cpu), None, user)
 
 
 def test_preset_too_small_for_a_taskmanager_jvm_is_rejected():
@@ -58,8 +87,8 @@ def test_flink_keys_override_slots_memory_and_parallelism():
         "jobmanager.memory.process.size": "1g",
         "parallelism.default": "4",
     }
-    res = resolve_application_resources(_app_config(taskmanager_count=2), ClusterPreset.SMALL.params, user)
-    assert (res.taskmanager_cpu, res.slots, res.default_parallelism) == (2, 3, 4)  # cpu stays the preset's
+    res = resolve_application_resources(_app_config(taskmanager_count=2, taskmanager_cpu=2), None, user)
+    assert (res.taskmanager_cpu, res.slots, res.default_parallelism) == (2, 3, 4)
     assert res.taskmanager_params().memory == 6 * 1024 * _MIB  # container = process.size
     assert res.jobmanager_params().memory == 1024 * _MIB
 
@@ -75,8 +104,6 @@ def test_default_parallelism_above_the_capacity_is_rejected():
     "user, match",
     [
         ({"taskmanager.numberOfTaskSlots": "two"}, "must be an integer"),
-        ({"taskmanager.memory.process.size": "lots"}, "not a memory size"),
-        ({"taskmanager.memory.flink.size": "4g"}, "set taskmanager.memory.process.size as well"),
         ({"jobmanager.memory.heap.size": "1g"}, "set jobmanager.memory.process.size as well"),
     ],
 )

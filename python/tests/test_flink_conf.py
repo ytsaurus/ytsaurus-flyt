@@ -23,6 +23,9 @@ def _config(**overrides) -> FlytConfig:
 
 
 def _props(user=None, **overrides) -> dict:
+    if any(k.startswith("taskmanager.memory.") for k in user or {}):  # own sizing: no preset
+        overrides.setdefault("taskmanager_cpu", 2)
+        return application_cluster(_config(**overrides), None, user).flink_config
     return application_cluster(_config(**overrides), ClusterPreset.MICRO.params, user).flink_config
 
 
@@ -71,7 +74,7 @@ def test_minicluster_flink_config_sizes_the_job_jvm_by_the_preset():
 def test_minicluster_sized_by_taskmanager_process_size_gets_taskmanager_memory_defaults():
     props = minicluster_flink_config(
         _config(cluster_mode="minicluster"),
-        ClusterPreset.MICRO.params,
+        None,
         {},
         cpu=3,
         process_memory=6 * 1024 * 1024 * 1024,
@@ -151,6 +154,7 @@ def test_custom_taskmanager_memory_model_drops_flyt_memory_defaults():
 
 def test_jvm_overhead_is_never_below_flyt_minimum():
     user = {
+        "taskmanager.memory.process.size": "4g",
         "taskmanager.memory.jvm-overhead.min": "256m",
         "taskmanager.memory.jvm-overhead.max": "300m",
         "jobmanager.memory.jvm-overhead.min": "1g",
@@ -174,12 +178,7 @@ def test_flink_config_warnings_cover_owned_and_mode_ignored_keys():
     assert any("rest.port" in w for w in app) and any("rest.address" in w for w in app)
     assert not any("jobmanager.memory.process.size" in w for w in app)
     assert any("jobmanager.memory.process.size has no effect in minicluster" in w for w in mini)
-    # TaskManager memory keys size a MiniCluster only together with process.size
     overhead = {"taskmanager.memory.jvm-overhead.min": "256m"}
-    assert any(
-        "without taskmanager.memory.process.size" in w
-        for w in flink_config_warnings(_config(cluster_mode="minicluster"), overhead)
-    )
     sized = flink_config_warnings(
         _config(cluster_mode="minicluster"), {**overhead, "taskmanager.memory.process.size": "6g"}
     )

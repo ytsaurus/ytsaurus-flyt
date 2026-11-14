@@ -12,8 +12,8 @@ Profile fields; the flag overrides the profile for one `flyt run`.
 |---|---|---|---|
 | `cluster_mode` | `--mode` | `minicluster` | `application` enables everything below |
 | `taskmanager_count` | `--taskmanagers` | 1 | TaskManager YT jobs: the cluster capacity, like TaskManager `replicas` on Kubernetes |
-| `preset` | `--preset` | `micro` | size of every TaskManager YT job: its cpu (and task slots) and container memory |
-| `taskmanager_cpu` | `--tm-cpu` | the preset's cpu | CPU, and task slots unless `taskmanager.numberOfTaskSlots` is set, of each TaskManager (and of the `minicluster` job) |
+| `preset` | `--preset` | `micro`, unless the TaskManager is sized without a preset | size of every TaskManager YT job: its cpu (and task slots) and container memory |
+| `taskmanager_cpu` | `--tm-cpu` | | with `taskmanager.memory.process.size`, sizes every TaskManager (and the `minicluster` job) without a preset: its CPU, and task slots unless `taskmanager.numberOfTaskSlots` is set |
 | `jobmanager_cpu` | `--jm-cpu` | 2 | CPU of the JobManager container |
 | `discovery_timeout` | | 300 | seconds a TaskManager waits for the JobManager before failing, like Flink's `taskmanager.registration.timeout` |
 | `sidecar_command` | | | helper started in every JobManager/TaskManager container before Flink, e.g. a metrics agent |
@@ -30,7 +30,16 @@ preset: large        # every TaskManager: 4 cpu (4 slots), 16G container
 
 ## Sizing
 
-The same `preset` sizes the single MiniCluster job in `minicluster` mode and every TaskManager in `application` mode, so a pipeline can be compared between the modes with one flag: `--taskmanagers 1` gives about the resources of the MiniCluster job, plus a small JobManager.
+A TaskManager, and the single MiniCluster job in `minicluster` mode, is sized one of two ways, never both:
+
+- a preset (`--preset`, `preset` in the profile; `micro` when nothing else sizes it), to try a pipeline out;
+- your own sizing: `taskmanager_cpu` (`--tm-cpu`) and `taskmanager.memory.process.size`, both required, plus any other `taskmanager.memory.*` key.
+
+A preset together with `taskmanager_cpu` or any `taskmanager.memory.*` key is an error. Either way the same size applies in both modes, so a pipeline can be compared between them with one flag: `--taskmanagers 1` gives about the resources of the MiniCluster job, plus a small JobManager.
+
+```bash
+flyt run --mode application --taskmanagers 3 --tm-cpu 4 -D taskmanager.memory.process.size=12g pipeline.py
+```
 
 | | cpu | Task slots | Container | Flink JVM (`*.memory.process.size`) |
 |---|---|---|---|---|
@@ -49,7 +58,7 @@ Python UDF workers live inside the TaskManager JVM's `process.size`: PyFlink res
 
 Direct memory: unlike the MiniCluster, where it defaults to the heap size, Flink caps a TaskManager's `-XX:MaxDirectMemorySize` at `framework.off-heap` (128m) plus `taskmanager.memory.task.off-heap.size`. Connectors with netty/gRPC buffers (including the YTsaurus connectors) need the latter; flyt sets it to 1/8 of the TaskManager JVM.
 
-Each of flyt's memory keys (`*.memory.process.size`, `taskmanager.memory.task.off-heap.size`, `taskmanager.memory.managed.fraction`) and the JVM overhead (`*.memory.jvm-overhead.*`, above the 512m minimum) can be overridden in the Flink configuration. Any other `taskmanager.memory.*` key (`flink.size`, `task.heap.size`, `network.*`, ...) means you lay out Flink's memory model yourself: flyt then adds none of its TaskManager memory defaults and requires `taskmanager.memory.process.size`, which sizes the YT container. The same rule holds for `jobmanager.memory.*`.
+Each of flyt's memory keys (`*.memory.process.size`, `taskmanager.memory.task.off-heap.size`, `taskmanager.memory.managed.fraction`) and the JVM overhead (`*.memory.jvm-overhead.*`, above the 512m minimum) can be overridden in the Flink configuration; for a TaskManager only without a preset ([Sizing](#sizing)). Any other `taskmanager.memory.*` key (`flink.size`, `task.heap.size`, `network.*`, ...) means you lay out Flink's memory model yourself: flyt then adds none of its TaskManager memory defaults and requires `taskmanager.memory.process.size`, which sizes the YT container. The same rule holds for `jobmanager.memory.*`.
 
 Every JVM runs with `-XX:+ExitOnOutOfMemoryError`, and TaskManagers with `taskmanager.jvm-exit-on-oom`, so an out-of-memory TaskManager dies and is restarted by YT instead of hanging in GC.
 
@@ -82,7 +91,7 @@ Jobs reach YT from inside the cluster, where the client's `localhost:<port>` is 
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| `NoResourceAvailableException` after 5 minutes | parallelism above `taskmanager_count * slots` | raise `taskmanager_count`, or the TaskManager cpu (`--preset`, `--tm-cpu`) |
-| `OutOfMemoryError: Direct buffer memory` or OOM-killed TaskManagers | the TaskManager JVM is too small for the job | a larger `--preset` |
+| `NoResourceAvailableException` after 5 minutes | parallelism above `taskmanager_count * slots` | raise `taskmanager_count`, or the TaskManager cpu (`--preset`, or `--tm-cpu` with `taskmanager.memory.process.size`) |
+| `OutOfMemoryError: Direct buffer memory` or OOM-killed TaskManagers | the TaskManager JVM is too small for the job | a larger `--preset`, or a larger `taskmanager.memory.process.size` |
 | `pthread_create failed (EAGAIN)` | container or node PID limit | see [examples/kind/TROUBLESHOOTING.md](../examples/kind/TROUBLESHOOTING.md) |
 | TaskManagers keep restarting with `no JobManager discovered` | jobs cannot reach the YT proxy or the JobManager REST port | check `job_yt_proxy` and the JobManager stderr |

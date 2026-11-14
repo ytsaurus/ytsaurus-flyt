@@ -50,13 +50,13 @@ Per mode, overridable through Flink keys:
 | | `minicluster` | `application` |
 |---|---|---|
 | Task slots | one per subtask of the widest operator (the job graph's max parallelism) | one per TaskManager cpu; `taskmanager.numberOfTaskSlots` sets them |
-| Memory | the preset sizes the YT job and its JVM (`-Xmx`, direct memory), or the job is one TaskManager of `taskmanager.memory.process.size` ([below](#minicluster-memory)); `jobmanager.memory.*` has no effect (warning) | the preset sizes every TaskManager (`taskmanager.memory.process.size` = container), the JobManager gets 2560m; the Flink keys override them and size the YT containers; `jvm-overhead.min` is at least 512m ([details](application-mode.md#memory)) |
+| Memory | the preset sizes the YT job and its JVM (`-Xmx`, direct memory), or, without a preset, the job is one TaskManager of `taskmanager.memory.process.size` ([below](#minicluster-memory)); `jobmanager.memory.*` has no effect (warning) | the preset, or `taskmanager_cpu` with the Flink keys, sizes every TaskManager (`taskmanager.memory.process.size` = container), the JobManager gets 2560m or `jobmanager.memory.process.size`; `jvm-overhead.min` is at least 512m ([details](application-mode.md#sizing)) |
 
 ### Minicluster memory
 
 The MiniCluster runs inside the PyFlink gateway's JVM, which Flink's local execution does not size. By default the YT container is the preset's memory and the JVM gets the preset's `-Xmx` (and `-XX:MaxDirectMemorySize` where the preset has one).
 
-With `taskmanager.memory.process.size` the job is sized as one TaskManager of application mode instead: the container is `process.size`, the cpu is `taskmanager_cpu` (`--tm-cpu`) or the preset's, and the job runs Flink's own `BashJavaUtils`, as `taskmanager.sh` does, to turn the TaskManager memory keys into the JVM's `-Xmx`, `-XX:MaxDirectMemorySize` and `-XX:MaxMetaspaceSize` and the MiniCluster's managed and network memory. The same keys and flyt's defaults apply as in [application mode](application-mode.md#memory), so `--mode application --taskmanagers 1` gets a TaskManager laid out like the MiniCluster job. Without `process.size` the other `taskmanager.memory.*` keys have no effect (warning).
+Without a preset, `taskmanager_cpu` (`--tm-cpu`) and `taskmanager.memory.process.size` size the job as one TaskManager of application mode ([Sizing](application-mode.md#sizing)): the container is `process.size`, the cpu is `taskmanager_cpu`, and the job runs Flink's own `BashJavaUtils`, as `taskmanager.sh` does, to turn the TaskManager memory keys into the JVM's `-Xmx`, `-XX:MaxDirectMemorySize` and `-XX:MaxMetaspaceSize` and the MiniCluster's managed and network memory. The same keys and flyt's defaults apply as in [application mode](application-mode.md#memory), so `--mode application --taskmanagers 1` gets a TaskManager laid out like the MiniCluster job.
 
 ```bash
 flyt run --tm-cpu 4 -D taskmanager.memory.process.size=12g pipeline.py

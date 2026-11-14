@@ -172,22 +172,22 @@ def merge_flyt_config(base: FlytConfig, *overlays: FlytConfig) -> FlytConfig:
 
 def resolve_connection_from_profile(
     data: Dict[str, Any],
-) -> Tuple[Optional[str], Optional[str], str]:
-    """Return proxy, pool, preset from profile dict (may be None)."""
+) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """Return proxy, pool, preset from profile dict (each may be None)."""
     meta, _ = split_profile_meta(data)
     proxy = meta.get("proxy")
     pool = meta.get("pool")
-    preset = meta.get("preset") or "micro"
+    preset = meta.get("preset")
     if isinstance(proxy, str):
         proxy = proxy.strip() or None
     if isinstance(pool, str):
         pool = pool.strip() or None
     if isinstance(preset, str):
-        preset = preset.strip() or "micro"
+        preset = preset.strip() or None
     return (
         proxy if isinstance(proxy, str) else None,
         pool if isinstance(pool, str) else None,
-        preset,
+        preset if isinstance(preset, str) else None,
     )
 
 

@@ -15,7 +15,7 @@ from ytsaurus_flyt.config import (
 )
 from ytsaurus_flyt.container_runtime import get_container_runtime_command
 from ytsaurus_flyt.flink_conf import flink_config_warnings, user_flink_config
-from ytsaurus_flyt.models import MIB, ClusterParams, ClusterPreset
+from ytsaurus_flyt.models import MIB, ClusterParams
 
 
 def _check_mksquashfs() -> Tuple[bool, str]:
@@ -56,7 +56,7 @@ def _flink_config_rows(
     return rows, user
 
 
-def _application_rows(config: FlytConfig, preset: ClusterParams, user: Dict[str, str]) -> List[_Row]:
+def _application_rows(config: FlytConfig, preset: Optional[ClusterParams], user: Dict[str, str]) -> List[_Row]:
     """The application cluster exactly as ``flyt run`` resolves it."""
     try:
         resources = application_cluster(config, preset, user).resources
@@ -68,7 +68,7 @@ def _application_rows(config: FlytConfig, preset: ClusterParams, user: Dict[str,
     ]
 
 
-def _minicluster_row(config: FlytConfig, preset: ClusterParams, user: Dict[str, str]) -> _Row:
+def _minicluster_row(config: FlytConfig, preset: Optional[ClusterParams], user: Dict[str, str]) -> _Row:
     """The MiniCluster job exactly as ``flyt run`` sizes it."""
     try:
         job = minicluster_job(config, preset, user)
@@ -94,9 +94,9 @@ def validate_flyt_config(
     flink_rows, user = _flink_config_rows(config, yt_client)
     if config.is_application_cluster:
         if user is not None:
-            rows.extend(_application_rows(config, preset or ClusterPreset.MICRO.params, user))
+            rows.extend(_application_rows(config, preset, user))
     elif user is not None:
-        rows.append(_minicluster_row(config, preset or ClusterPreset.MICRO.params, user))
+        rows.append(_minicluster_row(config, preset, user))
     rows.extend(flink_rows)
 
     ok_pkgs = bool(config.runtime_python_packages)

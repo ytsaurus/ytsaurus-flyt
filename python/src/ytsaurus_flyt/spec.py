@@ -172,17 +172,17 @@ def build_vanilla_operation_spec(
     operation_params: OperationParams,
     secure_vault: dict[str, str],
     *,
-    preset_params: ClusterParams,
+    preset_params: Optional[ClusterParams] = None,
     yt_client: Optional[YtClient] = None,
     use_squashfs_sandbox_unpack: bool = False,
     flink_options: Optional[Mapping[str, str]] = None,
 ) -> VanillaSpecBuilder:
     """Build a Vanilla operation spec to launch a Flink job (SquashFS runtime only).
 
-    ``cluster_mode: minicluster`` yields a single task sized by ``preset_params``; the script's MiniCluster
+    ``cluster_mode: minicluster`` yields a single task sized like one TaskManager; the script's MiniCluster
     gets the generated ``config.yaml`` as its context configuration.
     ``cluster_mode: application`` yields a gang ``jobmanager`` task and a ``taskmanager`` task; ``preset_params``
-    sizes every TaskManager (:func:`ytsaurus_flyt.application.application_cluster`). ``yt_client`` is then required:
+    (or the user's own sizing, :func:`ytsaurus_flyt.application.resolve_taskmanager_size`) sizes every TaskManager. ``yt_client`` is then required:
     its proxy (or ``config.job_yt_proxy``) is what the TaskManagers query to discover the JobManager.
     ``flink_options``, the user's Flink options, go over flyt's defaults in both modes; by default they are read from ``config``
     (:func:`ytsaurus_flyt.flink_conf.user_flink_config`, a Cypress file through ``yt_client``).
@@ -214,10 +214,7 @@ def build_vanilla_operation_spec(
     else:
         # JVM flags go to config.yaml (env.java.*): FLINK_ENV_JAVA_OPTS would make the gateway ignore them.
         minicluster = minicluster_job(config, preset_params, flink_options)
-        if minicluster.flink_memory:
-            logger.info(
-                "MiniCluster job: %d cpu, %dm sized as one TaskManager", minicluster.cpu, minicluster.memory // MIB
-            )
+        logger.info("MiniCluster job: %d cpu, %dm", minicluster.cpu, minicluster.memory // MIB)
         flink_config = minicluster.flink_config
     environment.update(config.extra_environment)
 

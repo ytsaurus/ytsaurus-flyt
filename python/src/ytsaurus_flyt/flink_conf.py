@@ -232,32 +232,35 @@ def cluster_flink_config(
 
 def minicluster_flink_config(
     config: FlytConfig,
-    preset: ClusterParams,
+    preset: Optional[ClusterParams],
     user: Mapping[str, str],
     *,
     cpu: Optional[int] = None,
     process_memory: Optional[int] = None,
 ) -> Dict[str, str]:
     """The ``config.yaml`` of a MiniCluster job: the same layers as :func:`cluster_flink_config`. The preset
-    sizes the job's JVM, which the PyFlink gateway starts with ``env.java.*``; with ``process_memory``
-    (``taskmanager.memory.process.size``) the job is one TaskManager instead, and the run script adds the
-    JVM flags Flink derives for it."""
+    sizes the job's JVM, which the PyFlink gateway starts with ``env.java.*``; without one, ``cpu`` and
+    ``process_memory`` (``taskmanager.memory.process.size``) make the job one TaskManager, and the run script
+    adds the JVM flags Flink derives for it."""
+    if preset is None and (cpu is None or process_memory is None):
+        raise ValueError("a MiniCluster without a preset needs cpu and process_memory")
     cpu = cpu or preset.cpu
     props = _common_defaults(config)
     # Every cpu of the job, like every slot of an application cluster (and like PyFlink's local default).
     props[DEFAULT_PARALLELISM_KEY] = str(cpu)
     jvm_opts: List[str] = []
-    if process_memory is None:
+    if preset is not None:
         jvm_opts.append(f"-Xmx{preset.max_heap_size}")
         if preset.off_heap_size:
             # Bounds NIO/netty direct buffers (gRPC connectors); otherwise the JVM
             # defaults MaxDirectMemorySize to ~the max heap size.
             jvm_opts.append(f"-XX:MaxDirectMemorySize={preset.off_heap_size}")
     else:
+        assert process_memory is not None
         _taskmanager_memory_defaults(props, user, process_memory)
     jvm_opts += [f"-XX:ActiveProcessorCount={cpu}", JVM_EXIT_ON_OOM_OPT, *JVM_COMMON_OPTS]
     _apply_user_and_owned(props, user, {JVM_DEFAULT_OPTS_KEYS[0]: " ".join(jvm_opts)})
-    if process_memory is not None:
+    if preset is None:
         props.update(_jvm_overhead_floor(props, (TM_MEMORY_PREFIX,)))
     return props
 
@@ -296,12 +299,6 @@ def flink_config_warnings(config: FlytConfig, user: Mapping[str, str]) -> List[s
             for key in sorted(user)
             if key.startswith(JM_MEMORY_PREFIX)
         ]
-        if TM_PROCESS_SIZE_KEY not in user:
-            out += [
-                f"{key} has no effect in minicluster mode without {TM_PROCESS_SIZE_KEY}: the preset sizes the job"
-                for key in sorted(user)
-                if key.startswith(TM_MEMORY_PREFIX)
-            ]
         out += [
             f"{key} has no effect in minicluster mode: the job is one JVM" for key in _ROLE_JVM_OPTS_KEYS if key in user
         ]

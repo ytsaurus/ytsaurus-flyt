@@ -392,7 +392,7 @@ def test_run_taskmanagers_flag_sets_capacity(monkeypatch, tmp_path: Path) -> Non
     assert result.exit_code == 0, result.output
     cfg = captured["config"]
     assert cfg.taskmanager_count == 5
-    assert captured["preset"].name == "MICRO"  # the profile's preset sizes every TaskManager
+    assert captured["preset"] is None  # no preset in the profile: micro applies unless the run sizes TaskManagers
 
 
 def test_run_without_mode_flag_keeps_profile_cluster_mode(monkeypatch, tmp_path: Path) -> None:
@@ -475,3 +475,17 @@ def test_run_rejects_a_dynamic_option_without_a_value(monkeypatch, tmp_path: Pat
     result = CliRunner().invoke(cli, ["run", "-D", "pipeline.name", "--wheel", "svc.whl", "x.py"])
     assert result.exit_code != 0
     assert "expected KEY=VALUE" in result.output
+
+
+def test_profile_add_writes_a_preset_only_when_given(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("FLYT_CONFIG_DIR", str(tmp_path))
+    runner = CliRunner()
+    for name, extra in (("plain", []), ("sized", ["--preset", "large"])):
+        result = runner.invoke(
+            cli, ["profile", "add", name, "--proxy", "http://x.example:80", *extra], catch_exceptions=False
+        )
+        assert result.exit_code == 0, result.output
+    plain = yaml.safe_load((tmp_path / "profiles" / "plain.yaml").read_text(encoding="utf-8"))
+    sized = yaml.safe_load((tmp_path / "profiles" / "sized.yaml").read_text(encoding="utf-8"))
+    assert "preset" not in plain
+    assert sized["preset"] == "large"

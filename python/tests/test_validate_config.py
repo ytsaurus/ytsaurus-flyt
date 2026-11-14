@@ -38,7 +38,7 @@ def test_validate_minicluster_sized_as_one_taskmanager():
     assert _named(validate_flyt_config(cfg), "cluster_mode") == [(True, "minicluster: one TaskManager (3 cpu, 6144m)")]
     bad = FlytConfig(flink_config_override={"taskmanager.memory.task.heap.size": "1g"})
     ((ok, msg),) = _named(validate_flyt_config(bad), "cluster_mode")
-    assert ok is False and "set taskmanager.memory.process.size as well" in msg
+    assert ok is False and "needs taskmanager_cpu (--tm-cpu) and taskmanager.memory.process.size" in msg
 
 
 def test_validate_reads_the_flink_config_in_both_modes(tmp_path):

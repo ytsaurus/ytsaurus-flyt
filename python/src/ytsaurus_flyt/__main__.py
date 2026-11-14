@@ -110,11 +110,12 @@ def _resolve_connection(
         raise click.ClickException(str(e)) from e
 
 
-def _default_profile_body(proxy: str, pool: str, preset: str, cypress: str) -> Dict[str, Any]:
+def _default_profile_body(proxy: str, pool: str, preset: Optional[str], cypress: str) -> Dict[str, Any]:
+    body: Dict[str, Any] = {"proxy": proxy, "pool": pool}
+    if preset:
+        body["preset"] = preset
     return {
-        "proxy": proxy,
-        "pool": pool,
-        "preset": preset,
+        **body,
         "cypress_base_path": cypress,
         "squashfs_layer_delivery": "layer_paths",
         "runtime_python_packages": ["apache-flink==1.20.1"],
@@ -134,7 +135,11 @@ def profile_cli() -> None:
 @click.argument("name")
 @click.option("--proxy", required=True, help="YT HTTP proxy URL.")
 @click.option("--pool", default="default", show_default=True)
-@click.option("--preset", default="micro", show_default=True)
+@click.option(
+    "--preset",
+    default=None,
+    help="Preset that sizes the jobs (default: none in the profile, micro unless the run sizes them itself).",
+)
 @click.option(
     "--cypress-base-path",
     default=None,
@@ -144,7 +149,7 @@ def profile_add(
     name: str,
     proxy: str,
     pool: str,
-    preset: str,
+    preset: Optional[str],
     cypress_base_path: Optional[str],
 ) -> None:
     """Create a profile. If it is the first profile, it becomes active."""
@@ -345,13 +350,12 @@ def validate(
     if px:
         yt_client = make_yt_client(px)
     _, _, pst = resolve_connection_from_profile(profile_data)
-    preset_name = (pst or "micro").strip()
-    preset_member = ClusterPreset.__members__.get(preset_name.upper())
+    preset_member = ClusterPreset.__members__.get(pst.upper()) if pst else None
     rows = validate_flyt_config(
         cfg, proxy=px or None, yt_client=yt_client, preset=preset_member.params if preset_member else None
     )
-    if preset_member is None:
-        rows.insert(0, ("preset", False, f"unknown preset {preset_name!r}; use one of micro, small, large, xlarge"))
+    if pst and preset_member is None:
+        rows.insert(0, ("preset", False, f"unknown preset {pst!r}; use one of micro, small, large, xlarge"))
     ok_all = True
     for name, ok, msg in rows:
         ok_all = ok_all and ok is not False
@@ -386,8 +390,9 @@ def _parse_flink_options(options: Tuple[str, ...]) -> Dict[str, str]:
     "--preset",
     type=click.Choice(["micro", "small", "large", "xlarge"], case_sensitive=False),
     default=None,
-    help="Resource preset (default: from profile or micro): the MiniCluster YT job, or every TaskManager "
-    "YT job for --mode application (cpu = task slots, memory = container).",
+    help="Resource preset: the MiniCluster YT job, or every TaskManager YT job for --mode application "
+    "(cpu = task slots, memory = container). Default: from profile, else micro; not combinable with --tm-cpu "
+    "and taskmanager.memory.* keys, which size the TaskManager themselves.",
 )
 @click.option(
     "--mode",
@@ -417,8 +422,8 @@ def _parse_flink_options(options: Tuple[str, ...]) -> Dict[str, str]:
     "taskmanager_cpu",
     type=click.IntRange(min=1),
     default=None,
-    help="CPU, and task slots, per TaskManager YT job, or of the minicluster job (default: profile, else the preset's "
-    "cpu); taskmanager.numberOfTaskSlots overrides the slots.",
+    help="CPU, and task slots, per TaskManager YT job, or of the minicluster job; sizes them without a preset, "
+    "together with taskmanager.memory.process.size. taskmanager.numberOfTaskSlots overrides the slots.",
 )
 @click.option(
     "--flink-conf",
@@ -498,11 +503,15 @@ def run(
             raise click.ClickException(str(e)) from e
     proxy_f, pool_f = _resolve_connection(profile_data, proxy, pool)
     _, _, pst = resolve_connection_from_profile(profile_data)
-    preset_s = (preset or "").strip().lower() or (pst or "micro").strip().lower()
-    try:
-        preset_enum = ClusterPreset[preset_s.upper()]
-    except KeyError as e:
-        raise click.ClickException("Invalid preset %r. Use one of: micro, small, large, xlarge." % (preset_s,)) from e
+    preset_s = (preset or "").strip().lower() or (pst or "").strip().lower()
+    preset_enum: Optional[ClusterPreset] = None
+    if preset_s:
+        try:
+            preset_enum = ClusterPreset[preset_s.upper()]
+        except KeyError as e:
+            raise click.ClickException(
+                "Invalid preset %r. Use one of: micro, small, large, xlarge." % (preset_s,)
+            ) from e
 
     with contextlib.ExitStack() as stack:
         project_root: Optional[str] = None
@@ -533,19 +542,22 @@ def run(
             FlinkUIWatcher(proxy=proxy_f, open_in_browser=not headless) if not detach else contextlib.nullcontext()
         )
         with watcher:
-            launch_vanilla_job(
-                config=cfg,
-                yt_client=make_yt_client(proxy_f),
-                job_command=job_command,
-                pool=pool_f,
-                preset=preset_enum,
-                wheel_path=wheel_path,
-                source_dir=source_dir,
-                cache_wheel=cache_wheel,
-                sync=not detach,
-                force_rebuild_layer=force_rebuild_layer,
-                profile_name=resolve_effective_profile_name(gp),
-            )
+            try:
+                launch_vanilla_job(
+                    config=cfg,
+                    yt_client=make_yt_client(proxy_f),
+                    job_command=job_command,
+                    pool=pool_f,
+                    preset=preset_enum,
+                    wheel_path=wheel_path,
+                    source_dir=source_dir,
+                    cache_wheel=cache_wheel,
+                    sync=not detach,
+                    force_rebuild_layer=force_rebuild_layer,
+                    profile_name=resolve_effective_profile_name(gp),
+                )
+            except ValueError as e:
+                raise click.ClickException(str(e)) from e
 
 
 @cli.command("build-layer")

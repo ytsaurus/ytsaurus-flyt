@@ -68,7 +68,7 @@ taskmanager_count: 3          # --taskmanagers; capacity, like TaskManager repli
 preset: large                 # --preset; every TaskManager: 4 cpu = 4 task slots, 16G container
 ```
 
-The preset that sizes the MiniCluster job sizes every TaskManager in application mode (its cpu is also the slot count, its memory the container); the JobManager gets 2 cpu and 2560m. The cluster must hold the pipeline's highest operator parallelism in `taskmanager_count * slots`. Sizing, lifecycle and troubleshooting: [docs/application-mode.md](docs/application-mode.md).
+The preset (or own sizing) of the MiniCluster job sizes every TaskManager in application mode (its cpu is also the slot count, its memory the container); the JobManager gets 2 cpu and 2560m. The cluster must hold the pipeline's highest operator parallelism in `taskmanager_count * slots`. Sizing, lifecycle and troubleshooting: [docs/application-mode.md](docs/application-mode.md).
 
 ## Commands
 
@@ -90,7 +90,7 @@ With `--wheel` only, pass the script path as it appears inside the unpacked whee
 
 `--force-rebuild` ignores a cached SquashFS on Cypress and rebuilds the layer.
 
-`--mode application --taskmanagers N [--jm-cpu C --tm-cpu C]` runs the pipeline as an application cluster ([docs/application-mode.md](docs/application-mode.md)); flags override the profile for this run, `--preset` sizes every TaskManager.
+`--mode application --taskmanagers N [--jm-cpu C --tm-cpu C]` runs the pipeline as an application cluster ([docs/application-mode.md](docs/application-mode.md)); flags override the profile for this run; `--preset`, or `--tm-cpu` with `taskmanager.memory.process.size`, sizes every TaskManager.
 
 `--flink-conf FILE` and `-D KEY=VALUE` pass Flink options for this run, in both modes; with the profile's `base_flink_conf_path` and `flink_config_override` they make up the job's `config.yaml` ([docs/flink-configuration.md](docs/flink-configuration.md)).
 
@@ -117,7 +117,9 @@ Do not put the same basename in both lists.
 
 ## Presets
 
-`minicluster`: the one YT job's CPU, container memory and `-Xmx`; `--tm-cpu` and the Flink key `taskmanager.memory.process.size` size the job as one TaskManager instead ([docs/flink-configuration.md](docs/flink-configuration.md#minicluster-memory)). `application`: every TaskManager's CPU (= task slots) and container memory, the heap columns do not apply; the JobManager has fixed defaults ([docs/application-mode.md](docs/application-mode.md#sizing)).
+A preset is for trying a pipeline out: `--preset`, `preset` in the profile, or `micro` when nothing else sizes the job. To size it yourself, drop the preset and set `--tm-cpu` and the Flink key `taskmanager.memory.process.size` (both required, not combinable with a preset; [docs/application-mode.md](docs/application-mode.md#sizing)).
+
+`minicluster`: the one YT job's CPU, container memory and `-Xmx`; without a preset the job is one TaskManager ([docs/flink-configuration.md](docs/flink-configuration.md#minicluster-memory)). `application`: every TaskManager's CPU (= task slots) and container memory, the heap columns do not apply; the JobManager has fixed defaults ([docs/application-mode.md](docs/application-mode.md#sizing)).
 
 | Preset | CPU | RAM | Heap |
 |--------|-----|-----|------|

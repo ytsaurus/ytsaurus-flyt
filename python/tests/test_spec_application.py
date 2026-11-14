@@ -166,14 +166,14 @@ def test_application_spec_sizes_taskmanagers_from_the_preset_and_the_jobmanager_
     assert spec["tasks"][TASKMANAGER_TASK]["cpu_limit"] == 4
 
 
-def _minicluster_spec(cfg: FlytConfig) -> dict:
+def _minicluster_spec(cfg: FlytConfig, preset=_MICRO) -> dict:
     return build_vanilla_operation_spec(
         title="t",
         job_command="pipeline.py",
         config=cfg,
         operation_params=_op(),
         secure_vault={},
-        preset_params=_MICRO,
+        preset_params=preset,
     ).build()
 
 
@@ -206,7 +206,7 @@ def test_minicluster_spec_is_unchanged_by_application_fields():
 def test_minicluster_job_sized_as_one_taskmanager():
     base = dict(service_name="svc", java_home="/jdk", python_bin="/py", taskmanager_cpu=3)
     cfg = FlytConfig(**base, flink_config_override={"taskmanager.memory.process.size": "6g"})
-    task = _minicluster_spec(cfg)["tasks"][MINICLUSTER_TASK]
+    task = _minicluster_spec(cfg, preset=None)["tasks"][MINICLUSTER_TASK]
     assert (task["cpu_limit"], task["memory_limit"]) == (3, 6 * 1024 * 1024 * 1024)
     # Flink's BashJavaUtils lays out the JVM in the job instead of the preset's -Xmx
     assert "minicluster/00_taskmanager_memory.sh" in task["command"]

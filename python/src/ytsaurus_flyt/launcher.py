@@ -9,6 +9,7 @@ from typing import Any, Dict, Optional, Union
 from yt.wrapper import YtClient
 from yt.wrapper.run_operation_commands import run_operation
 
+from ytsaurus_flyt.application import resolve_taskmanager_size
 from ytsaurus_flyt.config import FlytConfig, require_squashfs_runtime_config
 from ytsaurus_flyt.credentials import get_secure_credentials
 from ytsaurus_flyt.flink_conf import FLINK_REST_PORT, flink_config_warnings, user_flink_config
@@ -70,7 +71,7 @@ def launch_vanilla_job(
     yt_client: YtClient,
     job_command: str,
     pool: str,
-    preset: Union[ClusterPreset, ClusterParams] = ClusterPreset.MICRO,
+    preset: Union[ClusterPreset, ClusterParams, None] = None,
     extra_secrets: Optional[Dict[str, str]] = None,
     wheel_path: Optional[str] = None,
     source_dir: Optional[str] = None,
@@ -82,28 +83,23 @@ def launch_vanilla_job(
     """Submit a PyFlink job as a Vanilla operation (``execute.wait()`` semantics).
 
     With ``config.cluster_mode == ClusterMode.APPLICATION`` the operation runs a JobManager task and a
-    TaskManager task; ``preset`` then sizes every TaskManager.
+    TaskManager task. ``preset`` sizes every TaskManager, or the MiniCluster job; without one they are sized by
+    ``taskmanager_cpu`` and ``taskmanager.memory.process.size``, or by the micro preset when neither is set.
     """
-    if isinstance(preset, ClusterPreset):
-        preset_params = preset.params
-        preset_name = preset.name
-    else:
-        preset_params = preset
-        preset_name = "custom"
+    preset_params = preset.params if isinstance(preset, ClusterPreset) else preset
     proxy_url = proxy_url_from_client(yt_client)
     logger.info(
-        "Launching Vanilla Flink job on %s in pool %s (%s)",
+        "Launching Vanilla Flink job on %s in pool %s (%s mode)",
         proxy_url or "<unknown proxy>",
         pool,
-        f"application mode, preset={preset_name} per TaskManager"
-        if config.is_application_cluster
-        else f"preset={preset_name}",
+        "application" if config.is_application_cluster else "minicluster",
     )
 
     require_squashfs_runtime_config(config)
     flink_options = user_flink_config(config, yt_client)
     for warning in flink_config_warnings(config, flink_options):
         logger.warning("Flink configuration: %s", warning)
+    resolve_taskmanager_size(config, preset_params, flink_options)  # fail before building and uploading anything
 
     logger.info("Fetching credentials...")
     secure_vault = get_secure_credentials(yt_client, extra_secrets=extra_secrets)
