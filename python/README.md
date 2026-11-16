@@ -49,6 +49,12 @@ runtime_python_packages: ["apache-flink==1.20.1"]
 runtime_python_version: "3.8"
 java_home: "/usr/lib/jvm/java-11-openjdk-amd64"
 python_bin: "/usr/bin/python3"
+# application mode: a JobManager plus TaskManager YT jobs (default: minicluster, one YT job)
+cluster_mode: application
+flink_config_override:
+  flyt.taskmanager.replicas: "2"            # TaskManager YT jobs
+  flyt.taskmanager.cpu.cores: "1"           # cpu (and task slots) of each TaskManager
+  taskmanager.memory.process.size: 2g       # container of each TaskManager
 ```
 
 `runtime_python_version` must match the Python ABI of `python_bin` on exec nodes.
@@ -64,16 +70,7 @@ Default `squashfs_layer_delivery` is `layer_paths`. For Kind local dev, use `san
 | `minicluster` (default) | One `flink_minicluster` YT job runs the script; PyFlink starts JobManager and TaskManager in the same JVM. | Small pipelines, local Kind clusters. |
 | `application` | A `jobmanager` job runs the script through Flink's `PythonDriver` plus `flyt.taskmanager.replicas` TaskManager YT jobs. | Pipelines that need more than one container of CPU/RAM. |
 
-Application mode in a profile:
-
-```yaml
-cluster_mode: application
-preset: large                 # --preset; every TaskManager: 4 cpu = 4 task slots, 16G container
-flink_config_override:
-  flyt.taskmanager.replicas: "3"   # --taskmanagers; TaskManager YT jobs, the cluster capacity
-```
-
-The preset (or own sizing) of the MiniCluster job sizes every TaskManager in application mode (its cpu is also the slot count, its memory the container); the JobManager gets 2 cpu and 2560m. The cluster must hold the pipeline's highest operator parallelism in `flyt.taskmanager.replicas * slots`. The cluster's YT resources are Flink options of flyt: `flyt.taskmanager.replicas`, `flyt.taskmanager.cpu.cores`, `flyt.jobmanager.cpu.cores` ([docs/flink-configuration.md](docs/flink-configuration.md#flyt-options)). Sizing, lifecycle and troubleshooting: [docs/application-mode.md](docs/application-mode.md).
+In application mode every TaskManager is sized like the MiniCluster job. Sizing, options, lifecycle and troubleshooting: [docs/application-mode.md](docs/application-mode.md).
 
 Conceptually, application mode is a standalone Flink cluster on Kubernetes in application mode, and flyt takes its approaches from there: a fixed number of TaskManagers, one generated `config.yaml` for every container, the container sized by `*.memory.process.size`, and the cluster's resources as Flink options (`flyt.*`, like `kubernetes.*`).
 
@@ -97,7 +94,7 @@ With `--wheel` only, pass the script path as it appears inside the unpacked whee
 
 `--force-rebuild` ignores a cached SquashFS on Cypress and rebuilds the layer.
 
-`--mode application --taskmanagers N` runs the pipeline as an application cluster ([docs/application-mode.md](docs/application-mode.md)); `--preset`, or `taskmanager.memory.process.size` with `flyt.taskmanager.cpu.cores`, sizes every TaskManager.
+`--mode application --taskmanagers N` runs the pipeline as an application cluster of N TaskManagers ([docs/application-mode.md](docs/application-mode.md)).
 
 `--flink-conf FILE` and `-D KEY=VALUE` pass Flink options for this run, in both modes; with the profile's `base_flink_conf_path` and `flink_config_override` they make up the job's `config.yaml` ([docs/flink-configuration.md](docs/flink-configuration.md)).
 
@@ -124,9 +121,7 @@ Do not put the same basename in both lists.
 
 ## Presets
 
-A preset is for trying a pipeline out: `--preset`, `preset` in the profile, or `micro` when nothing else sizes the job. To size it yourself, drop the preset and set the Flink key `taskmanager.memory.process.size` (required) and `flyt.taskmanager.cpu.cores` (default: the task slots, 1 unless set); not combinable with a preset ([docs/application-mode.md](docs/application-mode.md#sizing)).
-
-`minicluster`: the one YT job's CPU, container memory and `-Xmx`; without a preset the job is one TaskManager ([docs/flink-configuration.md](docs/flink-configuration.md#minicluster-memory)). `application`: every TaskManager's CPU (= task slots) and container memory, the heap columns do not apply; the JobManager has fixed defaults ([docs/application-mode.md](docs/application-mode.md#sizing)).
+A preset is for trying a pipeline out: `--preset`, `preset` in the profile, or `micro` when nothing else sizes the job. It sizes the MiniCluster job, or every TaskManager in application mode, where the heap column does not apply. To size the job yourself instead, see [Sizing](docs/flink-configuration.md#sizing).
 
 | Preset | CPU | RAM | Heap |
 |--------|-----|-----|------|
