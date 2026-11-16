@@ -42,6 +42,7 @@ Both modes, overridable:
 | `restart-strategy.type` | `exponential-delay` (no attempt limit) | without checkpointing Flink would not restart a failed job at all: the script would fail and YT would restart the whole job |
 | `taskmanager.jvm-exit-on-oom` | `true` | an out-of-memory JVM dies and is restarted by YT instead of hanging in GC |
 | `heartbeat.timeout`, `heartbeat.interval`, `heartbeat.rpc-failure-threshold` | `120000`, `5000`, `9` | Flink's 50 s timeout loses TaskManagers on shared exec nodes to GC pauses and network hiccups |
+| `web.submit.enable`, `web.cancel.enable` | `false` | the REST API has no authentication and is reachable from the YT cluster network: it accepts no jar upload, and the web UI has no Cancel button (the REST API still cancels a job); stop a run by aborting the YT operation |
 | `python.executable`, `python.client.executable` | `python_bin` | the layer's interpreter |
 | `parallelism.default` | every cpu: the job's cpu in `minicluster`, `flyt.taskmanager.replicas * slots` in `application` | |
 

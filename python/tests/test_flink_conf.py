@@ -92,6 +92,8 @@ def test_both_modes_share_ports_restarts_and_python():
         "heartbeat.timeout",
         "heartbeat.interval",
         "heartbeat.rpc-failure-threshold",
+        "web.submit.enable",
+        "web.cancel.enable",
         "python.executable",
         "python.client.executable",
     )
@@ -99,6 +101,7 @@ def test_both_modes_share_ports_restarts_and_python():
     assert {k: app[k] for k in shared} == {k: mini[k] for k in shared}
     assert mini["restart-strategy.type"] == "exponential-delay"
     assert mini["heartbeat.timeout"] == "120000"
+    assert mini["web.submit.enable"] == mini["web.cancel.enable"] == "false"
 
 
 @pytest.mark.parametrize("props_of", [_props, _mini_props])

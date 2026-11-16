@@ -170,6 +170,9 @@ def common_defaults(config: FlytConfig) -> Dict[str, str]:
         "heartbeat.timeout": "120000",
         "heartbeat.interval": "5000",
         "heartbeat.rpc-failure-threshold": "9",
+        # The REST API has no authentication: no jar upload through it; cancel only leaves the web UI.
+        "web.submit.enable": "false",
+        "web.cancel.enable": "false",
         "python.executable": config.python_bin,
         "python.client.executable": config.python_bin,
     }
