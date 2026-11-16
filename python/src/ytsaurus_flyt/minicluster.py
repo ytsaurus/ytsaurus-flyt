@@ -12,10 +12,8 @@ from ytsaurus_flyt.flink_conf import (
     JVM_DEFAULT_OPTS_KEYS,
     JVM_EXIT_ON_OOM_OPT,
     TM_CPU_CORES_KEY,
-    TM_MEMORY_PREFIX,
     apply_user_and_owned,
     common_defaults,
-    jvm_overhead_floor,
     taskmanager_memory_defaults,
 )
 from ytsaurus_flyt.models import ClusterParams
@@ -42,8 +40,6 @@ def minicluster_flink_config(config: FlytConfig, size: WorkerSize, user: Mapping
     jvm_opts += [f"-XX:ActiveProcessorCount={size.cpu}", JVM_EXIT_ON_OOM_OPT, *JVM_COMMON_OPTS]
     apply_user_and_owned(props, user, {JVM_DEFAULT_OPTS_KEYS[0]: " ".join(jvm_opts)})
     props[TM_CPU_CORES_KEY] = str(size.cpu)
-    if isinstance(size, CustomSize):
-        props.update(jvm_overhead_floor(props, (TM_MEMORY_PREFIX,)))
     return props
 
 

@@ -87,8 +87,8 @@ def test_launch_reports_an_invalid_flink_configuration_before_building(monkeypat
     cfg = FlytConfig(service_name="svc", flink_config_override={"taskmanager.memory.process.size": "4g"})
     with pytest.raises(FlinkConfigError, match="without a preset"):
         launch_vanilla_job(cfg, MagicMock(), "pipeline.py", "pool", preset=ClusterPreset.SMALL, wheel_path="w.whl")
-    # parsed only while the config.yaml is built
-    override = {"taskmanager.memory.jvm-overhead.min": "abc"}
+    # the JobManager's size is parsed only in application mode
+    override = {"jobmanager.memory.process.size": "abc"}
     cfg = FlytConfig(service_name="svc", cluster_mode="application", flink_config_override=override)
     with pytest.raises(FlinkConfigError, match="not a memory size"):
         launch_vanilla_job(cfg, MagicMock(), "pipeline.py", "pool", wheel_path="w.whl")

@@ -1,7 +1,7 @@
 """flyt validate rows for application mode: the cluster as flyt run resolves it."""
 
 from ytsaurus_flyt.config import FlytConfig
-from ytsaurus_flyt.models import ClusterParams, ClusterPreset
+from ytsaurus_flyt.models import ClusterPreset
 from ytsaurus_flyt.validate_config import validate_flyt_config
 
 
@@ -20,12 +20,9 @@ def test_validate_prints_the_application_cluster_sized_by_the_preset():
     assert _named(rows, "discovery_timeout")
 
 
-def test_validate_defaults_to_the_micro_preset_and_fails_on_a_too_small_one():
+def test_validate_defaults_to_the_micro_preset():
     rows = validate_flyt_config(FlytConfig(cluster_mode="application"))
     assert "x 2 slot(s)" in _named(rows, "cluster_mode")[0][1]
-    tiny = ClusterParams(cpu=1, memory="512M", max_heap_size="256M", data_size_per_job="1M")
-    rows = validate_flyt_config(FlytConfig(cluster_mode="application"), preset=tiny)
-    assert _named(rows, "cluster_mode")[0][0] is False
 
 
 def test_validate_minicluster_has_no_application_rows():
@@ -64,7 +61,7 @@ def test_validate_fails_on_a_missing_flink_config_file(tmp_path):
 
 
 def test_validate_fails_on_an_invalid_memory_size_in_the_flink_config():
-    override = {"taskmanager.memory.jvm-overhead.min": "abc"}
+    override = {"jobmanager.memory.process.size": "abc"}
     rows = validate_flyt_config(FlytConfig(cluster_mode="application", flink_config_override=override))
-    assert _named(rows, "flink config.yaml")[0][0] is False
-    assert "not a memory size" in _named(rows, "flink config.yaml")[0][1]
+    assert _named(rows, "cluster_mode")[0][0] is False
+    assert "not a memory size" in _named(rows, "cluster_mode")[0][1]

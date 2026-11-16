@@ -26,7 +26,7 @@ from ytsaurus_flyt.flink_conf import (
     common_defaults,
     custom_memory_keys,
     int_option,
-    jvm_overhead_floor,
+    jvm_overhead_default,
     mebibytes,
     memory_option,
     taskmanager_memory_defaults,
@@ -37,7 +37,7 @@ from ytsaurus_flyt.models import (
     MIB,
     ClusterParams,
 )
-from ytsaurus_flyt.sizing import WorkerSize, check_room_for_jvm, resolve_taskmanager_size
+from ytsaurus_flyt.sizing import WorkerSize, resolve_taskmanager_size
 
 
 def _jobmanager_process_memory(user: Mapping[str, str]) -> int:
@@ -84,7 +84,6 @@ def resolve_application_resources(
     taskmanager_size = resolve_taskmanager_size(preset, user)
     slots = int_option(user, TASK_SLOTS_KEY) or taskmanager_size.cpu
     jobmanager_process_memory = _jobmanager_process_memory(user)
-    check_room_for_jvm("JobManager", jobmanager_process_memory)
     taskmanager_count = int_option(user, FLYT_TM_REPLICAS_KEY) or 1
     capacity = taskmanager_count * slots
     default_parallelism = int_option(user, DEFAULT_PARALLELISM_KEY) or capacity
@@ -117,6 +116,7 @@ def application_flink_config(
     props[DEFAULT_PARALLELISM_KEY] = str(resources.default_parallelism)
     if not custom_memory_keys(user, JM_MEMORY_PREFIX, JM_MEMORY_DEFAULT_KEYS):
         props[JM_PROCESS_SIZE_KEY] = mebibytes(resources.jobmanager_process_memory)
+        jvm_overhead_default(props, user, JM_MEMORY_PREFIX)
     taskmanager_memory_defaults(props, user, resources.taskmanager_size.memory)
     all_opts, jm_opts, tm_opts = JVM_DEFAULT_OPTS_KEYS
     apply_user_and_owned(
@@ -130,7 +130,6 @@ def application_flink_config(
         },
     )
     props[TM_CPU_CORES_KEY] = str(resources.taskmanager_size.cpu)
-    props.update(jvm_overhead_floor(props))
     return props
 
 

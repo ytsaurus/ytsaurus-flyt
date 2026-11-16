@@ -15,7 +15,7 @@ from ytsaurus_flyt.flink_conf import (
     int_option,
     memory_option,
 )
-from ytsaurus_flyt.models import JVM_OVERHEAD_MIN, MIB, ClusterParams, ClusterPreset
+from ytsaurus_flyt.models import ClusterParams, ClusterPreset
 
 
 @dataclass(frozen=True)
@@ -53,9 +53,7 @@ def resolve_taskmanager_size(preset: Optional[ClusterParams], user: Mapping[str,
     cpu = int_option(user, FLYT_TM_CPU_KEY)
     own = ([FLYT_TM_CPU_KEY] if cpu is not None else []) + sorted(k for k in user if k.startswith(TM_MEMORY_PREFIX))
     if not own:
-        preset = preset or ClusterPreset.MICRO.params
-        check_room_for_jvm("TaskManager", preset.memory_bytes())
-        return PresetSize(preset)
+        return PresetSize(preset or ClusterPreset.MICRO.params)
     if preset is not None:
         raise FlinkConfigError(
             f"{', '.join(own)} size the TaskManager without a preset; remove the preset (--preset, "
@@ -64,12 +62,4 @@ def resolve_taskmanager_size(preset: Optional[ClusterParams], user: Mapping[str,
     if not str(user.get(TM_PROCESS_SIZE_KEY) or "").strip():
         raise FlinkConfigError(f"a TaskManager sized without a preset needs {TM_PROCESS_SIZE_KEY}")
     process_memory = memory_option(user, TM_PROCESS_SIZE_KEY)
-    check_room_for_jvm("TaskManager", process_memory)
     return CustomSize(cpu=cpu or int_option(user, TASK_SLOTS_KEY) or 1, memory=process_memory)
-
-
-def check_room_for_jvm(role: str, process_memory: int) -> None:
-    if process_memory <= JVM_OVERHEAD_MIN:
-        raise FlinkConfigError(
-            f"{role} memory {process_memory // MIB}m leaves no JVM next to the {JVM_OVERHEAD_MIN // MIB}m JVM overhead"
-        )

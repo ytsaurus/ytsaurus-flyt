@@ -4,7 +4,7 @@ import pytest
 
 from ytsaurus_flyt.application import application_cluster, resolve_application_resources
 from ytsaurus_flyt.config import FlytConfig
-from ytsaurus_flyt.models import MIB, ClusterParams, ClusterPreset
+from ytsaurus_flyt.models import MIB, ClusterPreset
 
 _MIB = MIB
 _TM_CPU, _JM_CPU, _REPLICAS = "flyt.taskmanager.cpu.cores", "flyt.jobmanager.cpu.cores", "flyt.taskmanager.replicas"
@@ -75,14 +75,6 @@ def test_own_sizing_cpu_defaults_to_the_slots():
     assert (res.taskmanager_size.cpu, res.slots) == (4, 4)
     res = resolve_application_resources(None, {**size, _TM_CPU: "2", "taskmanager.numberOfTaskSlots": "4"})
     assert (res.taskmanager_size.cpu, res.slots) == (2, 4)
-
-
-def test_preset_too_small_for_a_taskmanager_jvm_is_rejected():
-    tiny = ClusterParams(cpu=1, memory="512M", max_heap_size="256M", data_size_per_job="1M")
-    with pytest.raises(ValueError, match="TaskManager memory 512m leaves no JVM"):
-        resolve_application_resources(tiny)
-    with pytest.raises(ValueError, match="JobManager memory 512m leaves no JVM"):
-        resolve_application_resources(ClusterPreset.MICRO.params, {"jobmanager.memory.process.size": "512m"})
 
 
 def test_application_cluster_bundles_resources_and_config():

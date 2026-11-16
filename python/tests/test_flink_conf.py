@@ -150,23 +150,26 @@ def test_custom_taskmanager_memory_model_drops_flyt_memory_defaults():
     assert props["jobmanager.memory.process.size"] == "2560m"
 
 
-def test_jvm_overhead_is_never_below_flyt_minimum():
+def test_user_jvm_overhead_bounds_replace_flyt_default():
     user = {
         "taskmanager.memory.process.size": "4g",
         "taskmanager.memory.jvm-overhead.min": "256m",
-        "taskmanager.memory.jvm-overhead.max": "300m",
-        "jobmanager.memory.jvm-overhead.min": "1g",
-        "jobmanager.memory.jvm-overhead.fraction": "0.2",
+        "jobmanager.memory.jvm-overhead.max": "300m",
     }
     props = _props(user)
-    assert props["taskmanager.memory.jvm-overhead.min"] == props["taskmanager.memory.jvm-overhead.max"] == "512m"
-    assert props["jobmanager.memory.jvm-overhead.min"] == "1g"  # above the minimum: kept
-    assert props["jobmanager.memory.jvm-overhead.fraction"] == "0.2"
+    assert props["taskmanager.memory.jvm-overhead.min"] == "256m"  # the user's value, not raised
+    assert "jobmanager.memory.jvm-overhead.min" not in props  # a user max drops flyt's min
+    assert props["jobmanager.memory.jvm-overhead.max"] == "300m"
     # overhead keys only carve process.size: flyt keeps its memory defaults
     assert props["taskmanager.memory.managed.fraction"] == "0.1"
-    warnings = flink_config_warnings(_config(), user)
-    assert len(warnings) == 2
-    assert all(w.startswith("taskmanager.memory.jvm-overhead.") and "raised to 512m" in w for w in warnings)
+    assert flink_config_warnings(_config(), user) == []
+
+
+def test_own_memory_layout_gets_no_flyt_overhead_default():
+    user = {"taskmanager.memory.process.size": "4g", "taskmanager.memory.flink.size": "3g"}
+    props = _props(user)
+    assert "taskmanager.memory.jvm-overhead.min" not in props
+    assert "taskmanager.memory.managed.fraction" not in props
 
 
 def test_flink_config_warnings_cover_owned_and_mode_ignored_keys():
@@ -176,13 +179,6 @@ def test_flink_config_warnings_cover_owned_and_mode_ignored_keys():
     assert any("rest.port" in w for w in app) and any("rest.address" in w for w in app)
     assert not any("jobmanager.memory.process.size" in w for w in app)
     assert any("jobmanager.memory.process.size has no effect in minicluster" in w for w in mini)
-    overhead = {"taskmanager.memory.jvm-overhead.min": "256m"}
-    sized = flink_config_warnings(
-        _config(cluster_mode="minicluster"), {**overhead, "taskmanager.memory.process.size": "6g"}
-    )
-    assert sized == [
-        "taskmanager.memory.jvm-overhead.min is raised to 512m: the YT container is process.size, and the JVM overhead holds the processes outside the JVM as well"
-    ]
     assert flink_config_warnings(_config(), {"rest.port": "27050"}) == []  # flyt's own value is fine
     # taskmanager.cpu.cores is the container cpu: flyt.taskmanager.cpu.cores or the preset
     (cores,) = flink_config_warnings(_config(), {"taskmanager.cpu.cores": "8"})
