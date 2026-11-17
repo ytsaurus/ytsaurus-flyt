@@ -5,11 +5,7 @@ from importlib.metadata import version as _pkg_version
 
 from ytsaurus_flyt.application import ApplicationCluster, ApplicationResources
 from ytsaurus_flyt.config import ClusterMode, FlytConfig
-from ytsaurus_flyt.models import (
-    ClusterParams,
-    ClusterPreset,
-    OperationParams,
-)
+from ytsaurus_flyt.models import OperationParams
 
 __all__ = [
     "FlytConfig",
@@ -17,8 +13,6 @@ __all__ = [
     "launch_vanilla_job",
     "ApplicationCluster",
     "ApplicationResources",
-    "ClusterParams",
-    "ClusterPreset",
     "OperationParams",
     "build_vanilla_operation_spec",
     "ensure_runtime_layer",

@@ -4,7 +4,7 @@ import logging
 import os
 import time
 from contextlib import ExitStack
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Optional
 
 from yt.wrapper import YtClient
 from yt.wrapper.run_operation_commands import run_operation
@@ -18,11 +18,7 @@ from ytsaurus_flyt.flink_lib_jars import (
 )
 from ytsaurus_flyt.jobshell_resolve import operation_title_for_profile
 from ytsaurus_flyt.layer_builder import ensure_runtime_layer, ensure_unsquashfs_tool_remote
-from ytsaurus_flyt.models import (
-    ClusterParams,
-    ClusterPreset,
-    OperationParams,
-)
+from ytsaurus_flyt.models import OperationParams
 from ytsaurus_flyt.spec import FlinkCluster, build_vanilla_operation_spec, max_failed_job_count, resolve_flink_cluster
 from ytsaurus_flyt.wheel_utils import dedupe_file_paths_by_basename, upload_service_wheel
 from ytsaurus_flyt.yt_client import proxy_url_from_client
@@ -57,7 +53,6 @@ def launch_vanilla_job(
     yt_client: YtClient,
     job_command: str,
     pool: str,
-    preset: Union[ClusterPreset, ClusterParams, None] = None,
     extra_secrets: Optional[Dict[str, str]] = None,
     wheel_path: Optional[str] = None,
     source_dir: Optional[str] = None,
@@ -69,12 +64,10 @@ def launch_vanilla_job(
     """Submit a PyFlink job as a Vanilla operation (``execute.wait()`` semantics).
 
     With ``config.cluster_mode == ClusterMode.APPLICATION`` the operation runs a JobManager task and a
-    TaskManager task. ``preset`` sizes every TaskManager, or the MiniCluster job; without one they are sized by
-    ``taskmanager.memory.process.size`` and ``flyt.taskmanager.cpu.cores``, or by the micro preset when neither is set.
-    An invalid Flink configuration raises :class:`~ytsaurus_flyt.flink_conf.FlinkConfigError` before anything
+    TaskManager task. Every TaskManager, or the MiniCluster job, is sized by ``taskmanager.memory.process.size``
+    and ``flyt.taskmanager.cpu.cores`` of the Flink configuration. An invalid Flink configuration raises :class:`~ytsaurus_flyt.flink_conf.FlinkConfigError` before anything
     is built or uploaded.
     """
-    preset_params = preset.params if isinstance(preset, ClusterPreset) else preset
     proxy_url = proxy_url_from_client(yt_client)
     logger.info(
         "Launching Vanilla Flink job on %s in pool %s (%s mode)",
@@ -84,7 +77,7 @@ def launch_vanilla_job(
     )
 
     require_squashfs_runtime_config(config)
-    cluster = resolve_flink_cluster(config, preset_params, yt_client)  # fails before anything is built or uploaded
+    cluster = resolve_flink_cluster(config, yt_client)  # fails before anything is built or uploaded
 
     logger.info("Fetching credentials...")
     secure_vault = get_secure_credentials(yt_client, extra_secrets=extra_secrets)

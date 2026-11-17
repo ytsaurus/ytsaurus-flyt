@@ -2,7 +2,6 @@
 
 import re
 from dataclasses import dataclass, field
-from enum import Enum
 from typing import Any, Dict, List, Optional, Union
 
 MIB = 1024 * 1024
@@ -42,72 +41,9 @@ DEFAULT_JOBMANAGER_PROCESS_MEMORY = parse_memory("2560M")
 # The YT container is process.size, so Flink's jvm-overhead holds the JVM's native memory and every process
 # outside the JVM; measured ~360m on a TaskManager, ~240m on a JobManager.
 JVM_OVERHEAD_MIN = parse_memory("512M")
-
-
-@dataclass(frozen=True)
-class ClusterParams:
-    """Size of a flyt job: the MiniCluster YT job, or every TaskManager YT job in application mode
-    (``cpu`` is then also its default task slot count, ``memory`` its container). ``max_heap_size`` (``-Xmx``)
-    and ``off_heap_size`` (``-XX:MaxDirectMemorySize``) apply to the MiniCluster JVM only."""
-
-    cpu: int
-    memory: str
-    max_heap_size: str
-    data_size_per_job: str
-    disk_request_space: str = "10G"
-    disk_request_medium_name: str = "default"
-    off_heap_size: Optional[str] = None
-    """``data_size_per_job`` and ``disk_request_*`` are for launchers that run the same MiniCluster
-    inside YT Map operations (input bytes per job, sandbox disk quota); flyt's Vanilla operations
-    do not use them."""
-
-    def data_size_per_job_bytes(self) -> int:
-        return parse_memory(self.data_size_per_job)
-
-    def max_heap_size_bytes(self) -> int:
-        return parse_memory(self.max_heap_size)
-
-    def off_heap_size_bytes(self) -> Optional[int]:
-        return parse_memory(self.off_heap_size) if self.off_heap_size else None
-
-    def disk_request_space_bytes(self) -> int:
-        return parse_memory(self.disk_request_space)
-
-    def memory_bytes(self) -> int:
-        return parse_memory(self.memory)
-
-
-class ClusterPreset(Enum):
-    """Pre-defined sizes: the MiniCluster YT job, or every TaskManager YT job in application mode."""
-
-    MICRO = ClusterParams(
-        cpu=2,
-        memory="4G",
-        max_heap_size="2324M",
-        data_size_per_job="500M",
-    )
-    SMALL = ClusterParams(
-        cpu=2,
-        memory="8G",
-        max_heap_size="4648M",
-        data_size_per_job="1G",
-    )
-    LARGE = ClusterParams(
-        cpu=4,
-        memory="16G",
-        max_heap_size="9296M",
-        data_size_per_job="2G",
-    )
-    XLARGE = ClusterParams(
-        cpu=8,
-        memory="32G",
-        max_heap_size="24G",
-        data_size_per_job="2G",
-    )
-
-    @property
-    def params(self) -> ClusterParams:
-        return self.value
+# A TaskManager, or the MiniCluster job, the Flink configuration does not size.
+DEFAULT_TASKMANAGER_CPU = 2
+DEFAULT_TASKMANAGER_PROCESS_MEMORY = parse_memory("4G")
 
 
 @dataclass

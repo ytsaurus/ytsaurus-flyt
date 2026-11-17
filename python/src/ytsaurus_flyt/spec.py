@@ -20,7 +20,7 @@ from ytsaurus_flyt.flink_conf import (
 )
 from ytsaurus_flyt.job_proxy import job_yt_proxy
 from ytsaurus_flyt.minicluster import MiniCluster, minicluster
-from ytsaurus_flyt.models import MIB, ClusterParams, OperationParams
+from ytsaurus_flyt.models import MIB, OperationParams
 from ytsaurus_flyt.yt_client import proxy_url_from_client
 
 logger = logging.getLogger(__name__)
@@ -48,24 +48,20 @@ DEFAULT_MAX_FAILED_JOB_COUNT = 10
 FAILED_JOBS_PER_TASKMANAGER = 5
 
 
-def flink_cluster(
-    config: FlytConfig, preset_params: Optional[ClusterParams], flink_options: Mapping[str, str]
-) -> FlinkCluster:
+def flink_cluster(config: FlytConfig, flink_options: Mapping[str, str]) -> FlinkCluster:
     """The cluster of ``config.cluster_mode`` from the user's Flink options."""
     if config.is_application_cluster:
-        return application_cluster(config, preset_params, flink_options)
-    return minicluster(config, preset_params, flink_options)
+        return application_cluster(config, flink_options)
+    return minicluster(config, flink_options)
 
 
-def resolve_flink_cluster(
-    config: FlytConfig, preset_params: Optional[ClusterParams] = None, yt_client: Optional[YtClient] = None
-) -> FlinkCluster:
+def resolve_flink_cluster(config: FlytConfig, yt_client: Optional[YtClient] = None) -> FlinkCluster:
     """The Flink cluster of a run from the user's Flink options (a Cypress file through ``yt_client``), with their
     warnings logged; an invalid configuration raises :class:`~ytsaurus_flyt.flink_conf.FlinkConfigError`."""
     flink_options = user_flink_config(config, yt_client)
     for warning in flink_config_warnings(config, flink_options):
         logger.warning("Flink configuration: %s", warning)
-    return flink_cluster(config, preset_params, flink_options)
+    return flink_cluster(config, flink_options)
 
 
 def max_failed_job_count(config: FlytConfig, cluster: FlinkCluster) -> int:
@@ -101,9 +97,7 @@ def _extract_service_name(job_command: str) -> str:
     return "unknown"
 
 
-def _script_fragments(
-    *, use_squashfs_sandbox_unpack: bool, role: Optional[str], flink_memory: bool = False
-) -> List[str]:
+def _script_fragments(*, use_squashfs_sandbox_unpack: bool, role: Optional[str]) -> List[str]:
     """Ordered run-script fragments for a MiniCluster job or an application-mode role."""
     ordered = ["common/00_set_essentials.sh"]
     if use_squashfs_sandbox_unpack:
@@ -118,9 +112,7 @@ def _script_fragments(
         "common/06_write_flink_conf.sh",
     ]
     if role is None:
-        if flink_memory:
-            ordered.append("minicluster/00_taskmanager_memory.sh")
-        ordered.append("minicluster/run.sh")
+        ordered += ["minicluster/00_taskmanager_memory.sh", "minicluster/run.sh"]
     elif role == JOBMANAGER_TASK:
         ordered += ["application/01_cluster_common.sh", "application/02_start_sidecar.sh", "application/jobmanager.sh"]
     elif role == TASKMANAGER_TASK:
@@ -138,7 +130,6 @@ def _build_run_script(
     use_squashfs_sandbox_unpack: bool = False,
     role: Optional[str] = None,
     flink_config: Mapping[str, str],
-    flink_memory: bool = False,
 ) -> str:
     result_script = ["#!/bin/bash", "set -e"]
     # Values are substituted into the templates, not re-formatted, so braces in them are safe.
@@ -166,9 +157,7 @@ def _build_run_script(
             }
         )
 
-    for name in _script_fragments(
-        use_squashfs_sandbox_unpack=use_squashfs_sandbox_unpack, role=role, flink_memory=flink_memory
-    ):
+    for name in _script_fragments(use_squashfs_sandbox_unpack=use_squashfs_sandbox_unpack, role=role):
         script_path = _RUN_SCRIPTS_DIR / name
         result_script.append(f"echo 'Running {name}...' 1>&2")
         with open(script_path, encoding="utf-8") as script_file:
@@ -309,7 +298,6 @@ def build_vanilla_operation_spec(
                 service_name,
                 use_squashfs_sandbox_unpack=use_squashfs_sandbox_unpack,
                 flink_config=flink_config,
-                flink_memory=cluster.flink_memory,
             ),
             job_count=1,
             cpu=cluster.cpu,

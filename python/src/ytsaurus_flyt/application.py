@@ -28,29 +28,15 @@ from ytsaurus_flyt.flink_conf import (
     int_option,
     jvm_overhead_default,
     mebibytes,
-    memory_option,
+    process_memory_option,
     taskmanager_memory_defaults,
 )
 from ytsaurus_flyt.models import (
     DEFAULT_JOBMANAGER_CPU,
     DEFAULT_JOBMANAGER_PROCESS_MEMORY,
     MIB,
-    ClusterParams,
 )
 from ytsaurus_flyt.sizing import WorkerSize, resolve_taskmanager_size
-
-
-def _jobmanager_process_memory(user: Mapping[str, str]) -> int:
-    """``jobmanager.memory.process.size``, flyt's default unless set; other memory keys need it as well."""
-    if str(user.get(JM_PROCESS_SIZE_KEY) or "").strip():
-        return memory_option(user, JM_PROCESS_SIZE_KEY)
-    custom = custom_memory_keys(user, JM_MEMORY_PREFIX, JM_MEMORY_DEFAULT_KEYS)
-    if custom:
-        raise FlinkConfigError(
-            f"{', '.join(custom)} configure Flink's memory model, so flyt adds no memory defaults; "
-            f"set {JM_PROCESS_SIZE_KEY} as well: it sizes the YT container"
-        )
-    return DEFAULT_JOBMANAGER_PROCESS_MEMORY
 
 
 @dataclass(frozen=True)
@@ -74,16 +60,16 @@ class ApplicationResources:
         )
 
 
-def resolve_application_resources(
-    preset: Optional[ClusterParams] = None, user: Optional[Mapping[str, str]] = None
-) -> ApplicationResources:
+def resolve_application_resources(user: Optional[Mapping[str, str]] = None) -> ApplicationResources:
     """Every TaskManager is sized by :func:`resolve_taskmanager_size`, with one slot per cpu; the JobManager
     gets flyt's defaults (cpu from ``flyt.jobmanager.cpu.cores``). The user's Flink options
     (:func:`~ytsaurus_flyt.flink_conf.user_flink_config`) override slots, JVM sizes and the default parallelism."""
     user = user or {}
-    taskmanager_size = resolve_taskmanager_size(preset, user)
+    taskmanager_size = resolve_taskmanager_size(user)
     slots = int_option(user, TASK_SLOTS_KEY) or taskmanager_size.cpu
-    jobmanager_process_memory = _jobmanager_process_memory(user)
+    jobmanager_process_memory = process_memory_option(
+        user, JM_PROCESS_SIZE_KEY, JM_MEMORY_PREFIX, JM_MEMORY_DEFAULT_KEYS, DEFAULT_JOBMANAGER_PROCESS_MEMORY
+    )
     taskmanager_count = int_option(user, FLYT_TM_REPLICAS_KEY) or 1
     capacity = taskmanager_count * slots
     default_parallelism = int_option(user, DEFAULT_PARALLELISM_KEY) or capacity
@@ -141,11 +127,8 @@ class ApplicationCluster:
     flink_config: Dict[str, str]
 
 
-def application_cluster(
-    config: FlytConfig, preset: Optional[ClusterParams] = None, user: Optional[Mapping[str, str]] = None
-) -> ApplicationCluster:
-    """Resolve the application cluster from the profile, the preset that sizes each TaskManager and the
-    user's Flink options."""
+def application_cluster(config: FlytConfig, user: Optional[Mapping[str, str]] = None) -> ApplicationCluster:
+    """Resolve the application cluster from the profile and the user's Flink options."""
     user = user or {}
-    resources = resolve_application_resources(preset, user)
+    resources = resolve_application_resources(user)
     return ApplicationCluster(resources=resources, flink_config=application_flink_config(config, resources, user))

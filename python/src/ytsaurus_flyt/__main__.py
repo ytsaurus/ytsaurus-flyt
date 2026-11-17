@@ -32,7 +32,6 @@ from ytsaurus_flyt.layer_builder import (
     ensure_unsquashfs_tool_remote,
     upload_squashfs_layer,
 )
-from ytsaurus_flyt.models import ClusterPreset
 from ytsaurus_flyt.profiles import (
     default_cypress_base_path,
     list_profile_names,
@@ -104,18 +103,17 @@ def _resolve_connection(
     cli_proxy: Optional[str],
     cli_pool: Optional[str],
 ) -> Tuple[str, str]:
-    pr, pl, _ = resolve_connection_from_profile(profile_data)
+    pr, pl = resolve_connection_from_profile(profile_data)
     try:
         return resolve_proxy_pool(pr, pl, cli_proxy, cli_pool)
     except ValueError as e:
         raise click.ClickException(str(e)) from e
 
 
-def _default_profile_body(proxy: str, pool: str, preset: Optional[str], cypress: str) -> Dict[str, Any]:
+def _default_profile_body(proxy: str, pool: str, cypress: str) -> Dict[str, Any]:
     return {
         "proxy": proxy,
         "pool": pool,
-        **({"preset": preset} if preset else {}),
         "cypress_base_path": cypress,
         "squashfs_layer_delivery": "layer_paths",
         "runtime_python_packages": ["apache-flink==1.20.1"],
@@ -136,11 +134,6 @@ def profile_cli() -> None:
 @click.option("--proxy", required=True, help="YT HTTP proxy URL.")
 @click.option("--pool", default="default", show_default=True)
 @click.option(
-    "--preset",
-    default=None,
-    help="Preset that sizes the jobs (default: none).",
-)
-@click.option(
     "--cypress-base-path",
     default=None,
     help="Cypress prefix for layers/tools (default: //home/flyt/clusters/<name>).",
@@ -149,14 +142,13 @@ def profile_add(
     name: str,
     proxy: str,
     pool: str,
-    preset: Optional[str],
     cypress_base_path: Optional[str],
 ) -> None:
     """Create a profile. If it is the first profile, it becomes active."""
     if profile_yaml_path(name).exists():
         raise click.ClickException(f"Profile already exists: {name!r}")
     cypress = (cypress_base_path or "").strip() or default_cypress_base_path(name)
-    body = _default_profile_body(proxy, pool, preset, cypress)
+    body = _default_profile_body(proxy, pool, cypress)
     save_profile_dict(name, body)
     names = list_profile_names()
     if len(names) == 1 or not read_active_profile_name():
@@ -170,7 +162,6 @@ def profile_add(
 @click.option("--as", "name", required=True, help="Profile name to create.")
 @click.option("--proxy", default=None, help="Override YT HTTP proxy URL.")
 @click.option("--pool", default=None, help="Override pool.")
-@click.option("--preset", default=None, help="Override preset.")
 @click.option(
     "--cypress-base-path",
     default=None,
@@ -181,7 +172,6 @@ def profile_import(
     name: str,
     proxy: Optional[str],
     pool: Optional[str],
-    preset: Optional[str],
     cypress_base_path: Optional[str],
 ) -> None:
     """Import a YAML file as a named profile. If it is the first profile, it becomes active."""
@@ -196,8 +186,6 @@ def profile_import(
         data["proxy"] = proxy.strip()
     if pool is not None:
         data["pool"] = pool.strip()
-    if preset is not None:
-        data["preset"] = preset.strip()
     cbp_cli = (cypress_base_path or "").strip()
     if cbp_cli:
         data["cypress_base_path"] = cbp_cli
@@ -349,15 +337,7 @@ def validate(
     yt_client = None
     if px:
         yt_client = make_yt_client(px)
-    _, _, pst = resolve_connection_from_profile(profile_data)
-    preset_member = ClusterPreset.__members__.get(pst.upper()) if pst else None
-    rows = validate_flyt_config(
-        cfg, proxy=px or None, yt_client=yt_client, preset=preset_member.params if preset_member else None
-    )
-    if pst and preset_member is None:
-        # The cluster was sized without the preset the profile names: its rows would describe another run.
-        rows = [row for row in rows if row[0] != "cluster_mode"]
-        rows.insert(0, ("preset", False, f"unknown preset {pst!r}; use one of micro, small, large, xlarge"))
+    rows = validate_flyt_config(cfg, proxy=px or None, yt_client=yt_client)
     ok_all = True
     for name, ok, msg in rows:
         ok_all = ok_all and ok is not False
@@ -388,14 +368,6 @@ def _parse_flink_options(options: Tuple[str, ...]) -> Dict[str, str]:
     help="YT HTTP proxy (overrides env / profile).",
 )
 @click.option("--pool", default=None, help="YT pool (overrides env / profile).")
-@click.option(
-    "--preset",
-    type=click.Choice(["micro", "small", "large", "xlarge"], case_sensitive=False),
-    default=None,
-    help="Resource preset: the MiniCluster YT job, or every TaskManager YT job for --mode application "
-    "(cpu and container memory). Default: from profile, else micro; none with fine-grained resource "
-    "configuration (flyt.taskmanager.cpu.cores and taskmanager.memory.* keys), which it does not combine with.",
-)
 @click.option(
     "--mode",
     "cluster_mode",
@@ -448,7 +420,6 @@ def run(
     job_argv: Tuple[str, ...],
     proxy: Optional[str],
     pool: Optional[str],
-    preset: Optional[str],
     cluster_mode: Optional[str],
     taskmanagers: Optional[int],
     base_flink_conf_path: Optional[str],
@@ -484,12 +455,6 @@ def run(
         except ValueError as e:
             raise click.ClickException(str(e)) from e
     proxy_f, pool_f = _resolve_connection(profile_data, proxy, pool)
-    _, _, pst = resolve_connection_from_profile(profile_data)
-    preset_s = (preset or "").strip().lower() or (pst or "").strip().lower()
-    try:
-        preset_enum = ClusterPreset[preset_s.upper()] if preset_s else None
-    except KeyError as e:
-        raise click.ClickException("Invalid preset %r. Use one of: micro, small, large, xlarge." % (preset_s,)) from e
 
     with contextlib.ExitStack() as stack:
         project_root: Optional[str] = None
@@ -526,7 +491,6 @@ def run(
                     yt_client=make_yt_client(proxy_f),
                     job_command=job_command,
                     pool=pool_f,
-                    preset=preset_enum,
                     wheel_path=wheel_path,
                     source_dir=source_dir,
                     cache_wheel=cache_wheel,

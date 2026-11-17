@@ -15,7 +15,7 @@ from ytsaurus_flyt.config import (
 )
 from ytsaurus_flyt.container_runtime import get_container_runtime_command
 from ytsaurus_flyt.flink_conf import flink_config_warnings, user_flink_config
-from ytsaurus_flyt.models import MIB, ClusterParams
+from ytsaurus_flyt.models import MIB
 from ytsaurus_flyt.spec import flink_cluster
 
 
@@ -58,11 +58,11 @@ def _flink_config_rows(
     return rows, user
 
 
-def _cluster_rows(config: FlytConfig, preset: Optional[ClusterParams], user: Dict[str, str]) -> List[_Row]:
+def _cluster_rows(config: FlytConfig, user: Dict[str, str]) -> List[_Row]:
     """The cluster exactly as ``flyt run`` resolves it (:func:`~ytsaurus_flyt.spec.flink_cluster`)."""
     mode = config.cluster_mode.value
     try:
-        cluster = flink_cluster(config, preset, user)
+        cluster = flink_cluster(config, user)
     except ValueError as e:
         return [("cluster_mode", False, f"{mode}: {e}")]
     if isinstance(cluster, ApplicationCluster):
@@ -70,8 +70,6 @@ def _cluster_rows(config: FlytConfig, preset: Optional[ClusterParams], user: Dic
             ("cluster_mode", True, f"{mode}: {cluster.resources.summary()}"),
             ("discovery_timeout", True, f"{config.discovery_timeout}s for TaskManagers to find the JobManager"),
         ]
-    if not cluster.flink_memory:
-        return [("cluster_mode", True, f"{mode} (single job, in-JVM MiniCluster)")]
     return [("cluster_mode", True, f"{mode}: one TaskManager ({cluster.cpu} cpu, {cluster.memory // MIB}m)")]
 
 
@@ -80,16 +78,15 @@ def validate_flyt_config(
     *,
     proxy: Optional[str] = None,
     yt_client: Optional[YtClient] = None,
-    preset: Optional[ClusterParams] = None,
 ) -> List[_Row]:
-    """Return list of (name, ok, message); ok None is a warning. ``preset`` sizes each TaskManager in
-    application mode (default micro). ``yt_client`` reads a Cypress ``base_flink_conf_path``."""
+    """Return list of (name, ok, message); ok None is a warning. ``yt_client`` reads a Cypress
+    ``base_flink_conf_path``."""
     rows: List[_Row] = []
 
     rows.append(("Runtime mode", True, "SquashFS"))
     flink_rows, user = _flink_config_rows(config, yt_client)
     if user is not None:
-        rows.extend(_cluster_rows(config, preset, user))
+        rows.extend(_cluster_rows(config, user))
     rows.extend(flink_rows)
 
     ok_pkgs = bool(config.runtime_python_packages)

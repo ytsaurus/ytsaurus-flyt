@@ -196,6 +196,21 @@ def memory_option(props: Mapping[str, str], key: str) -> int:
         raise FlinkConfigError(f"{key} is not a memory size: {raw!r}") from e
 
 
+def process_memory_option(
+    user: Mapping[str, str], process_key: str, prefix: str, default_keys: frozenset, default: int
+) -> int:
+    """A role's ``*.memory.process.size``, ``default`` unless set; the role's other memory keys need it as well."""
+    if str(user.get(process_key) or "").strip():
+        return memory_option(user, process_key)
+    custom = custom_memory_keys(user, prefix, default_keys)
+    if custom:
+        raise FlinkConfigError(
+            f"{', '.join(custom)} configure Flink's memory model, so flyt adds no memory defaults; "
+            f"set {process_key} as well: it sizes the YT container"
+        )
+    return default
+
+
 def int_option(user: Mapping[str, str], key: str) -> Optional[int]:
     raw = str(user.get(key) or "").strip()
     if not raw:
@@ -239,7 +254,7 @@ def flink_config_warnings(config: FlytConfig, user: Mapping[str, str]) -> List[s
     ]
     if TM_CPU_CORES_KEY in user:
         out.append(
-            f"{TM_CPU_CORES_KEY} is the TaskManager's container cpu, set by flyt from {FLYT_TM_CPU_KEY} or the preset; "
+            f"{TM_CPU_CORES_KEY} is the TaskManager's container cpu, set by flyt from {FLYT_TM_CPU_KEY}; "
             f"{user[TM_CPU_CORES_KEY]!r} from the Flink configuration is ignored"
         )
     out += [
@@ -250,8 +265,7 @@ def flink_config_warnings(config: FlytConfig, user: Mapping[str, str]) -> List[s
     ]
     if not config.is_application_cluster:
         out += [
-            f"{key} has no effect in minicluster mode: the job is one TaskManager, sized by the preset or "
-            f"{TM_PROCESS_SIZE_KEY}"
+            f"{key} has no effect in minicluster mode: the job is one TaskManager, sized by {TM_PROCESS_SIZE_KEY}"
             for key in sorted(user)
             if key.startswith(JM_MEMORY_PREFIX)
         ]

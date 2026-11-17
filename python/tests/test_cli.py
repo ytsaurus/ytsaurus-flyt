@@ -187,30 +187,11 @@ def test_validate_prints_profile_line(monkeypatch, tmp_path: Path) -> None:
     assert "Profile: 'myprof'" in result.output
 
 
-def test_validate_sizes_application_taskmanagers_from_the_profile_preset(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("FLYT_CONFIG_DIR", str(tmp_path))
-    profiles = tmp_path / "profiles"
-    profiles.mkdir(parents=True)
-    (profiles / "p.yaml").write_text(
-        "proxy: http://cluster.example:80\npool: default\npreset: large\ncluster_mode: application\n",
-        encoding="utf-8",
-    )
-    (tmp_path / "active").write_text("p\n", encoding="utf-8")
-    seen: dict = {}
-    monkeypatch.setattr("ytsaurus_flyt.__main__.make_yt_client", lambda _p: object())
-    monkeypatch.setattr(
-        "ytsaurus_flyt.__main__.validate_flyt_config", lambda *a, **k: seen.update(k) or [("check", True, "ok")]
-    )
-    result = CliRunner().invoke(cli, ["validate"], catch_exceptions=False)
-    assert result.exit_code == 0, result.output
-    assert seen["preset"].cpu == 4  # large
-
-
 def test_profile_import_writes_and_overrides(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("FLYT_CONFIG_DIR", str(tmp_path))
     src = tmp_path / "incoming.yaml"
     src.write_text(
-        "proxy: http://old.example:80\npool: oldpool\npreset: micro\nruntime_python_packages: [apache-flink==1.20.1]\n",
+        "proxy: http://old.example:80\npool: oldpool\nruntime_python_packages: [apache-flink==1.20.1]\n",
         encoding="utf-8",
     )
     runner = CliRunner()
@@ -238,7 +219,6 @@ def test_profile_import_writes_and_overrides(monkeypatch, tmp_path: Path) -> Non
     data = yaml.safe_load(out.read_text(encoding="utf-8"))
     assert data["proxy"] == "http://new.example:80"
     assert data["pool"] == "newpool"
-    assert data["preset"] == "micro"
     assert data["cypress_base_path"] == default_cypress_base_path("imp1")
 
     list_result = runner.invoke(cli, ["profile", "list"], catch_exceptions=False)
@@ -417,24 +397,6 @@ def test_run_without_mode_flag_keeps_profile_cluster_mode(monkeypatch, tmp_path:
     assert FlytConfig().cluster_mode == "minicluster"
 
 
-def test_validate_reports_an_unknown_profile_preset(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("FLYT_CONFIG_DIR", str(tmp_path))
-    profiles = tmp_path / "profiles"
-    profiles.mkdir(parents=True)
-    (profiles / "p.yaml").write_text(
-        "proxy: http://cluster.example:80\npool: default\npreset: larg\n", encoding="utf-8"
-    )
-    (tmp_path / "active").write_text("p\n", encoding="utf-8")
-    monkeypatch.setattr("ytsaurus_flyt.__main__.make_yt_client", lambda _p: object())
-    rows = [("check", True, "ok"), ("cluster_mode", True, "application: sized as micro")]
-    monkeypatch.setattr("ytsaurus_flyt.__main__.validate_flyt_config", lambda *a, **k: rows)
-    result = CliRunner().invoke(cli, ["validate"], catch_exceptions=False)
-    assert result.exit_code == 1
-    assert "[!!] preset: unknown preset 'larg'" in result.output
-    assert "[OK] check: ok" in result.output
-    assert "cluster_mode" not in result.output  # sized without the profile's preset
-
-
 def _run_capturing(monkeypatch, tmp_path: Path, profile_body: str, args: list) -> dict:
     monkeypatch.setenv("FLYT_CONFIG_DIR", str(tmp_path))
     profiles = tmp_path / "profiles"
@@ -502,17 +464,3 @@ def test_run_rejects_a_dynamic_option_without_a_value(monkeypatch, tmp_path: Pat
     result = CliRunner().invoke(cli, ["run", "-D", "pipeline.name", "--wheel", "svc.whl", "x.py"])
     assert result.exit_code != 0
     assert "expected KEY=VALUE" in result.output
-
-
-def test_profile_add_writes_a_preset_only_when_given(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("FLYT_CONFIG_DIR", str(tmp_path))
-    runner = CliRunner()
-    for name, extra in (("plain", []), ("sized", ["--preset", "large"])):
-        result = runner.invoke(
-            cli, ["profile", "add", name, "--proxy", "http://x.example:80", *extra], catch_exceptions=False
-        )
-        assert result.exit_code == 0, result.output
-    plain = yaml.safe_load((tmp_path / "profiles" / "plain.yaml").read_text(encoding="utf-8"))
-    sized = yaml.safe_load((tmp_path / "profiles" / "sized.yaml").read_text(encoding="utf-8"))
-    assert "preset" not in plain
-    assert sized["preset"] == "large"

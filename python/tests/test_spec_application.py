@@ -7,7 +7,7 @@ import pytest
 from yt.wrapper import YtClient
 
 from ytsaurus_flyt.config import FlytConfig
-from ytsaurus_flyt.models import ClusterPreset, OperationParams
+from ytsaurus_flyt.models import OperationParams
 from ytsaurus_flyt.spec import (
     JOBMANAGER_TASK,
     MINICLUSTER_TASK,
@@ -16,7 +16,6 @@ from ytsaurus_flyt.spec import (
     resolve_flink_cluster,
 )
 
-_MICRO = ClusterPreset.MICRO.params
 _CLIENT = YtClient(proxy="proxy.example:80", token="t")
 
 
@@ -36,7 +35,7 @@ def _app_config(**overrides) -> FlytConfig:
     return FlytConfig(**base)
 
 
-def _build(config: FlytConfig, preset=_MICRO, **kwargs):
+def _build(config: FlytConfig, **kwargs):
     kwargs.setdefault("yt_client", _CLIENT)
     return build_vanilla_operation_spec(
         title="t",
@@ -44,7 +43,7 @@ def _build(config: FlytConfig, preset=_MICRO, **kwargs):
         config=config,
         operation_params=_op(),
         secure_vault={},
-        cluster=resolve_flink_cluster(config, preset),
+        cluster=resolve_flink_cluster(config),
         **kwargs,
     ).build()
 
@@ -58,8 +57,8 @@ def test_application_spec_has_gang_jobmanager_and_plain_taskmanager_tasks():
     assert jm["gang_options"] == {}
     assert "gang_options" not in tm
     assert tm["job_count"] == 2
-    assert tm["cpu_limit"] == 2  # micro
-    assert tm["memory_limit"] == _MICRO.memory_bytes()  # the preset's container: JVM + 512m overhead
+    assert tm["cpu_limit"] == 2  # flyt's default
+    assert tm["memory_limit"] == 4 * 1024**3  # flyt's default process.size
     # exit 0 of the driver completes the operation from inside the JobManager job, YT restarts nothing
     assert "restart_completed_jobs" not in jm
     assert "restart_completed_jobs" not in tm
@@ -150,7 +149,7 @@ def test_application_sandbox_unpack_keeps_unpack_fragment_and_drops_layer_paths(
         operation_params=OperationParams(file_paths=["//tmp/runtime.squashfs", "//tmp/wheel.whl"], pool="pool"),
         secure_vault={},
         use_squashfs_sandbox_unpack=True,
-        cluster=resolve_flink_cluster(cfg, _MICRO),
+        cluster=resolve_flink_cluster(cfg),
         yt_client=_CLIENT,
     ).build()
     for task in spec["tasks"].values():
@@ -159,24 +158,27 @@ def test_application_sandbox_unpack_keeps_unpack_fragment_and_drops_layer_paths(
         assert "tmpfs_path" not in task
 
 
-def test_application_spec_sizes_taskmanagers_from_the_preset_and_the_jobmanager_from_defaults():
-    spec = _build(
-        _app_config(flink_config_override={"flyt.jobmanager.cpu.cores": "4"}), preset=ClusterPreset.LARGE.params
-    )
+def test_application_spec_sizes_taskmanagers_from_flink_options_and_the_jobmanager_from_defaults():
+    sizing = {
+        "flyt.jobmanager.cpu.cores": "4",
+        "flyt.taskmanager.cpu.cores": "4",
+        "taskmanager.memory.process.size": "16g",
+    }
+    spec = _build(_app_config(flink_config_override=sizing))
     assert spec["tasks"][JOBMANAGER_TASK]["memory_limit"] == (2 * 1024 + 512) * 1024**2  # 2g JVM + the driver
     assert spec["tasks"][JOBMANAGER_TASK]["cpu_limit"] == 4
     assert spec["tasks"][TASKMANAGER_TASK]["memory_limit"] == 16 * 1024**3
     assert spec["tasks"][TASKMANAGER_TASK]["cpu_limit"] == 4
 
 
-def _minicluster_spec(cfg: FlytConfig, preset=_MICRO) -> dict:
+def _minicluster_spec(cfg: FlytConfig) -> dict:
     return build_vanilla_operation_spec(
         title="t",
         job_command="pipeline.py",
         config=cfg,
         operation_params=_op(),
         secure_vault={},
-        cluster=resolve_flink_cluster(cfg, preset),
+        cluster=resolve_flink_cluster(cfg),
     ).build()
 
 
@@ -196,21 +198,19 @@ def test_minicluster_spec_is_unchanged_by_application_fields():
     task = plain["tasks"][MINICLUSTER_TASK]
     assert "restart_completed_jobs" not in task  # exit 0 ends the operation in every mode
     assert "gang_options" not in task
-    assert "env.java.default-opts.all: -Xmx2324M" in task["command"]
     assert "FLYT_YT_PROXY" not in task["environment"]
     assert "application/01_cluster_common.sh" not in task["command"]
     assert "minicluster/run.sh" in task["command"]
     assert "annotations" not in plain
-    assert "minicluster/00_taskmanager_memory.sh" not in task["command"]
 
 
 def test_minicluster_job_sized_as_one_taskmanager():
     base = dict(service_name="svc", java_home="/jdk", python_bin="/py")
     sizing = {"flyt.taskmanager.cpu.cores": "3", "taskmanager.memory.process.size": "6g"}
     cfg = FlytConfig(**base, flink_config_override=sizing)
-    task = _minicluster_spec(cfg, preset=None)["tasks"][MINICLUSTER_TASK]
+    task = _minicluster_spec(cfg)["tasks"][MINICLUSTER_TASK]
     assert (task["cpu_limit"], task["memory_limit"]) == (3, 6 * 1024 * 1024 * 1024)
-    # Flink's BashJavaUtils lays out the JVM in the job instead of the preset's -Xmx
+    # Flink's BashJavaUtils lays out the JVM in the job
     assert "minicluster/00_taskmanager_memory.sh" in task["command"]
     assert "parseResourceParamsAndExportLogs GET_TM_RESOURCE_PARAMS" in task["command"]
     assert "-Xmx" not in task["command"].split("env.java.default-opts.all:")[1].splitlines()[0]
@@ -237,7 +237,7 @@ def test_rendered_run_scripts_are_valid_bash(mode, delivery, tmp_path):
             config=cfg,
             operation_params=_op(),
             secure_vault={},
-            cluster=resolve_flink_cluster(cfg, _MICRO),
+            cluster=resolve_flink_cluster(cfg),
             use_squashfs_sandbox_unpack=unpack,
         ).build()
     for name, task in spec["tasks"].items():

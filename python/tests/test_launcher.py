@@ -1,7 +1,6 @@
 """Tests for launcher helpers."""
 
 import contextlib
-from typing import get_type_hints
 from unittest.mock import MagicMock
 
 import pytest
@@ -9,7 +8,6 @@ import pytest
 from ytsaurus_flyt.config import FlytConfig
 from ytsaurus_flyt.flink_conf import FlinkConfigError
 from ytsaurus_flyt.launcher import launch_vanilla_job
-from ytsaurus_flyt.models import ClusterParams
 
 
 @pytest.fixture
@@ -41,14 +39,8 @@ def test_launch_rejects_squashfs_without_runtime_python_version(mock_yt_client):
         )
 
 
-def test_launch_vanilla_job_accepts_cluster_params_type():
-    hints = get_type_hints(launch_vanilla_job)
-    assert ClusterParams in hints["preset"].__args__
-
-
-def test_launch_passes_the_preset_and_the_client_to_the_spec(monkeypatch):
+def test_launch_passes_the_cluster_and_the_client_to_the_spec(monkeypatch):
     from ytsaurus_flyt import launcher as launcher_module
-    from ytsaurus_flyt.models import ClusterPreset
 
     captured = {}
 
@@ -68,25 +60,28 @@ def test_launch_passes_the_preset_and_the_client_to_the_spec(monkeypatch):
     monkeypatch.setattr(launcher_module, "ensure_unsquashfs_tool_remote", lambda *a, **k: "//home/unsquashfs")
     monkeypatch.setattr(launcher_module, "build_vanilla_operation_spec", fake_build)
     client = MagicMock()
-    cfg = FlytConfig(service_name="svc", cluster_mode="application", squashfs_layer_delivery="sandbox_unpack")
+    cfg = FlytConfig(
+        service_name="svc",
+        cluster_mode="application",
+        squashfs_layer_delivery="sandbox_unpack",
+        flink_config_override={"flyt.taskmanager.cpu.cores": "4"},
+    )
     with pytest.raises(RuntimeError, match="stop here"):
-        launch_vanilla_job(cfg, client, "pipeline.py", "pool", preset=ClusterPreset.LARGE, wheel_path="w.whl")
-    # the cluster is resolved once, from the preset, before anything is built; the client resolves the jobs' proxy
-    assert captured["cluster"].resources.taskmanager_size.cpu == ClusterPreset.LARGE.params.cpu
-    assert "preset_params" not in captured
+        launch_vanilla_job(cfg, client, "pipeline.py", "pool", wheel_path="w.whl")
+    # the cluster is resolved once, before anything is built; the client resolves the jobs' proxy
+    assert captured["cluster"].resources.taskmanager_size.cpu == 4
     assert captured["yt_client"] is client
 
 
 def test_launch_reports_an_invalid_flink_configuration_before_building(monkeypatch):
     from ytsaurus_flyt import launcher as launcher_module
-    from ytsaurus_flyt.models import ClusterPreset
 
     monkeypatch.setattr(launcher_module, "proxy_url_from_client", lambda _c: "http://proxy")
     monkeypatch.setattr(launcher_module, "require_squashfs_runtime_config", lambda _c: None)
     monkeypatch.setattr(launcher_module, "get_secure_credentials", lambda *a, **k: pytest.fail("went on"))
-    cfg = FlytConfig(service_name="svc", flink_config_override={"taskmanager.memory.process.size": "4g"})
-    with pytest.raises(FlinkConfigError, match="without a preset"):
-        launch_vanilla_job(cfg, MagicMock(), "pipeline.py", "pool", preset=ClusterPreset.SMALL, wheel_path="w.whl")
+    cfg = FlytConfig(service_name="svc", flink_config_override={"taskmanager.memory.process.size": "lots"})
+    with pytest.raises(FlinkConfigError, match="not a memory size"):
+        launch_vanilla_job(cfg, MagicMock(), "pipeline.py", "pool", wheel_path="w.whl")
     # the JobManager's size is parsed only in application mode
     override = {"jobmanager.memory.process.size": "abc"}
     cfg = FlytConfig(service_name="svc", cluster_mode="application", flink_config_override=override)

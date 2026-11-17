@@ -14,7 +14,6 @@ from ytsaurus_flyt.flink_conf import (
     user_flink_config,
 )
 from ytsaurus_flyt.minicluster import minicluster
-from ytsaurus_flyt.models import ClusterPreset
 
 
 def _config(**overrides) -> FlytConfig:
@@ -24,14 +23,11 @@ def _config(**overrides) -> FlytConfig:
 
 
 def _props(user=None, **overrides) -> dict:
-    if any(k.startswith("taskmanager.memory.") for k in user or {}):  # own sizing: no preset
-        user = {"flyt.taskmanager.cpu.cores": "2", **user}
-        return application_cluster(_config(**overrides), None, user).flink_config
-    return application_cluster(_config(**overrides), ClusterPreset.MICRO.params, user).flink_config
+    return application_cluster(_config(**overrides), user).flink_config
 
 
 def _mini_props(user=None, **overrides) -> dict:
-    return minicluster(_config(cluster_mode="minicluster", **overrides), ClusterPreset.MICRO.params, user).flink_config
+    return minicluster(_config(cluster_mode="minicluster", **overrides), user).flink_config
 
 
 def test_application_flink_config_sets_ports_memory_slots_and_jvm_flags():
@@ -40,11 +36,11 @@ def test_application_flink_config_sets_ports_memory_slots_and_jvm_flags():
     for key in ("rest.bind-address", "jobmanager.bind-host", "taskmanager.bind-host"):
         assert props[key] == "0.0.0.0"
     assert props["taskmanager.rpc.port"] == props["taskmanager.data.port"] == "0"
-    assert props["taskmanager.numberOfTaskSlots"] == "2"  # micro: 2 cpu
+    assert props["taskmanager.numberOfTaskSlots"] == "2"  # flyt's default: 2 cpu
     assert props["taskmanager.cpu.cores"] == "2"
     assert props["parallelism.default"] == "6"
     assert props["jobmanager.memory.process.size"] == "2560m"
-    assert props["taskmanager.memory.process.size"] == "4096m"  # the 4G container
+    assert props["taskmanager.memory.process.size"] == "4096m"  # flyt's default 4G container
     assert props["jobmanager.memory.jvm-overhead.min"] == props["taskmanager.memory.jvm-overhead.min"] == "512m"
     assert "taskmanager.memory.jvm-overhead.max" not in props  # Flink's 1g
     assert props["taskmanager.memory.task.off-heap.size"] == "512m"  # 1/8 of the TaskManager JVM
@@ -59,28 +55,23 @@ def test_application_flink_config_sets_ports_memory_slots_and_jvm_flags():
     assert props["taskmanager.jvm-exit-on-oom"] == "true"
 
 
-def test_minicluster_config_sizes_the_job_jvm_by_the_preset():
+def test_minicluster_is_one_taskmanager_with_flyt_memory_defaults():
     props = _mini_props()
+    assert props["taskmanager.memory.process.size"] == "4096m"  # flyt's default 4G container
     assert props["env.java.default-opts.all"] == (
-        "-Xmx2324M -XX:ActiveProcessorCount=2 -XX:+ExitOnOutOfMemoryError -Djava.net.preferIPv6Addresses=true"
+        "-XX:ActiveProcessorCount=2 -XX:+ExitOnOutOfMemoryError -Djava.net.preferIPv6Addresses=true"
         " -Dfile.encoding=UTF-8 -Dio.netty.tryReflectionSetAccessible=true"
-    )
-    assert props["parallelism.default"] == props["taskmanager.cpu.cores"] == "2"  # micro: 2 cpu
-    # the MiniCluster picks its slots from the job graph; its JVM is not sized by Flink's memory model
+    )  # the run script prepends the JVM flags Flink derives
+    assert props["parallelism.default"] == props["taskmanager.cpu.cores"] == "2"
+    # the MiniCluster picks its slots from the job graph
     assert "taskmanager.numberOfTaskSlots" not in props
-    assert not [k for k in props if ".memory." in k]
-
-
-def test_minicluster_sized_by_taskmanager_process_size_gets_taskmanager_memory_defaults():
+    assert not [k for k in props if k.startswith("jobmanager.memory.")]
     user = {"flyt.taskmanager.cpu.cores": "3", "taskmanager.memory.process.size": "6g"}
-    props = minicluster(_config(cluster_mode="minicluster"), None, user).flink_config
+    props = _mini_props(user)
     assert props["taskmanager.memory.task.off-heap.size"] == "768m"  # 1/8 of process.size
     assert props["taskmanager.memory.managed.fraction"] == "0.1"
     assert props["taskmanager.memory.jvm-overhead.min"] == "512m"
-    assert "jobmanager.memory.jvm-overhead.min" not in props
     assert props["parallelism.default"] == props["taskmanager.cpu.cores"] == "3"
-    # the run script prepends the JVM flags Flink derives; the preset's -Xmx is gone
-    assert props["env.java.default-opts.all"].startswith("-XX:ActiveProcessorCount=3 ")
 
 
 def test_both_modes_share_ports_restarts_and_python():
@@ -180,7 +171,7 @@ def test_flink_config_warnings_cover_owned_and_mode_ignored_keys():
     assert not any("jobmanager.memory.process.size" in w for w in app)
     assert any("jobmanager.memory.process.size has no effect in minicluster" in w for w in mini)
     assert flink_config_warnings(_config(), {"rest.port": "27050"}) == []  # flyt's own value is fine
-    # taskmanager.cpu.cores is the container cpu: flyt.taskmanager.cpu.cores or the preset
+    # taskmanager.cpu.cores is the container cpu: flyt.taskmanager.cpu.cores
     (cores,) = flink_config_warnings(_config(), {"taskmanager.cpu.cores": "8"})
     assert "set by flyt from flyt.taskmanager.cpu.cores" in cores
     assert _props({"taskmanager.cpu.cores": "8"})["taskmanager.cpu.cores"] == "2"

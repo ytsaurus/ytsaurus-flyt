@@ -4,7 +4,7 @@ import pytest
 
 from ytsaurus_flyt.application import application_cluster, resolve_application_resources
 from ytsaurus_flyt.config import FlytConfig
-from ytsaurus_flyt.models import MIB, ClusterPreset
+from ytsaurus_flyt.models import MIB
 
 _MIB = MIB
 _TM_CPU, _JM_CPU, _REPLICAS = "flyt.taskmanager.cpu.cores", "flyt.jobmanager.cpu.cores", "flyt.taskmanager.replicas"
@@ -16,73 +16,50 @@ def _app_config(**overrides) -> FlytConfig:
     return FlytConfig(**base)
 
 
-def _with_cpu(user, cpu):
-    return {**user, _TM_CPU: str(cpu)} if cpu is not None else user
-
-
-def test_preset_sizes_every_taskmanager_and_jobmanager_keeps_defaults():
-    res = resolve_application_resources(ClusterPreset.LARGE.params, {_REPLICAS: "3"})
-    assert (res.taskmanager_size.cpu, res.slots) == (4, 4)  # one slot per cpu
-    assert res.taskmanager_size.memory == 16 * 1024 * _MIB  # container = process.size = preset memory
-    assert res.taskmanager_size.memory == 16 * 1024 * _MIB
+def test_defaults_size_every_taskmanager_and_the_jobmanager():
+    res = resolve_application_resources({_REPLICAS: "3"})
+    assert (res.taskmanager_size.cpu, res.slots) == (2, 2)  # one slot per cpu
+    assert res.taskmanager_size.memory == 4 * 1024 * _MIB  # container = process.size
     assert (res.jobmanager_cpu, res.jobmanager_process_memory) == (2, 2560 * _MIB)
-    assert res.jobmanager_process_memory == 2560 * _MIB
-    assert res.default_parallelism == 12
+    assert res.default_parallelism == 6
 
 
-def test_own_sizing_takes_cpu_and_process_size_instead_of_a_preset():
+def test_cpu_and_process_size_size_every_taskmanager():
     user = {_REPLICAS: "2", _TM_CPU: "6", _JM_CPU: "4", "taskmanager.memory.process.size": "8g"}
-    res = resolve_application_resources(None, user)
+    res = resolve_application_resources(user)
     assert (res.taskmanager_size.cpu, res.slots, res.default_parallelism) == (6, 6, 12)
     assert res.taskmanager_size.memory == 8 * 1024 * _MIB
     assert res.jobmanager_cpu == 4
-    # without any own sizing the micro preset applies
-    assert resolve_application_resources().taskmanager_size.cpu == ClusterPreset.MICRO.params.cpu
+    # either key alone keeps flyt's default for the other
+    assert resolve_application_resources({_TM_CPU: "6"}).taskmanager_size.memory == 4 * 1024 * _MIB
+    assert resolve_application_resources({"taskmanager.memory.process.size": "8g"}).taskmanager_size.cpu == 2
 
 
 @pytest.mark.parametrize(
-    "cpu, user, match",
+    "user, match",
     [
-        (6, {"taskmanager.memory.process.size": "8g"}, f"{_TM_CPU}, taskmanager.memory.process.size size"),
-        (None, {"taskmanager.memory.jvm-overhead.min": "1g"}, "remove the preset"),
-        (6, {}, "remove the preset"),
+        ({"taskmanager.memory.flink.size": "4g"}, "set taskmanager.memory.process.size as well"),
+        ({"taskmanager.memory.process.size": "lots"}, "not a memory size"),
     ],
 )
-def test_a_preset_does_not_combine_with_own_sizing(cpu, user, match):
+def test_taskmanager_memory_model_needs_process_size(user, match):
     with pytest.raises(ValueError, match=match):
-        resolve_application_resources(ClusterPreset.SMALL.params, _with_cpu(user, cpu))
+        resolve_application_resources(user)
 
 
-@pytest.mark.parametrize(
-    "cpu, user, match",
-    [
-        (6, {}, "needs taskmanager.memory.process.size"),
-        (6, {"taskmanager.memory.flink.size": "4g"}, "needs taskmanager.memory.process.size"),
-        (6, {"taskmanager.memory.process.size": ""}, "needs taskmanager.memory.process.size"),
-        (6, {"taskmanager.memory.process.size": "lots"}, "not a memory size"),
-    ],
-)
-def test_own_sizing_needs_process_size(cpu, user, match):
-    with pytest.raises(ValueError, match=match):
-        resolve_application_resources(None, _with_cpu(user, cpu))
-
-
-def test_own_sizing_cpu_defaults_to_the_slots():
-    size = {"taskmanager.memory.process.size": "4g"}
-    res = resolve_application_resources(None, size)
-    assert (res.taskmanager_size.cpu, res.slots) == (1, 1)
-    res = resolve_application_resources(None, {**size, "taskmanager.numberOfTaskSlots": "4"})
+def test_taskmanager_cpu_defaults_to_the_slots():
+    res = resolve_application_resources({"taskmanager.numberOfTaskSlots": "4"})
     assert (res.taskmanager_size.cpu, res.slots) == (4, 4)
-    res = resolve_application_resources(None, {**size, _TM_CPU: "2", "taskmanager.numberOfTaskSlots": "4"})
+    res = resolve_application_resources({_TM_CPU: "2", "taskmanager.numberOfTaskSlots": "4"})
     assert (res.taskmanager_size.cpu, res.slots) == (2, 4)
 
 
 def test_application_cluster_bundles_resources_and_config():
-    cluster = application_cluster(_app_config(), ClusterPreset.SMALL.params, {_REPLICAS: "2"})
+    cluster = application_cluster(_app_config(), {_REPLICAS: "2", "taskmanager.memory.process.size": "8g"})
     assert cluster.resources.slots == 2
     assert cluster.flink_config["taskmanager.numberOfTaskSlots"] == "2"
     assert cluster.flink_config["parallelism.default"] == "4"
-    assert cluster.flink_config["taskmanager.memory.process.size"] == f"{8 * 1024}m"
+    assert cluster.flink_config["taskmanager.memory.process.size"] == "8g"  # the user's value as is
     assert cluster.flink_config["taskmanager.cpu.cores"] == "2"
 
 
@@ -95,7 +72,7 @@ def test_flink_keys_override_slots_memory_and_parallelism():
         _REPLICAS: "2",
         _TM_CPU: "2",
     }
-    res = resolve_application_resources(None, user)
+    res = resolve_application_resources(user)
     assert (res.taskmanager_size.cpu, res.slots, res.default_parallelism) == (2, 3, 4)
     assert res.taskmanager_size.memory == 6 * 1024 * _MIB  # container = process.size
     assert res.jobmanager_process_memory == 1024 * _MIB
@@ -103,7 +80,7 @@ def test_flink_keys_override_slots_memory_and_parallelism():
 
 def test_default_parallelism_above_the_capacity_is_rejected():
     with pytest.raises(ValueError, match=f"does not fit into {_REPLICAS} \\* slots = 4"):
-        resolve_application_resources(ClusterPreset.SMALL.params, {_REPLICAS: "2", "parallelism.default": "5"})
+        resolve_application_resources({_REPLICAS: "2", "parallelism.default": "5"})
 
 
 @pytest.mark.parametrize(
@@ -116,4 +93,4 @@ def test_default_parallelism_above_the_capacity_is_rejected():
 )
 def test_bad_flink_sizing_keys_are_rejected(user, match):
     with pytest.raises(ValueError, match=match):
-        resolve_application_resources(ClusterPreset.SMALL.params, user)
+        resolve_application_resources(user)
