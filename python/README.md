@@ -119,20 +119,13 @@ Do not put the same basename in both lists.
 - Optional `FLYT_SECURE_<KEY>` for extra [`secure_vault`](https://ytsaurus.tech/docs/en/user-guide/data-processing/operations/operations-options#general-options-for-all-operation-types) keys.
 - Programmatic: `extra_secrets` on `get_secure_credentials` / `launch_vanilla_job` if secrets come from outside env.
 
-## Presets
+## Sizing
 
-A preset is for trying a pipeline out: `--preset`, `preset` in the profile, or `micro` when nothing else sizes the job. It sizes the MiniCluster job, or every TaskManager in application mode, where the heap column does not apply. To size the job yourself instead, see [Sizing](docs/flink-configuration.md#sizing).
-
-| Preset | CPU | RAM | Heap |
-|--------|-----|-----|------|
-| MICRO | 2 | 4G | 2324M |
-| SMALL | 2 | 8G | 4648M |
-| LARGE | 4 | 16G | 9296M |
-| XLARGE | 8 | 32G | 24G |
+The Flink configuration sizes the MiniCluster job, or every TaskManager in application mode: `flyt.taskmanager.cpu.cores` (default 2) and `taskmanager.memory.process.size` (default `4g`), which is also the YT container. See [Sizing](docs/flink-configuration.md#sizing).
 
 ## API
 
-`FlytConfig`, `FlytConfig.from_yaml()`, `launch_vanilla_job()`, `ClusterPreset` — see the package and [ARCHITECTURE.md](ARCHITECTURE.md).
+`FlytConfig`, `FlytConfig.from_yaml()`, `launch_vanilla_job()` — see the package and [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Development
 

@@ -47,12 +47,7 @@ Both modes, overridable:
 
 ## Sizing
 
-A TaskManager, and the single MiniCluster job in `minicluster` mode, is sized one of two ways, never both:
-
-- a preset (`--preset`, `preset` in the profile; `micro` when nothing else sizes it), to try a pipeline out;
-- your own sizing: `taskmanager.memory.process.size` (required), `flyt.taskmanager.cpu.cores` and any other `taskmanager.memory.*` key.
-
-A preset together with `flyt.taskmanager.cpu.cores` or any `taskmanager.memory.*` key is an error. Either way the same size applies in both modes, so a pipeline can be compared between them with one flag: `--mode application` with one TaskManager gives about the resources of the MiniCluster job, plus a small JobManager. Every container is its Flink JVM's `*.memory.process.size`.
+The Flink configuration is the only way to size a job. A TaskManager, and the single MiniCluster job in `minicluster` mode, is sized by `flyt.taskmanager.cpu.cores` and `taskmanager.memory.process.size`, plus any other `taskmanager.memory.*` key; without them it gets flyt's defaults ([Resources](#resources)). The same size applies in both modes, so a pipeline can be compared between them with one flag: `--mode application` with one TaskManager gives about the resources of the MiniCluster job, plus a small JobManager. Every container is its Flink JVM's `*.memory.process.size`.
 
 ```bash
 flyt run --mode application --taskmanagers 3 \
@@ -61,16 +56,16 @@ flyt run --mode application --taskmanagers 3 \
 
 ### Resources
 
-Overridable. The memory keys apply where Flink's memory model lays out a TaskManager: every TaskManager in `application`, and the MiniCluster job without a preset ([below](#minicluster-memory)); `jobmanager.memory.*` has no effect in `minicluster` (warning). Any other `taskmanager.memory.*` key (`flink.size`, `task.heap.size`, `network.*`, ...) turns off flyt's `task.off-heap.size`, `managed.fraction` and `jvm-overhead.min`; the same rule holds for `jobmanager.memory.*` ([why](application-mode.md#memory)):
+Overridable. The memory keys apply where Flink's memory model lays out a TaskManager: every TaskManager in `application`, and the MiniCluster job ([below](#minicluster-memory)); `jobmanager.memory.*` has no effect in `minicluster` (warning). Any other `taskmanager.memory.*` key (`flink.size`, `task.heap.size`, `network.*`, ...) turns off flyt's `task.off-heap.size`, `managed.fraction` and `jvm-overhead.min` and needs `process.size` set too, since it sizes the YT container; the same rule holds for `jobmanager.memory.*` ([why](application-mode.md#memory)):
 
 | Key | Default | Meaning |
 |---|---|---|
 | `flyt.taskmanager.replicas` | 1 | TaskManager YT jobs in `application`; `flyt run --taskmanagers N` sets it for one run |
-| `flyt.taskmanager.cpu.cores` | the preset's cpu; without a preset `taskmanager.numberOfTaskSlots`, else 1 | cpu of every TaskManager YT job and of the MiniCluster job |
+| `flyt.taskmanager.cpu.cores` | `taskmanager.numberOfTaskSlots` when set, else 2 | cpu of every TaskManager YT job and of the MiniCluster job |
 | `flyt.jobmanager.cpu.cores` | 2 | cpu of the JobManager YT job in `application` |
 | `taskmanager.numberOfTaskSlots` | one per TaskManager cpu in `application`; not set in `minicluster` | task slots of a TaskManager; without it Flink gives the MiniCluster as many slots as the job graph's max parallelism |
-| `parallelism.default` | `minicluster`: the TaskManager cpu (`flyt.taskmanager.cpu.cores` or the preset's); `application`: every slot of the cluster, `flyt.taskmanager.replicas * slots` | parallelism of operators that set none |
-| `taskmanager.memory.process.size` | the preset's memory | a TaskManager's Flink JVM, and its YT container |
+| `parallelism.default` | `minicluster`: the TaskManager cpu, `flyt.taskmanager.cpu.cores`; `application`: every slot of the cluster, `flyt.taskmanager.replicas * slots` | parallelism of operators that set none |
+| `taskmanager.memory.process.size` | `4g` | a TaskManager's Flink JVM, and its YT container |
 | `taskmanager.memory.task.off-heap.size` | 1/8 of `process.size` | direct memory of the tasks: netty of the YTsaurus connectors, gRPC of Python UDFs |
 | `taskmanager.memory.managed.fraction` | `0.1` (Flink: 0.4) | share of Flink memory managed by Flink; with state on the heap, only the Python UDF workers' budget |
 | `taskmanager.memory.jvm-overhead.min` | `512m`; not set when you set `jvm-overhead.max` | lower bound of Flink's JVM overhead: the JVM's native memory and everything else in the container (bash, the discovery helper, a sidecar, Python workers above their managed budget) |
@@ -79,9 +74,7 @@ Overridable. The memory keys apply where Flink's memory model lays out a TaskMan
 
 ### Minicluster memory
 
-The MiniCluster runs inside the PyFlink gateway's JVM, which Flink's local execution does not size. By default the YT container is the preset's memory and the JVM gets the preset's `-Xmx` (and `-XX:MaxDirectMemorySize` where the preset has one).
-
-Without a preset, `taskmanager.memory.process.size` and `flyt.taskmanager.cpu.cores` size the job as one TaskManager of application mode ([Resources](#resources)), and the job runs Flink's own `BashJavaUtils`, as `taskmanager.sh` does, to turn the TaskManager memory keys into the JVM's `-Xmx`, `-XX:MaxDirectMemorySize` and `-XX:MaxMetaspaceSize` and the MiniCluster's managed and network memory. The memory defaults above apply, so `--mode application` with one TaskManager gets a TaskManager laid out like the MiniCluster job.
+The MiniCluster runs inside the PyFlink gateway's JVM, which Flink's local execution does not size. `taskmanager.memory.process.size` and `flyt.taskmanager.cpu.cores` size the job as one TaskManager of application mode ([Resources](#resources)), and the job runs Flink's own `BashJavaUtils`, as `taskmanager.sh` does, to turn the TaskManager memory keys into the JVM's `-Xmx`, `-XX:MaxDirectMemorySize` and `-XX:MaxMetaspaceSize` and the MiniCluster's managed and network memory. The memory defaults above apply, so `--mode application` with one TaskManager gets a TaskManager laid out like the MiniCluster job.
 
 ```bash
 flyt run -D flyt.taskmanager.cpu.cores=4 -D taskmanager.memory.process.size=12g pipeline.py
@@ -100,9 +93,9 @@ A value from any layer is ignored, with a warning unless it equals flyt's own:
 | `rest.port`, `jobmanager.rpc.port`, `blob.server.port` | 27050, 27051, 27052 | TaskManagers and `flyt ui` find the JobManager there |
 | `rest.bind-address`, `jobmanager.bind-host`, `taskmanager.bind-host` | `0.0.0.0` | other YT jobs and `flyt ui` reach the processes on any of the job's addresses |
 | `taskmanager.rpc.port`, `taskmanager.data.port` | `0` (random) | fixed ports collide when TaskManagers share an exec node |
-| `taskmanager.cpu.cores` | the TaskManager cpu | the container cpu: `flyt.taskmanager.cpu.cores` or the preset |
+| `taskmanager.cpu.cores` | the TaskManager cpu | the container cpu: `flyt.taskmanager.cpu.cores` |
 | `rest.bind-port` | not set | the REST server binds on `rest.port` |
 | `jobmanager.rpc.address`, `rest.address`, `taskmanager.host`, `taskmanager.resource-id` | per container | set by the run scripts ([application mode](application-mode.md#flink-configuration)) |
-| `env.java.default-opts.all` / `.jobmanager` / `.taskmanager` | `-Djava.net.preferIPv6Addresses=true`, `-Dfile.encoding=UTF-8`, `-Dio.netty.tryReflectionSetAccessible=true`, `-XX:ActiveProcessorCount=<container cpu>`, `-XX:+ExitOnOutOfMemoryError`; in `minicluster` also the preset's `-Xmx` and `-XX:MaxDirectMemorySize` | YT exec nodes are IPv6-first; a container's locale may be POSIX; Python UDFs might need netty's direct buffers on Java 9+; the JVM must see the container cpu and exit on an OOM |
+| `env.java.default-opts.all` / `.jobmanager` / `.taskmanager` | `-Djava.net.preferIPv6Addresses=true`, `-Dfile.encoding=UTF-8`, `-Dio.netty.tryReflectionSetAccessible=true`, `-XX:ActiveProcessorCount=<container cpu>`, `-XX:+ExitOnOutOfMemoryError`; in `minicluster` also the JVM flags Flink derives from `taskmanager.memory.*` | YT exec nodes are IPv6-first; a container's locale may be POSIX; Python UDFs might need netty's direct buffers on Java 9+; the JVM must see the container cpu and exit on an OOM |
 
 The platform JVM flags still yield to yours: Flink (and PyFlink's gateway, which runs the MiniCluster) puts `env.java.opts.*` after `env.java.default-opts.*` and the JVM takes the last occurrence of a flag, so `env.java.opts.taskmanager: -XX:ActiveProcessorCount=8` changes a TaskManager's processor count. A MiniCluster is one JVM: `env.java.opts.jobmanager`/`.taskmanager` have no effect there (warning).

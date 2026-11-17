@@ -11,21 +11,21 @@ Profile fields; the flag overrides the profile for one `flyt run`.
 | Field | Flag | Default | Meaning |
 |---|---|---|---|
 | `cluster_mode` | `--mode` | `minicluster` | `application` enables everything below |
-| `preset` | `--preset` | `micro`, unless the TaskManager is sized without a preset | size of every TaskManager YT job: its cpu (and task slots) and container memory |
 | `discovery_timeout` | | 300 | seconds a TaskManager waits for the JobManager before failing, like Flink's `taskmanager.registration.timeout` |
 | `sidecar_command` | | | helper started in every JobManager/TaskManager container before Flink, e.g. a metrics agent |
 | `job_yt_proxy` | | | YT HTTP proxy as seen from inside the YT jobs; empty = the client proxy, or the cluster's `/hosts` for a loopback one ([Kind](#kind-and-other-port-forwarded-clusters)). A proxy without a scheme gets the client's one (`http`/`https`) |
 | `max_failed_job_count` | | `max(10, 5 * flyt.taskmanager.replicas)` | failed YT jobs before the operation fails; an explicit value is used as is (minicluster default: 10) |
 
-The cluster's YT resources are flyt's Flink options, set like any Flink key: `flyt.taskmanager.replicas` (TaskManager YT jobs; `flyt run --taskmanagers N` for one run), `flyt.taskmanager.cpu.cores` and `flyt.jobmanager.cpu.cores` ([defaults](flink-configuration.md#resources)).
+The cluster's YT resources are Flink options, set like any Flink key: `flyt.taskmanager.replicas` (TaskManager YT jobs; `flyt run --taskmanagers N` for one run), `flyt.taskmanager.cpu.cores`, `flyt.jobmanager.cpu.cores` and the `*.memory.process.size` of each role ([defaults](flink-configuration.md#resources)).
 
 `flyt validate` resolves the cluster the way `flyt run` does and prints its sizes.
 
 ```yaml
 cluster_mode: application
-preset: large        # every TaskManager: 4 cpu (4 slots), 16G container
 flink_config_override:
   flyt.taskmanager.replicas: "3"
+  flyt.taskmanager.cpu.cores: "4"           # every TaskManager: 4 cpu (4 slots)
+  taskmanager.memory.process.size: 16g      # and a 16g container
 ```
 
 ## Capacity
@@ -38,9 +38,7 @@ flyt's memory defaults, and when they apply, are in [Resources](flink-configurat
 
 - The YT container is `*.memory.process.size`, so Flink's JVM overhead holds everything no JVM flag caps: the JVM's native memory and the rest of the container (bash, the discovery helper, a sidecar, the PyFlink driver on the JobManager, Python UDF workers above their managed budget).
 - Python UDF workers take managed memory (`python.fn-execution.memory.managed`); flyt jobs keep state on the heap, so managed memory is only their budget.
-- Flink caps a TaskManager's direct memory at `framework.off-heap` (128m) plus `task.off-heap.size`, unlike the MiniCluster, where it defaults to the heap size; netty and gRPC buffers of the connectors need the latter.
-
-A preset fixes the TaskManager memory; without one, you can override each of these keys ([Sizing](flink-configuration.md#sizing)).
+- Flink caps a TaskManager's direct memory, the MiniCluster job's included, at `framework.off-heap` (128m) plus `task.off-heap.size`, 0 by default in Flink; netty and gRPC buffers of the connectors need more, so flyt sets it to 1/8 of `process.size`.
 
 ## Flink configuration
 
@@ -69,6 +67,6 @@ Jobs reach YT from inside the cluster, where the client's `localhost:<port>` is 
 | Symptom | Cause | Fix |
 |---|---|---|
 | `NoResourceAvailableException` after 5 minutes | parallelism above `flyt.taskmanager.replicas * slots` | raise `flyt.taskmanager.replicas`, or the slots of a TaskManager ([Resources](flink-configuration.md#resources)) |
-| `OutOfMemoryError: Direct buffer memory` or OOM-killed TaskManagers | the TaskManager JVM is too small for the job | a larger `--preset`, or a larger `taskmanager.memory.process.size` |
+| `OutOfMemoryError: Direct buffer memory` or OOM-killed TaskManagers | the TaskManager JVM is too small for the job | a larger `taskmanager.memory.process.size` |
 | `pthread_create failed (EAGAIN)` | container or node PID limit | see [examples/kind/TROUBLESHOOTING.md](../examples/kind/TROUBLESHOOTING.md) |
 | TaskManagers keep restarting with `no JobManager discovered` | jobs cannot reach the YT proxy or the JobManager REST port | check `job_yt_proxy` and the JobManager stderr |
