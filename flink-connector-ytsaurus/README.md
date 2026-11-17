@@ -832,6 +832,16 @@ INSERT INTO queue_output VALUES (1, 'hello'), (2, 'world');
 are rejected. Use `sink.partition-index` to select a tablet instead of declaring
 `$tablet_index` as a physical column.
 
+At startup, `ROW` mode validates the Flink types against the target column types,
+including `type_v3`, optional types, and list elements. Nullable fields require
+nullable columns; integer narrowing and signed-to-unsigned mappings are rejected.
+Dates, times, and timestamps use the YSON encoder's string representation and require
+`string`, `utf8`, or `any`/`yson` columns. Day-time intervals remain milliseconds in
+`int64` or `any`/`yson` columns; native YTsaurus temporal types are not supported.
+Nested rows and maps require `any`/`yson` columns because the encoder does not produce
+the positional representation of native structs and dictionaries. `BYTES` still
+contains embedded YSON, whose type depends on its contents and is checked at write time.
+
 The existing YSON encoder cannot preserve decimal values or fractional seconds in
 `TIME`. The sink rejects these types, including nested fields, instead of writing
 truncated values. Use `TIME(0)` for whole seconds or `COLUMN` mode with a format that
