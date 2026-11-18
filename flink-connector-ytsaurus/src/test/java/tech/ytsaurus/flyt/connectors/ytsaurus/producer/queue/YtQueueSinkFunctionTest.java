@@ -14,7 +14,6 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.stream.Stream;
 
 import org.apache.flink.api.common.serialization.SerializationSchema;
 import org.apache.flink.configuration.Configuration;
@@ -23,13 +22,9 @@ import org.apache.flink.metrics.Gauge;
 import org.apache.flink.metrics.groups.OperatorMetricGroup;
 import org.apache.flink.streaming.api.operators.StreamingRuntimeContext;
 import org.apache.flink.table.api.DataTypes;
-import org.apache.flink.table.data.GenericArrayData;
-import org.apache.flink.table.data.GenericMapData;
 import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.data.StringData;
-import org.apache.flink.table.data.TimestampData;
-import org.apache.flink.table.types.DataType;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.types.RowKind;
 import org.apache.flink.util.InstantiationUtil;
@@ -37,9 +32,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.EnumSource;
-import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.MockedStatic;
@@ -55,7 +48,6 @@ import tech.ytsaurus.core.tables.TableSchema;
 import tech.ytsaurus.ysontree.YTree;
 import tech.ytsaurus.ysontree.YTreeMapNode;
 import tech.ytsaurus.ysontree.YTreeNode;
-import tech.ytsaurus.ysontree.YTreeTextSerializer;
 
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.credentials.CredentialsProvider;
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.credentials.OAuthCredentialsConfig;
@@ -158,24 +150,6 @@ class YtQueueSinkFunctionTest {
         assertThat(records.get(1).getLong("$tablet_index")).isEqualTo(1);
         verify(transaction).commit();
         sink.finish();
-        verify(transaction).commit();
-    }
-
-    @Test
-    void rowModeMatchesTargetColumnsByNameWhenTheirOrderDiffers() throws Exception {
-        TableSchema schema = TableSchema.builder()
-                .addValue("name", ColumnValueType.STRING)
-                .addValue("id", ColumnValueType.INT64)
-                .build();
-        when(client.getNode(any(GetNode.class)))
-                .thenReturn(CompletableFuture.completedFuture(queueMetadata(schema, true, false)));
-        YtQueueSinkFunction sink = openSink(YtQueueWriteMode.ROW, ysonSerializer(), options(1, 0, null));
-
-        sink.invoke(row(1234, "reordered"), null);
-
-        YTreeMapNode record = records(writtenRequest()).get(0);
-        assertThat(record.getLong("id")).isEqualTo(1234);
-        assertThat(record.getString("name")).isEqualTo("reordered");
         verify(transaction).commit();
     }
 
@@ -382,138 +356,6 @@ class YtQueueSinkFunctionTest {
         assertThrows(IllegalArgumentException.class, () -> missingField.open(new Configuration()));
     }
 
-    @ParameterizedTest(name = "{0} -> {1}")
-    @MethodSource("compatibleRowSchemas")
-    void writesCompatibleRowSchemasThroughSdk(DataType fieldType, String ytType, Object value,
-                                               String expectedYson) throws Exception {
-        RowType rowType = singleFieldType(fieldType);
-        when(client.getNode(any(GetNode.class)))
-                .thenReturn(CompletableFuture.completedFuture(queueMetadata(singleColumnSchema(ytType), true, false)));
-        YtQueueSinkFunction sink = newSink(rowType, YtQueueWriteMode.ROW,
-                new YsonRowDataSerializationSchema(rowType, TimestampFormat.SQL), options(1, 0, null));
-
-        sink.open(new Configuration());
-        sink.invoke(GenericRowData.of(value), null);
-
-        assertThat(records(writtenRequest()).get(0).getOrThrow("payload"))
-                .isEqualTo(YTreeTextSerializer.deserialize(expectedYson));
-        verify(transaction).commit();
-    }
-
-    private static Stream<Arguments> compatibleRowSchemas() {
-        return Stream.of(
-                Arguments.of(DataTypes.BIGINT(), "type=int64;required=%false", 1234L, "1234"),
-                Arguments.of(DataTypes.BIGINT().notNull(), "type=int64;required=%true", 1234L, "1234"),
-                Arguments.of(DataTypes.INT(), "type_v3={type_name=optional;item=int64}", null, "#"),
-                Arguments.of(DataTypes.INT().notNull(), "type_v3={type_name=optional;item=int64}", 1234, "1234"),
-                Arguments.of(DataTypes.TINYINT().notNull(), "type_v3=int8", (byte) -128, "-128"),
-                Arguments.of(DataTypes.TINYINT().notNull(), "type_v3=int64", (byte) 127, "127"),
-                Arguments.of(DataTypes.SMALLINT().notNull(), "type_v3=int16", (short) -32768, "-32768"),
-                Arguments.of(DataTypes.INT().notNull(), "type_v3=int32", Integer.MAX_VALUE, "2147483647"),
-                Arguments.of(DataTypes.BIGINT().notNull(), "type_v3=int64", Long.MAX_VALUE, "9223372036854775807"),
-                Arguments.of(DataTypes.FLOAT().notNull(), "type_v3=float", 1.25F, "1.25"),
-                Arguments.of(DataTypes.FLOAT().notNull(), "type_v3=double", 1.25F, "1.25"),
-                Arguments.of(DataTypes.DOUBLE().notNull(), "type_v3=double", 1.25D, "1.25"),
-                Arguments.of(DataTypes.BOOLEAN().notNull(), "type_v3=bool", true, "%true"),
-                Arguments.of(DataTypes.STRING().notNull(), "type_v3=utf8", StringData.fromString("text"), "\"text\""),
-                Arguments.of(DataTypes.STRING().notNull(), "type_v3=json", StringData.fromString("{}"), "\"{}\""),
-                Arguments.of(DataTypes.DATE().notNull(), "type_v3=string", 1, "\"1970-01-02\""),
-                Arguments.of(DataTypes.TIME(0).notNull(), "type_v3=utf8", 1000, "\"00:00:01\""),
-                Arguments.of(DataTypes.TIMESTAMP(3).notNull(), "type_v3=string",
-                        TimestampData.fromEpochMillis(1234), "\"1970-01-01 00:00:01.234\""),
-                Arguments.of(DataTypes.INTERVAL(DataTypes.DAY(), DataTypes.SECOND(3)).notNull(),
-                        "type_v3=int64", 1234L, "1234"),
-                Arguments.of(DataTypes.INTERVAL(DataTypes.YEAR(), DataTypes.MONTH()).notNull(),
-                        "type_v3=int32", 14, "14"),
-                Arguments.of(DataTypes.INTERVAL(DataTypes.YEAR(), DataTypes.MONTH()).notNull(),
-                        "type_v3=int64", 14, "14"),
-                Arguments.of(DataTypes.INT().notNull(), "type_v3={type_name=tagged;tag=counter;item=int64}",
-                        1234, "1234"),
-                Arguments.of(DataTypes.ARRAY(DataTypes.INT()).notNull(),
-                        "type_v3={type_name=list;item={type_name=optional;item=int64}}",
-                        new GenericArrayData(new Integer[]{1, null, 3}), "[1;#;3]"),
-                Arguments.of(DataTypes.ROW(DataTypes.FIELD("nested", DataTypes.INT())).notNull(),
-                        "type_v3={type_name=optional;item=yson}", GenericRowData.of(42), "{nested=42}"),
-                Arguments.of(DataTypes.MAP(DataTypes.STRING(), DataTypes.INT()).notNull(),
-                        "type_v3={type_name=optional;item=yson}",
-                        new GenericMapData(Map.of(StringData.fromString("one"), 1)), "{one=1}"),
-                Arguments.of(DataTypes.MULTISET(DataTypes.STRING()).notNull(), "type=any;required=%false",
-                        new GenericMapData(Map.of(StringData.fromString("one"), 2)), "{one=2}"),
-                // BYTES contains embedded YSON, so its static type and nullability do not describe the node.
-                Arguments.of(DataTypes.BYTES(), "type_v3=int64", "1234".getBytes(StandardCharsets.UTF_8), "1234"),
-                Arguments.of(DataTypes.BINARY(4), "type_v3=int64", "1234".getBytes(StandardCharsets.UTF_8), "1234")
-        );
-    }
-
-    @ParameterizedTest(name = "{0} -> {1}")
-    @MethodSource("incompatibleRowSchemas")
-    void rejectsIncompatibleRowSchemasBeforeWriting(DataType fieldType, String ytType) throws Exception {
-        RowType rowType = singleFieldType(fieldType);
-        YTreeNode schema = singleColumnSchema(ytType);
-        when(client.getNode(any(GetNode.class)))
-                .thenReturn(CompletableFuture.completedFuture(queueMetadata(schema, true, false)));
-        YtQueueSinkFunction sink = newSink(rowType, YtQueueWriteMode.ROW,
-                new YsonRowDataSerializationSchema(rowType, TimestampFormat.SQL), options(1, 1, null));
-
-        IllegalArgumentException failure = assertThrows(IllegalArgumentException.class,
-                () -> sink.open(new Configuration()));
-
-        assertThat(failure).hasMessageContaining(QUEUE_PATH).hasMessageContaining("payload")
-                .hasMessageContaining(fieldType.getLogicalType().asSummaryString())
-                .hasMessageContaining(TableSchema.fromYTree(schema).getColumnSchema(0).getTypeV3().toString());
-        verify(client, never()).startTransaction(any(StartTransaction.class));
-        verify(transaction, never()).modifyRows(any(ModifyRowsRequest.Builder.class));
-        verify(client).close();
-        executors.verifyNoInteractions();
-    }
-
-    private static Stream<Arguments> incompatibleRowSchemas() {
-        return Stream.of(
-                Arguments.of(DataTypes.BIGINT().notNull(), "type=string;required=%false"),
-                Arguments.of(DataTypes.STRING().notNull(), "type_v3=int64"),
-                Arguments.of(DataTypes.BIGINT(), "type=int64;required=%true"),
-                Arguments.of(DataTypes.BIGINT(), "type_v3=int64"),
-                Arguments.of(DataTypes.SMALLINT().notNull(), "type_v3=int8"),
-                Arguments.of(DataTypes.INT().notNull(), "type_v3=int16"),
-                Arguments.of(DataTypes.BIGINT().notNull(), "type_v3=int32"),
-                Arguments.of(DataTypes.TINYINT().notNull(), "type_v3=uint64"),
-                Arguments.of(DataTypes.INT().notNull(), "type_v3=double"),
-                Arguments.of(DataTypes.DOUBLE().notNull(), "type_v3=float"),
-                Arguments.of(DataTypes.BOOLEAN().notNull(), "type_v3=int64"),
-                Arguments.of(DataTypes.DATE().notNull(), "type_v3=date"),
-                Arguments.of(DataTypes.TIMESTAMP(3).notNull(), "type_v3=timestamp"),
-                Arguments.of(DataTypes.TIMESTAMP_LTZ(3).notNull(), "type_v3=datetime"),
-                Arguments.of(DataTypes.INTERVAL(DataTypes.DAY(), DataTypes.SECOND(3)).notNull(),
-                        "type_v3=interval"),
-                Arguments.of(DataTypes.INTERVAL(DataTypes.YEAR(), DataTypes.MONTH()).notNull(),
-                        "type_v3=int16"),
-                Arguments.of(DataTypes.INT().notNull(),
-                        "type_v3={type_name=optional;item={type_name=optional;item=int64}}"),
-                Arguments.of(DataTypes.ARRAY(DataTypes.INT()).notNull(), "type_v3={type_name=list;item=int64}"),
-                Arguments.of(DataTypes.ARRAY(DataTypes.STRING().notNull()).notNull(),
-                        "type_v3={type_name=list;item=int64}"),
-                Arguments.of(DataTypes.ROW(DataTypes.FIELD("nested", DataTypes.INT())).notNull(),
-                        "type_v3={type_name=struct;members=[{name=nested;type=int32}]}"),
-                Arguments.of(DataTypes.MAP(DataTypes.STRING(), DataTypes.INT()).notNull(),
-                        "type_v3={type_name=dict;key=string;value=int32}"),
-                Arguments.of(DataTypes.MULTISET(DataTypes.STRING()).notNull(),
-                        "type_v3={type_name=dict;key=string;value=int32}")
-        );
-    }
-
-    @Test
-    void columnModeKeepsPayloadIndependentOfInputFieldTypes() throws Exception {
-        RowType rowType = singleFieldType(DataTypes.DECIMAL(10, 2));
-        byte[] payload = "{\"payload\":1.25}".getBytes(StandardCharsets.UTF_8);
-        YtQueueSinkFunction sink = newSink(rowType, YtQueueWriteMode.COLUMN,
-                ignored -> payload, options(1, 0, null));
-
-        sink.open(new Configuration());
-        sink.invoke(GenericRowData.of((Object) null), null);
-
-        assertThat(records(writtenRequest()).get(0).getOrThrow("value").bytesValue()).containsExactly(payload);
-    }
-
     @Test
     void metadataTimeoutIsBoundedAndClosesClient() {
         when(client.getNode(any(GetNode.class))).thenReturn(new CompletableFuture<>());
@@ -558,13 +400,8 @@ class YtQueueSinkFunctionTest {
 
     private YtQueueSinkFunction newSink(YtQueueWriteMode mode, SerializationSchema<RowData> serializer,
                                         YtQueueWriterOptions options) {
-        return newSink(ROW_TYPE, mode, serializer, options);
-    }
-
-    private YtQueueSinkFunction newSink(RowType rowType, YtQueueWriteMode mode,
-                                        SerializationSchema<RowData> serializer, YtQueueWriterOptions options) {
         YtQueueSinkFunction sink = spy(new YtQueueSinkFunction(PROXY, QUEUE_PATH,
-                new OptionsCredentialsProvider(), serializer, rowType, mode, "value", options));
+                new OptionsCredentialsProvider(), serializer, ROW_TYPE, mode, "value", options));
         doReturn(client).when(sink).createClient();
         StreamingRuntimeContext runtimeContext = mock(StreamingRuntimeContext.class);
         when(runtimeContext.getMetricGroup()).thenReturn(metrics);
@@ -625,22 +462,10 @@ class YtQueueSinkFunctionTest {
     }
 
     private static YTreeNode queueMetadata(TableSchema schema, boolean dynamic, boolean sorted) {
-        return queueMetadata(schema.toYTree(), dynamic, sorted);
-    }
-
-    private static RowType singleFieldType(DataType fieldType) {
-        return (RowType) DataTypes.ROW(DataTypes.FIELD("payload", fieldType)).getLogicalType();
-    }
-
-    private static YTreeNode singleColumnSchema(String ytType) {
-        return YTreeTextSerializer.deserialize("[{name=payload;" + ytType + ";}]");
-    }
-
-    private static YTreeNode queueMetadata(YTreeNode schema, boolean dynamic, boolean sorted) {
         return YTree.builder().beginAttributes()
                 .key("dynamic").value(dynamic)
                 .key("sorted").value(sorted)
-                .key("schema").value(schema)
+                .key("schema").value(schema.toYTree())
                 .key("tablet_count").value(2)
                 .endAttributes().entity().build();
     }

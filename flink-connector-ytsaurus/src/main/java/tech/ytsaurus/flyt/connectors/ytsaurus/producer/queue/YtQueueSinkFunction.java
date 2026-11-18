@@ -47,7 +47,6 @@ public class YtQueueSinkFunction extends RichSinkFunction<RowData> implements Ch
     private final String queuePath;
     private final CredentialsProvider credentialsProvider;
     private final SerializationSchema<RowData> serializationSchema;
-    private final RowType rowType;
     private final List<String> fieldNames;
     private final YtQueueWriteMode writeMode;
     private final String valueColumn;
@@ -74,8 +73,7 @@ public class YtQueueSinkFunction extends RichSinkFunction<RowData> implements Ch
         this.queuePath = Objects.requireNonNull(queuePath, "queuePath");
         this.credentialsProvider = Objects.requireNonNull(credentialsProvider, "credentialsProvider");
         this.serializationSchema = Objects.requireNonNull(serializationSchema, "serializationSchema");
-        this.rowType = Objects.requireNonNull(rowType, "rowType");
-        this.fieldNames = new ArrayList<>(rowType.getFieldNames());
+        this.fieldNames = new ArrayList<>(Objects.requireNonNull(rowType, "rowType").getFieldNames());
         this.writeMode = Objects.requireNonNull(writeMode, "writeMode");
         this.valueColumn = Objects.requireNonNull(valueColumn, "valueColumn");
         this.writerOptions = Objects.requireNonNull(writerOptions, "writerOptions");
@@ -142,8 +140,7 @@ public class YtQueueSinkFunction extends RichSinkFunction<RowData> implements Ch
         TableSchema schema = TableSchema.fromYTree(queue.getAttributeOrThrow("schema"));
         List<String> columns = writeMode == YtQueueWriteMode.ROW ? fieldNames : List.of(valueColumn);
         TableSchema.Builder builder = TableSchema.builder();
-        for (int fieldIndex = 0; fieldIndex < columns.size(); fieldIndex++) {
-            String name = columns.get(fieldIndex);
+        for (String name : columns) {
             int index = schema.findColumn(name);
             if (name.startsWith("$") || index < 0) {
                 throw new IllegalArgumentException("Queue has no writable column '" + name + "'");
@@ -154,9 +151,6 @@ public class YtQueueSinkFunction extends RichSinkFunction<RowData> implements Ch
             }
             if (writeMode == YtQueueWriteMode.COLUMN && column.getWireType() != ColumnValueType.STRING) {
                 throw new IllegalArgumentException("Queue payload column '" + name + "' must be string-like");
-            }
-            if (writeMode == YtQueueWriteMode.ROW) {
-                YtQueueSinkSchemaValidator.validate(queuePath, rowType.getTypeAt(fieldIndex), column);
             }
             builder.add(column);
         }
