@@ -7,8 +7,10 @@ import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.formats.common.TimestampFormat;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.types.logical.RowType;
+import tech.ytsaurus.yson.YsonParser;
+import tech.ytsaurus.ysontree.YTree;
+import tech.ytsaurus.ysontree.YTreeBuilder;
 import tech.ytsaurus.ysontree.YTreeNode;
-import tech.ytsaurus.ysontree.YTreeTextSerializer;
 
 import tech.ytsaurus.flyt.formats.yson.adapter.YTreeNodeDeserializationSchema;
 
@@ -67,7 +69,21 @@ public class YsonRowDataDeserializationSchema implements YTreeNodeDeserializatio
     }
 
     public YTreeNode deserializeToYsonNode(byte[] message) throws IOException {
-        return YTreeTextSerializer.deserialize(new ByteArrayInputStream(message));
+        // The encoder emits a one-item list fragment, while other producers send a plain node.
+        YsonParser parser = new YsonParser(new ByteArrayInputStream(message));
+        YTreeBuilder builder = YTree.builder();
+        if (!parser.parseListFragmentItem(builder)) {
+            throw new IOException("Expected exactly one YSON record, got 0");
+        }
+        // The parser checks whitespace and an optional ';', then calls onListItem before parsing
+        // another node. Reject there without parsing another node or allocating its tree.
+        parser.parseListFragment(new YTreeBuilder() {
+            @Override
+            public void onListItem() {
+                throw new IllegalArgumentException("Expected exactly one YSON record, found another record");
+            }
+        });
+        return builder.build();
     }
 
     public RowData convertToRowData(YTreeNode message) {
