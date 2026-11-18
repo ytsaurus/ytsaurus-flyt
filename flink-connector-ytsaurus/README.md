@@ -898,6 +898,9 @@ Payloads are uncompressed. To read them back, configure the source with
 `scan.read-mode = 'COLUMN'`, `scan.value-column = 'payload'`, and the same format.
 Read and write mode options are independent.
 
+For YSON payloads, the reader needs `flink-yson` 1.1.1 or newer to accept the
+encoder's trailing semicolon.
+
 ### Delivery and buffering
 
 Each batch is written in a tablet transaction using the
