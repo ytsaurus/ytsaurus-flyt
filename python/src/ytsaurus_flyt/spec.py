@@ -5,16 +5,22 @@ from __future__ import annotations
 import logging
 import shlex
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional, Union
 
 from yt.wrapper import YtClient
 from yt.wrapper.spec_builders import VanillaSpecBuilder
 
-from ytsaurus_flyt.application import application_cluster
+from ytsaurus_flyt.application import ApplicationCluster, application_cluster
 from ytsaurus_flyt.config import FlytConfig
-from ytsaurus_flyt.flink_conf import FLINK_REST_PORT, render_flink_config_yaml
+from ytsaurus_flyt.flink_conf import (
+    FLINK_REST_PORT,
+    flink_config_warnings,
+    render_flink_config_yaml,
+    user_flink_config,
+)
 from ytsaurus_flyt.job_proxy import job_yt_proxy
-from ytsaurus_flyt.models import ClusterParams, OperationParams
+from ytsaurus_flyt.minicluster import MiniCluster, minicluster
+from ytsaurus_flyt.models import MIB, OperationParams
 from ytsaurus_flyt.yt_client import proxy_url_from_client
 
 logger = logging.getLogger(__name__)
@@ -30,6 +36,41 @@ TASKMANAGER_TASK = "taskmanager"
 _RUN_SCRIPTS_DIR = Path(__file__).parent / "run_scripts"
 JOB_HELPER_FILENAME = "flyt_job_helper.py"
 _JOB_HELPER_PATH = _RUN_SCRIPTS_DIR / "application" / JOB_HELPER_FILENAME
+MINICLUSTER_RUNNER_FILENAME = "flyt_minicluster.py"
+_MINICLUSTER_RUNNER_PATH = _RUN_SCRIPTS_DIR / "minicluster" / MINICLUSTER_RUNNER_FILENAME
+
+# The Flink cluster of a run, its YT jobs with their config.yaml: an application cluster or a MiniCluster.
+FlinkCluster = Union[ApplicationCluster, MiniCluster]
+
+
+# Failed YT jobs before the operation fails; every TaskManager fails on its own (OOM, discovery timeout).
+DEFAULT_MAX_FAILED_JOB_COUNT = 10
+FAILED_JOBS_PER_TASKMANAGER = 5
+
+
+def flink_cluster(config: FlytConfig, flink_options: Mapping[str, str]) -> FlinkCluster:
+    """The cluster of ``config.cluster_mode`` from the user's Flink options."""
+    if config.is_application_cluster:
+        return application_cluster(config, flink_options)
+    return minicluster(config, flink_options)
+
+
+def resolve_flink_cluster(config: FlytConfig, yt_client: Optional[YtClient] = None) -> FlinkCluster:
+    """The Flink cluster of a run from the user's Flink options (a Cypress file through ``yt_client``), with their
+    warnings logged; an invalid configuration raises :class:`~ytsaurus_flyt.flink_conf.FlinkConfigError`."""
+    flink_options = user_flink_config(config, yt_client)
+    for warning in flink_config_warnings(config, flink_options):
+        logger.warning("Flink configuration: %s", warning)
+    return flink_cluster(config, flink_options)
+
+
+def max_failed_job_count(config: FlytConfig, cluster: FlinkCluster) -> int:
+    """``config.max_failed_job_count`` when set, else a budget that grows with the TaskManagers."""
+    if config.max_failed_job_count is not None:
+        return config.max_failed_job_count
+    if isinstance(cluster, ApplicationCluster):
+        return max(DEFAULT_MAX_FAILED_JOB_COUNT, FAILED_JOBS_PER_TASKMANAGER * cluster.resources.taskmanager_count)
+    return DEFAULT_MAX_FAILED_JOB_COUNT
 
 
 def _split_job_command_tokens_posix(job_command: str) -> list[str]:
@@ -68,9 +109,10 @@ def _script_fragments(*, use_squashfs_sandbox_unpack: bool, role: Optional[str])
         "common/03_prepare_libs.sh",
         "common/04_prepare_service.sh",
         "common/05_prepare_job_env.sh",
+        "common/06_write_flink_conf.sh",
     ]
     if role is None:
-        ordered.append("minicluster/run.sh")
+        ordered += ["minicluster/00_taskmanager_memory.sh", "minicluster/run.sh"]
     elif role == JOBMANAGER_TASK:
         ordered += ["application/01_cluster_common.sh", "application/02_start_sidecar.sh", "application/jobmanager.sh"]
     elif role == TASKMANAGER_TASK:
@@ -87,7 +129,7 @@ def _build_run_script(
     *,
     use_squashfs_sandbox_unpack: bool = False,
     role: Optional[str] = None,
-    flink_config: Optional[Mapping[str, str]] = None,
+    flink_config: Mapping[str, str],
 ) -> str:
     result_script = ["#!/bin/bash", "set -e"]
     # Values are substituted into the templates, not re-formatted, so braces in them are safe.
@@ -95,14 +137,19 @@ def _build_run_script(
         "job_args": _job_args_for_shell(job_command),
         "service_name": service_name,
         "python_bin": config.python_bin,
-        # The JobManager's REST port; a MiniCluster pipeline sets the same one in code.
         "rest_port": FLINK_REST_PORT,
+        "flink_conf_yaml": render_flink_config_yaml(flink_config).rstrip("\n"),
     }
-    if role is not None:
-        assert flink_config is not None
+    if role is None:
         fmt.update(
             {
-                "flink_conf_yaml": render_flink_config_yaml(flink_config).rstrip("\n"),
+                "minicluster_runner": _MINICLUSTER_RUNNER_PATH.read_text(encoding="utf-8"),
+                "minicluster_runner_filename": MINICLUSTER_RUNNER_FILENAME,
+            }
+        )
+    else:
+        fmt.update(
+            {
                 "job_helper": _JOB_HELPER_PATH.read_text(encoding="utf-8"),
                 "job_helper_filename": JOB_HELPER_FILENAME,
                 "sidecar_command": shlex.quote(config.sidecar_command) if config.sidecar_command else "''",
@@ -153,20 +200,20 @@ def build_vanilla_operation_spec(
     operation_params: OperationParams,
     secure_vault: dict[str, str],
     *,
-    preset_params: ClusterParams,
+    cluster: FlinkCluster,
     yt_client: Optional[YtClient] = None,
     use_squashfs_sandbox_unpack: bool = False,
 ) -> VanillaSpecBuilder:
     """Build a Vanilla operation spec to launch a Flink job (SquashFS runtime only).
 
-    ``cluster_mode: minicluster`` yields a single task sized by ``preset_params``; the script runs as
-    ``python <script>`` and configures its MiniCluster in code.
-    ``cluster_mode: application`` yields a gang ``jobmanager`` task and a ``taskmanager`` task; ``preset_params``
-    sizes every TaskManager (:func:`ytsaurus_flyt.application.application_cluster`). ``yt_client`` is then required:
-    its proxy (or ``config.job_yt_proxy``) is what the TaskManagers query to discover the JobManager.
+    ``cluster`` comes from :func:`resolve_flink_cluster`. A :class:`~ytsaurus_flyt.minicluster.MiniCluster` yields a
+    single task whose script gets the generated ``config.yaml`` as its context configuration. An
+    :class:`~ytsaurus_flyt.application.ApplicationCluster` yields a gang ``jobmanager`` task and a ``taskmanager``
+    task; ``yt_client`` is then required: its proxy (or ``config.job_yt_proxy``) is what the TaskManagers query to
+    discover the JobManager.
     """
     service_name = config.service_name or _extract_service_name(job_command)
-    is_application = config.is_application_cluster
+    is_application = isinstance(cluster, ApplicationCluster)
 
     environment: Dict[str, str] = {
         **DEFAULT_ENVIRONMENT,
@@ -183,19 +230,12 @@ def build_vanilla_operation_spec(
         yt_proxy = job_yt_proxy(yt_client, proxy_url, config.job_yt_proxy)
         if yt_proxy != proxy_url:
             logger.info("Jobs will reach YT through %s", yt_proxy)
-        cluster = application_cluster(config, preset_params)
         logger.info("Application cluster: %s", cluster.resources.summary())
-        # Memory and JVM flags live in the cluster config.yaml (Flink's memory model), never in -Xmx.
         environment[FLYT_YT_PROXY_ENV] = yt_proxy
     else:
-        java_opts = f"-Xmx{preset_params.max_heap_size}"
-        if preset_params.off_heap_size:
-            # Bounds NIO/netty direct buffers (gRPC connectors); otherwise the JVM
-            # defaults MaxDirectMemorySize to ~the max heap size.
-            java_opts += f" -XX:MaxDirectMemorySize={preset_params.off_heap_size}"
-        # Pin the JVM's processor count to the container CPU limit.
-        java_opts += f" -XX:ActiveProcessorCount={preset_params.cpu}"
-        environment["FLINK_ENV_JAVA_OPTS"] = java_opts
+        # JVM flags go to config.yaml (env.java.*): FLINK_ENV_JAVA_OPTS would make the gateway ignore them.
+        logger.info("MiniCluster job: %d cpu, %dm", cluster.cpu, cluster.memory // MIB)
+    flink_config = cluster.flink_config
     environment.update(config.extra_environment)
 
     common_task_spec: Dict[str, Any] = {
@@ -211,8 +251,7 @@ def build_vanilla_operation_spec(
 
     builder = VanillaSpecBuilder()
     if is_application:
-        jobmanager_params = cluster.resources.jobmanager_params()
-        taskmanager_params = cluster.resources.taskmanager_params()
+        resources = cluster.resources
         _begin_task(
             builder,
             JOBMANAGER_TASK,
@@ -222,11 +261,11 @@ def build_vanilla_operation_spec(
                 service_name,
                 use_squashfs_sandbox_unpack=use_squashfs_sandbox_unpack,
                 role=JOBMANAGER_TASK,
-                flink_config=cluster.flink_config,
+                flink_config=flink_config,
             ),
             job_count=1,
-            cpu=jobmanager_params.cpu,
-            memory=jobmanager_params.memory,
+            cpu=resources.jobmanager_cpu,
+            memory=resources.jobmanager_process_memory,
             # Any JobManager failure restarts the whole cluster with a new incarnation.
             task_spec={**common_task_spec, "gang_options": {}},
             layer_paths=operation_params.layer_paths,
@@ -240,11 +279,11 @@ def build_vanilla_operation_spec(
                 service_name,
                 use_squashfs_sandbox_unpack=use_squashfs_sandbox_unpack,
                 role=TASKMANAGER_TASK,
-                flink_config=cluster.flink_config,
+                flink_config=flink_config,
             ),
-            job_count=taskmanager_params.count,
-            cpu=taskmanager_params.cpu,
-            memory=taskmanager_params.memory,
+            job_count=resources.taskmanager_count,
+            cpu=resources.taskmanager_size.cpu,
+            memory=resources.taskmanager_size.memory,
             # Not a gang task: a lost TaskManager is restarted alone and Flink restarts the job.
             task_spec=common_task_spec,
             layer_paths=operation_params.layer_paths,
@@ -258,10 +297,11 @@ def build_vanilla_operation_spec(
                 config,
                 service_name,
                 use_squashfs_sandbox_unpack=use_squashfs_sandbox_unpack,
+                flink_config=flink_config,
             ),
             job_count=1,
-            cpu=preset_params.cpu,
-            memory=preset_params.memory_bytes(),
+            cpu=cluster.cpu,
+            memory=cluster.memory,
             task_spec=common_task_spec,
             layer_paths=operation_params.layer_paths,
         )

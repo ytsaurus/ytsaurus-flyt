@@ -1,4 +1,4 @@
-# Kind single-node YTsaurus (MICRO preset); trimmed vs upstream cluster_v1_local.yaml.
+# Kind single-node YTsaurus, sized for flyt's default job (2 cpu, 4g); trimmed vs upstream cluster_v1_local.yaml.
 # https://github.com/ytsaurus/ytsaurus/blob/main/yt/docs/code-examples/cluster-config/cluster_v1_local.yaml
 apiVersion: cluster.ytsaurus.tech/v1
 kind: Ytsaurus

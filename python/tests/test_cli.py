@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+import pytest
 import yaml
 from click.testing import CliRunner
 
@@ -186,30 +187,11 @@ def test_validate_prints_profile_line(monkeypatch, tmp_path: Path) -> None:
     assert "Profile: 'myprof'" in result.output
 
 
-def test_validate_sizes_application_taskmanagers_from_the_profile_preset(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setenv("FLYT_CONFIG_DIR", str(tmp_path))
-    profiles = tmp_path / "profiles"
-    profiles.mkdir(parents=True)
-    (profiles / "p.yaml").write_text(
-        "proxy: http://cluster.example:80\npool: default\npreset: large\ncluster_mode: application\n",
-        encoding="utf-8",
-    )
-    (tmp_path / "active").write_text("p\n", encoding="utf-8")
-    seen: dict = {}
-    monkeypatch.setattr("ytsaurus_flyt.__main__.make_yt_client", lambda _p: object())
-    monkeypatch.setattr(
-        "ytsaurus_flyt.__main__.validate_flyt_config", lambda *a, **k: seen.update(k) or [("check", True, "ok")]
-    )
-    result = CliRunner().invoke(cli, ["validate"], catch_exceptions=False)
-    assert result.exit_code == 0, result.output
-    assert seen["preset"].cpu == 4  # large
-
-
 def test_profile_import_writes_and_overrides(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("FLYT_CONFIG_DIR", str(tmp_path))
     src = tmp_path / "incoming.yaml"
     src.write_text(
-        "proxy: http://old.example:80\npool: oldpool\npreset: micro\nruntime_python_packages: [apache-flink==1.20.1]\n",
+        "proxy: http://old.example:80\npool: oldpool\nruntime_python_packages: [apache-flink==1.20.1]\n",
         encoding="utf-8",
     )
     runner = CliRunner()
@@ -237,7 +219,6 @@ def test_profile_import_writes_and_overrides(monkeypatch, tmp_path: Path) -> Non
     data = yaml.safe_load(out.read_text(encoding="utf-8"))
     assert data["proxy"] == "http://new.example:80"
     assert data["pool"] == "newpool"
-    assert data["preset"] == "micro"
     assert data["cypress_base_path"] == default_cypress_base_path("imp1")
 
     list_result = runner.invoke(cli, ["profile", "list"], catch_exceptions=False)
@@ -356,12 +337,12 @@ def test_run_application_flags_override_profile_config(monkeypatch, tmp_path: Pa
             "run",
             "--mode",
             "application",
-            "--taskmanagers",
-            "3",
-            "--jm-cpu",
-            "4",
-            "--tm-cpu",
-            "20",
+            "-D",
+            "flyt.taskmanager.replicas=3",
+            "-D",
+            "flyt.jobmanager.cpu.cores=4",
+            "-D",
+            "flyt.taskmanager.cpu.cores=20",
             "--wheel",
             "svc.whl",
             "x.py",
@@ -371,27 +352,29 @@ def test_run_application_flags_override_profile_config(monkeypatch, tmp_path: Pa
     assert result.exit_code == 0, result.output
     cfg = captured["config"]
     assert cfg.cluster_mode == "application"
-    assert cfg.taskmanager_count == 3
-    assert cfg.jobmanager_cpu == 4
-    assert cfg.taskmanager_cpu == 20
+    assert cfg.flink_config_override == {
+        "flyt.taskmanager.replicas": "3",
+        "flyt.jobmanager.cpu.cores": "4",
+        "flyt.taskmanager.cpu.cores": "20",
+    }
 
 
-def test_run_taskmanagers_flag_sets_capacity(monkeypatch, tmp_path: Path) -> None:
+def test_run_taskmanagers_is_shorthand_for_the_replicas_option(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("FLYT_CONFIG_DIR", str(tmp_path))
     _write_profile(tmp_path, "p1")
     captured: dict = {}
     monkeypatch.setattr("ytsaurus_flyt.__main__.launch_vanilla_job", lambda **kw: captured.update(kw))
     monkeypatch.setattr("ytsaurus_flyt.__main__.make_yt_client", lambda _p: object())
 
-    result = CliRunner().invoke(
-        cli,
-        ["run", "--mode", "application", "--taskmanagers", "5", "--wheel", "svc.whl", "x.py"],
-        catch_exceptions=False,
-    )
+    args = ["run", "--mode", "application", "--taskmanagers", "5", "--wheel", "svc.whl", "x.py"]
+    result = CliRunner().invoke(cli, args, catch_exceptions=False)
     assert result.exit_code == 0, result.output
-    cfg = captured["config"]
-    assert cfg.taskmanager_count == 5
-    assert captured["preset"].name == "MICRO"  # the profile's preset sizes every TaskManager
+    assert captured["config"].flink_config_override == {"flyt.taskmanager.replicas": "5"}
+
+    args = ["run", "--taskmanagers", "5", "-D", "flyt.taskmanager.replicas=3", "--wheel", "svc.whl", "x.py"]
+    result = CliRunner().invoke(cli, args)
+    assert result.exit_code != 0
+    assert "--taskmanagers and -D flyt.taskmanager.replicas set the same option" in result.output
 
 
 def test_run_without_mode_flag_keeps_profile_cluster_mode(monkeypatch, tmp_path: Path) -> None:
@@ -399,7 +382,7 @@ def test_run_without_mode_flag_keeps_profile_cluster_mode(monkeypatch, tmp_path:
     profiles = tmp_path / "profiles"
     profiles.mkdir(parents=True)
     (profiles / "p1.yaml").write_text(
-        "proxy: http://cluster.example:80\npool: default\ncluster_mode: application\ntaskmanager_count: 2\n",
+        "proxy: http://cluster.example:80\npool: default\ncluster_mode: application\n",
         encoding="utf-8",
     )
     (tmp_path / "active").write_text("p1\n", encoding="utf-8")
@@ -410,21 +393,74 @@ def test_run_without_mode_flag_keeps_profile_cluster_mode(monkeypatch, tmp_path:
     result = CliRunner().invoke(cli, ["run", "--wheel", "svc.whl", "x.py"], catch_exceptions=False)
     assert result.exit_code == 0, result.output
     assert captured["config"].cluster_mode == "application"
-    assert captured["config"].taskmanager_count == 2
     # minicluster stays the default when neither profile nor flag sets a mode
     assert FlytConfig().cluster_mode == "minicluster"
 
 
-def test_validate_reports_an_unknown_profile_preset(monkeypatch, tmp_path: Path) -> None:
+def _run_capturing(monkeypatch, tmp_path: Path, profile_body: str, args: list) -> dict:
     monkeypatch.setenv("FLYT_CONFIG_DIR", str(tmp_path))
     profiles = tmp_path / "profiles"
     profiles.mkdir(parents=True)
-    (profiles / "p.yaml").write_text(
-        "proxy: http://cluster.example:80\npool: default\npreset: larg\n", encoding="utf-8"
+    (profiles / "p1.yaml").write_text(
+        "proxy: http://cluster.example:80\npool: default\n" + profile_body, encoding="utf-8"
     )
-    (tmp_path / "active").write_text("p\n", encoding="utf-8")
+    (tmp_path / "active").write_text("p1\n", encoding="utf-8")
+    captured: dict = {}
+    monkeypatch.setattr("ytsaurus_flyt.__main__.launch_vanilla_job", lambda **kw: captured.update(kw))
     monkeypatch.setattr("ytsaurus_flyt.__main__.make_yt_client", lambda _p: object())
-    monkeypatch.setattr("ytsaurus_flyt.__main__.validate_flyt_config", lambda *a, **k: [("check", True, "ok")])
-    result = CliRunner().invoke(cli, ["validate"], catch_exceptions=False)
-    assert result.exit_code == 1
-    assert "[!!] preset: unknown preset 'larg'" in result.output
+    result = CliRunner().invoke(cli, ["run", *args, "--wheel", "svc.whl", "x.py"], catch_exceptions=False)
+    assert result.exit_code == 0, result.output
+    return captured
+
+
+_FLINK_PROFILE = "base_flink_conf_path: ./profile.yaml\nflink_config_override:\n  pipeline.name: profile\n  a: '1'\n"
+
+
+@pytest.mark.parametrize("mode", ["minicluster", "application"])
+def test_run_dynamic_flink_options_go_over_the_profile_in_both_modes(monkeypatch, tmp_path: Path, mode) -> None:
+    captured = _run_capturing(
+        monkeypatch, tmp_path, _FLINK_PROFILE, ["--mode", mode, "-D", "pipeline.name=run", "-D", "b=x=y"]
+    )
+    cfg = captured["config"]
+    assert cfg.base_flink_conf_path == "./profile.yaml"
+    assert cfg.flink_config_override == {"pipeline.name": "run", "a": "1", "b": "x=y"}
+
+
+def test_run_flink_conf_replaces_the_profile_flink_configuration(monkeypatch, tmp_path: Path) -> None:
+    captured = _run_capturing(monkeypatch, tmp_path, _FLINK_PROFILE, ["--flink-conf", "//conf.yaml", "-D", "b=2"])
+    cfg = captured["config"]
+    assert cfg.base_flink_conf_path == "//conf.yaml"
+    assert cfg.flink_config_override == {"b": "2"}
+
+
+def test_run_reports_only_flink_configuration_errors_as_messages(monkeypatch, tmp_path: Path) -> None:
+    from ytsaurus_flyt.flink_conf import FlinkConfigError
+
+    monkeypatch.setenv("FLYT_CONFIG_DIR", str(tmp_path))
+    _write_profile(tmp_path, "p1")
+    monkeypatch.setattr("ytsaurus_flyt.__main__.make_yt_client", lambda _p: object())
+    args = ["run", "--wheel", "svc.whl", "x.py"]
+
+    def raise_(error):  # type: ignore[no-untyped-def]
+        def launch(**kw):  # type: ignore[no-untyped-def]
+            raise error
+
+        return launch
+
+    monkeypatch.setattr("ytsaurus_flyt.__main__.launch_vanilla_job", raise_(FlinkConfigError("bad sizing")))
+    result = CliRunner().invoke(cli, args)
+    assert result.exit_code == 1 and "Error: bad sizing" in result.output
+
+    monkeypatch.setattr("ytsaurus_flyt.__main__.launch_vanilla_job", raise_(ValueError("a bug")))
+    result = CliRunner().invoke(cli, args)
+    assert isinstance(result.exception, ValueError) and "Error: a bug" not in result.output
+
+
+def test_run_rejects_a_dynamic_option_without_a_value(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("FLYT_CONFIG_DIR", str(tmp_path))
+    _write_profile(tmp_path, "p1")
+    monkeypatch.setattr("ytsaurus_flyt.__main__.launch_vanilla_job", lambda **kw: None)
+    monkeypatch.setattr("ytsaurus_flyt.__main__.make_yt_client", lambda _p: object())
+    result = CliRunner().invoke(cli, ["run", "-D", "pipeline.name", "--wheel", "svc.whl", "x.py"])
+    assert result.exit_code != 0
+    assert "expected KEY=VALUE" in result.output

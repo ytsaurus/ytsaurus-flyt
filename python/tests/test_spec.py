@@ -1,12 +1,8 @@
 """Tests for Vanilla spec assembly and run-script selection."""
 
 from ytsaurus_flyt.config import FlytConfig
-from ytsaurus_flyt.models import ClusterParams, OperationParams
-from ytsaurus_flyt.spec import MINICLUSTER_TASK, _build_run_script, build_vanilla_operation_spec
-
-
-def _minicluster(max_heap: str = "2324M", off_heap=None) -> ClusterParams:
-    return ClusterParams(cpu=2, memory="4G", max_heap_size=max_heap, data_size_per_job="0B", off_heap_size=off_heap)
+from ytsaurus_flyt.models import OperationParams
+from ytsaurus_flyt.spec import MINICLUSTER_TASK, _build_run_script, build_vanilla_operation_spec, resolve_flink_cluster
 
 
 def test_build_run_script_squashfs_unpack_includes_unpack_fragment():
@@ -64,7 +60,7 @@ def test_build_vanilla_operation_spec_layer_paths_and_tmpfs():
         job_command="p.py",
         config=config,
         operation_params=op,
-        preset_params=_minicluster(),
+        cluster=resolve_flink_cluster(config),
         secure_vault={},
         use_squashfs_sandbox_unpack=False,
     )
@@ -87,7 +83,7 @@ def test_build_vanilla_operation_spec_sandbox_unpack_no_layer_paths_in_task():
         job_command="p.py",
         config=config,
         operation_params=op,
-        preset_params=_minicluster(),
+        cluster=resolve_flink_cluster(config),
         secure_vault={},
         use_squashfs_sandbox_unpack=True,
     )
@@ -105,7 +101,7 @@ def test_build_vanilla_operation_spec_environment_no_hardcoded_flink_paths():
         job_command="p.py",
         config=config,
         operation_params=op,
-        preset_params=_minicluster(),
+        cluster=resolve_flink_cluster(config),
         secure_vault={},
     )
     spec = builder.build()
@@ -116,7 +112,7 @@ def test_build_vanilla_operation_spec_environment_no_hardcoded_flink_paths():
     assert env["YT_ALLOW_HTTP_REQUESTS_TO_YT_FROM_JOB"] == "1"
 
 
-def test_build_vanilla_operation_spec_java_opts_heap_only():
+def test_build_vanilla_operation_spec_java_opts_in_config_yaml():
     config = FlytConfig(service_name="t", java_home="/jdk", python_bin="/py")
     op = OperationParams(file_paths=[], pool="pool")
     builder = build_vanilla_operation_spec(
@@ -125,23 +121,13 @@ def test_build_vanilla_operation_spec_java_opts_heap_only():
         config=config,
         operation_params=op,
         secure_vault={},
-        preset_params=_minicluster("14G"),
+        cluster=resolve_flink_cluster(config),
     )
-    env = builder.build()["tasks"][MINICLUSTER_TASK]["environment"]
-    # MICRO preset -> cpu=2, so ActiveProcessorCount is pinned to 2.
-    assert env["FLINK_ENV_JAVA_OPTS"] == "-Xmx14G -XX:ActiveProcessorCount=2"
-
-
-def test_build_vanilla_operation_spec_java_opts_with_off_heap():
-    config = FlytConfig(service_name="t", java_home="/jdk", python_bin="/py")
-    op = OperationParams(file_paths=[], pool="pool")
-    builder = build_vanilla_operation_spec(
-        title="x",
-        job_command="p.py",
-        config=config,
-        operation_params=op,
-        secure_vault={},
-        preset_params=_minicluster("14G", "8G"),
+    task = builder.build()["tasks"][MINICLUSTER_TASK]
+    # The gateway ignores config.yaml's env.java.* when FLINK_ENV_JAVA_OPTS is set.
+    assert "FLINK_ENV_JAVA_OPTS" not in task["environment"]
+    # flyt's default cpu=2 pins ActiveProcessorCount to 2.
+    assert (
+        "env.java.default-opts.all: -XX:ActiveProcessorCount=2 -XX:+ExitOnOutOfMemoryError "
+        "-Djava.net.preferIPv6Addresses=true" in task["command"]
     )
-    env = builder.build()["tasks"][MINICLUSTER_TASK]["environment"]
-    assert env["FLINK_ENV_JAVA_OPTS"] == ("-Xmx14G -XX:MaxDirectMemorySize=8G -XX:ActiveProcessorCount=2")

@@ -22,23 +22,32 @@ if [ -n "$_VENV_DIR" ]; then
 fi
 unset _VENV_DIR
 
-# Set up flink/ directories (discover from PyFlink if not in layer)
+# Set up flink/ directories: from the layer mounted at / (layer_paths), else from PyFlink.
+# The sandbox may be tmpfs, which counts against the memory limit: link the distribution, don't copy it.
 if [ ! -d "$FLINK_LIB_DIR" ]; then
-    _pyflink_err=$(pyflink_home 2>&1)
-    _pyflink_rc=$?
-    if [ $_pyflink_rc -eq 0 ]; then
-        PYFLINK_HOME="$_pyflink_err"
+    _pyflink_err=""
+    _pyflink_rc=0
+    if [ -d "/flink/lib" ]; then
+        _flink_dist="/flink"
     else
-        PYFLINK_HOME=""
+        _pyflink_err=$(pyflink_home 2>&1)
+        _pyflink_rc=$?
+        if [ $_pyflink_rc -eq 0 ]; then
+            _flink_dist="$_pyflink_err"
+        else
+            _flink_dist=""
+        fi
     fi
 
-    if [ -n "$PYFLINK_HOME" ] && [ -d "$PYFLINK_HOME/lib" ]; then
-        echo "Discovering Flink from PyFlink at $PYFLINK_HOME" 1>&2
-        mkdir -p "$FLINK_LIB_DIR" && cp -r "$PYFLINK_HOME/lib/"* "$FLINK_LIB_DIR"
-        mkdir -p "$FLINK_OPT_DIR" && cp -r "$PYFLINK_HOME/opt/"* "$FLINK_OPT_DIR"
-        mkdir -p "$FLINK_PLUGINS_DIR" && cp -r "$PYFLINK_HOME/plugins/"* "$FLINK_PLUGINS_DIR"
-        mkdir -p "$FLINK_LOG_DIR" && cp -r "$PYFLINK_HOME/log/"* "$FLINK_LOG_DIR" 2>/dev/null || true
-        mkdir -p "$FLINK_CONF_DIR" && cp -r "$PYFLINK_HOME/conf/"* "$FLINK_CONF_DIR" 2>/dev/null || true
+    if [ -n "$_flink_dist" ] && [ -d "$_flink_dist/lib" ]; then
+        echo "Linking Flink from $_flink_dist" 1>&2
+        # lib/, conf/ and log/ stay writable: jars and config.yaml are added there. opt/ is a real
+        # directory too: Flink finds flink-python there with a walk that does not follow a linked root.
+        mkdir -p "$FLINK_LIB_DIR" "$FLINK_OPT_DIR" "$FLINK_LOG_DIR" "$FLINK_CONF_DIR"
+        ln -s "$_flink_dist/lib/"* "$FLINK_LIB_DIR"/
+        ln -s "$_flink_dist/opt/"* "$FLINK_OPT_DIR"/ 2>/dev/null || true
+        [ -d "$_flink_dist/plugins" ] && ln -s "$_flink_dist/plugins" "$FLINK_PLUGINS_DIR"
+        cp -r "$_flink_dist/conf/"* "$FLINK_CONF_DIR" 2>/dev/null || true
     else
         # Discovery failed — print diagnostics to help the user debug.
         echo "ERROR: flink/lib not found and PyFlink discovery failed." 1>&2
@@ -61,5 +70,5 @@ if [ ! -d "$FLINK_LIB_DIR" ]; then
         echo "  pre-populate flink/lib/ in your layer." 1>&2
         exit 1
     fi
-    unset _pyflink_err _pyflink_rc
+    unset _pyflink_err _pyflink_rc _flink_dist
 fi

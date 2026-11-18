@@ -11,7 +11,7 @@ import yaml
 
 from ytsaurus_flyt.config import FlytConfig
 
-PROFILE_META_KEYS = frozenset({"proxy", "pool", "preset", "cypress_base_path"})
+PROFILE_META_KEYS = frozenset({"proxy", "pool", "cypress_base_path"})
 
 
 def default_cypress_base_path(profile_name: str) -> str:
@@ -98,7 +98,7 @@ def save_profile_dict(name: str, data: Dict[str, Any]) -> None:
 
 
 def split_profile_meta(data: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    """Split profile YAML into meta (proxy, pool, preset, cypress_base_path) and Flyt fields."""
+    """Split profile YAML into meta (proxy, pool, cypress_base_path) and Flyt fields."""
     meta: Dict[str, Any] = {}
     flyt: Dict[str, Any] = {}
     for k, v in data.items():
@@ -172,22 +172,18 @@ def merge_flyt_config(base: FlytConfig, *overlays: FlytConfig) -> FlytConfig:
 
 def resolve_connection_from_profile(
     data: Dict[str, Any],
-) -> Tuple[Optional[str], Optional[str], str]:
-    """Return proxy, pool, preset from profile dict (may be None)."""
+) -> Tuple[Optional[str], Optional[str]]:
+    """Return proxy, pool from profile dict (each may be None)."""
     meta, _ = split_profile_meta(data)
     proxy = meta.get("proxy")
     pool = meta.get("pool")
-    preset = meta.get("preset") or "micro"
     if isinstance(proxy, str):
         proxy = proxy.strip() or None
     if isinstance(pool, str):
         pool = pool.strip() or None
-    if isinstance(preset, str):
-        preset = preset.strip() or "micro"
     return (
         proxy if isinstance(proxy, str) else None,
         pool if isinstance(pool, str) else None,
-        preset,
     )
 
 

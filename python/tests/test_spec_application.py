@@ -7,15 +7,15 @@ import pytest
 from yt.wrapper import YtClient
 
 from ytsaurus_flyt.config import FlytConfig
-from ytsaurus_flyt.models import ClusterPreset, OperationParams
+from ytsaurus_flyt.models import OperationParams
 from ytsaurus_flyt.spec import (
     JOBMANAGER_TASK,
     MINICLUSTER_TASK,
     TASKMANAGER_TASK,
     build_vanilla_operation_spec,
+    resolve_flink_cluster,
 )
 
-_MICRO = ClusterPreset.MICRO.params
 _CLIENT = YtClient(proxy="proxy.example:80", token="t")
 
 
@@ -29,13 +29,13 @@ def _app_config(**overrides) -> FlytConfig:
         java_home="/jdk",
         python_bin="/py",
         cluster_mode="application",
-        taskmanager_count=2,
     )
     base.update(overrides)
+    base["flink_config_override"] = {"flyt.taskmanager.replicas": "2", **overrides.get("flink_config_override", {})}
     return FlytConfig(**base)
 
 
-def _build(config: FlytConfig, preset=_MICRO, **kwargs):
+def _build(config: FlytConfig, **kwargs):
     kwargs.setdefault("yt_client", _CLIENT)
     return build_vanilla_operation_spec(
         title="t",
@@ -43,7 +43,7 @@ def _build(config: FlytConfig, preset=_MICRO, **kwargs):
         config=config,
         operation_params=_op(),
         secure_vault={},
-        preset_params=preset,
+        cluster=resolve_flink_cluster(config),
         **kwargs,
     ).build()
 
@@ -57,8 +57,8 @@ def test_application_spec_has_gang_jobmanager_and_plain_taskmanager_tasks():
     assert jm["gang_options"] == {}
     assert "gang_options" not in tm
     assert tm["job_count"] == 2
-    assert tm["cpu_limit"] == 2  # micro
-    assert tm["memory_limit"] == _MICRO.memory_bytes()  # the preset's container: JVM + 512m overhead
+    assert tm["cpu_limit"] == 2  # flyt's default
+    assert tm["memory_limit"] == 4 * 1024**3  # flyt's default process.size
     # exit 0 of the driver completes the operation from inside the JobManager job, YT restarts nothing
     assert "restart_completed_jobs" not in jm
     assert "restart_completed_jobs" not in tm
@@ -107,7 +107,7 @@ def test_application_run_scripts_launch_standalone_job_and_taskmanager():
     assert '"-Dflyt.yt.job-id=$YT_JOB_ID"' in jm_cmd
     assert '"-Dtaskmanager.host=$CLUSTER_IP"' in tm_cmd
     assert '"-Dtaskmanager.resource-id=$YT_JOB_ID"' in tm_cmd
-    assert "publish" not in jm_cmd and "heartbeat" not in jm_cmd
+    assert not any('"${FLYT_HELPER[@]}" ' + c in jm_cmd for c in ("publish", "heartbeat"))
     assert "complete-operation" in jm_cmd
     assert "application/taskmanager.sh" not in jm_cmd
     assert 'taskmanager.sh" start-foreground' in tm_cmd
@@ -149,7 +149,7 @@ def test_application_sandbox_unpack_keeps_unpack_fragment_and_drops_layer_paths(
         operation_params=OperationParams(file_paths=["//tmp/runtime.squashfs", "//tmp/wheel.whl"], pool="pool"),
         secure_vault={},
         use_squashfs_sandbox_unpack=True,
-        preset_params=_MICRO,
+        cluster=resolve_flink_cluster(cfg),
         yt_client=_CLIENT,
     ).build()
     for task in spec["tasks"].values():
@@ -158,8 +158,13 @@ def test_application_sandbox_unpack_keeps_unpack_fragment_and_drops_layer_paths(
         assert "tmpfs_path" not in task
 
 
-def test_application_spec_sizes_taskmanagers_from_the_preset_and_the_jobmanager_from_defaults():
-    spec = _build(_app_config(jobmanager_cpu=4), preset=ClusterPreset.LARGE.params)
+def test_application_spec_sizes_taskmanagers_from_flink_options_and_the_jobmanager_from_defaults():
+    sizing = {
+        "flyt.jobmanager.cpu.cores": "4",
+        "flyt.taskmanager.cpu.cores": "4",
+        "taskmanager.memory.process.size": "16g",
+    }
+    spec = _build(_app_config(flink_config_override=sizing))
     assert spec["tasks"][JOBMANAGER_TASK]["memory_limit"] == (2 * 1024 + 512) * 1024**2  # 2g JVM + the driver
     assert spec["tasks"][JOBMANAGER_TASK]["cpu_limit"] == 4
     assert spec["tasks"][TASKMANAGER_TASK]["memory_limit"] == 16 * 1024**3
@@ -173,7 +178,7 @@ def _minicluster_spec(cfg: FlytConfig) -> dict:
         config=cfg,
         operation_params=_op(),
         secure_vault={},
-        preset_params=_MICRO,
+        cluster=resolve_flink_cluster(cfg),
     ).build()
 
 
@@ -183,9 +188,6 @@ def test_minicluster_spec_is_unchanged_by_application_fields():
     with_app_fields = _minicluster_spec(
         FlytConfig(
             **base,
-            taskmanager_count=5,
-            jobmanager_cpu=4,
-            taskmanager_cpu=8,
             discovery_timeout=60,
             sidecar_command="agent",
             job_yt_proxy="http://jobs-proxy",
@@ -196,11 +198,22 @@ def test_minicluster_spec_is_unchanged_by_application_fields():
     task = plain["tasks"][MINICLUSTER_TASK]
     assert "restart_completed_jobs" not in task  # exit 0 ends the operation in every mode
     assert "gang_options" not in task
-    assert task["environment"]["FLINK_ENV_JAVA_OPTS"].startswith("-Xmx2324M")
     assert "FLYT_YT_PROXY" not in task["environment"]
     assert "application/01_cluster_common.sh" not in task["command"]
     assert "minicluster/run.sh" in task["command"]
     assert "annotations" not in plain
+
+
+def test_minicluster_job_sized_as_one_taskmanager():
+    base = dict(service_name="svc", java_home="/jdk", python_bin="/py")
+    sizing = {"flyt.taskmanager.cpu.cores": "3", "taskmanager.memory.process.size": "6g"}
+    cfg = FlytConfig(**base, flink_config_override=sizing)
+    task = _minicluster_spec(cfg)["tasks"][MINICLUSTER_TASK]
+    assert (task["cpu_limit"], task["memory_limit"]) == (3, 6 * 1024 * 1024 * 1024)
+    # Flink's BashJavaUtils lays out the JVM in the job
+    assert "minicluster/00_taskmanager_memory.sh" in task["command"]
+    assert "parseResourceParamsAndExportLogs GET_TM_RESOURCE_PARAMS" in task["command"]
+    assert "-Xmx" not in task["command"].split("env.java.default-opts.all:")[1].splitlines()[0]
 
 
 def test_application_jobmanager_takes_python_executables_from_the_config():
@@ -224,7 +237,7 @@ def test_rendered_run_scripts_are_valid_bash(mode, delivery, tmp_path):
             config=cfg,
             operation_params=_op(),
             secure_vault={},
-            preset_params=_MICRO,
+            cluster=resolve_flink_cluster(cfg),
             use_squashfs_sandbox_unpack=unpack,
         ).build()
     for name, task in spec["tasks"].items():
@@ -234,15 +247,33 @@ def test_rendered_run_scripts_are_valid_bash(mode, delivery, tmp_path):
         assert result.returncode == 0, f"{name}: {result.stderr}"
 
 
-def test_minicluster_job_runs_the_script_directly_without_flyt_flink_config():
-    spec = _minicluster_spec(FlytConfig(service_name="svc", java_home="/jdk", python_bin="/py"))
+def test_minicluster_job_runs_the_script_with_the_flink_config_as_its_context():
+    spec = _minicluster_spec(
+        FlytConfig(
+            service_name="svc", java_home="/jdk", python_bin="/py", flink_config_override={"pipeline.name": "wc"}
+        )
+    )
     cmd = spec["tasks"][MINICLUSTER_TASK]["command"]
-    assert "FLYT_FLINK_CONF_EOF" not in cmd
-    assert '"$PYTHON_BIN" "$@" 1>&2' in cmd
-    assert "http://${host}:27050" in cmd
-    assert "Pipeline must set rest.port=27050 and rest.bind-address=0.0.0.0" in cmd
+    assert cmd.index("common/06_write_flink_conf.sh") < cmd.index("minicluster/run.sh")
+    assert "pipeline.name: wc" in cmd
+    assert "rest.port: '27050'" in cmd
+    assert "StreamContextEnvironment.setAsContext" in cmd
+    assert '"$PYTHON_BIN" "$ROOT_DIR/flyt_minicluster.py" "$FLINK_CONF_DIR" "$@" 1>&2' in cmd
     assert 'announce_web_ui "$SLOT_IP"' in cmd
     assert "annotations" not in spec
+
+
+def test_both_modes_get_the_same_user_flink_options():
+    user = {"pipeline.name": "wc", "execution.checkpointing.interval": "30s", "restart-strategy.type": "fixed-delay"}
+    commands = [
+        _minicluster_spec(
+            FlytConfig(service_name="svc", java_home="/jdk", python_bin="/py", flink_config_override=user)
+        )["tasks"][MINICLUSTER_TASK]["command"],
+        *(t["command"] for t in _build(_app_config(flink_config_override=user))["tasks"].values()),
+    ]
+    for cmd in commands:
+        for key, value in user.items():
+            assert f"{key}: {value}" in cmd
 
 
 def test_application_jobmanager_runs_the_script_and_never_fails_after_the_driver():

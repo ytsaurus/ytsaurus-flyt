@@ -4,7 +4,7 @@ import logging
 import os
 import time
 from contextlib import ExitStack
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Optional
 
 from yt.wrapper import YtClient
 from yt.wrapper.run_operation_commands import run_operation
@@ -18,12 +18,8 @@ from ytsaurus_flyt.flink_lib_jars import (
 )
 from ytsaurus_flyt.jobshell_resolve import operation_title_for_profile
 from ytsaurus_flyt.layer_builder import ensure_runtime_layer, ensure_unsquashfs_tool_remote
-from ytsaurus_flyt.models import (
-    ClusterParams,
-    ClusterPreset,
-    OperationParams,
-)
-from ytsaurus_flyt.spec import build_vanilla_operation_spec
+from ytsaurus_flyt.models import OperationParams
+from ytsaurus_flyt.spec import FlinkCluster, build_vanilla_operation_spec, max_failed_job_count, resolve_flink_cluster
 from ytsaurus_flyt.wheel_utils import dedupe_file_paths_by_basename, upload_service_wheel
 from ytsaurus_flyt.yt_client import proxy_url_from_client
 
@@ -43,22 +39,9 @@ def _wait_operation_materialized(op: Any, timeout: float = _MATERIALIZE_TIMEOUT_
     return str(state)
 
 
-DEFAULT_MAX_FAILED_JOB_COUNT = 10
-# Every TaskManager fails on its own (OOM, discovery timeout), so the default budget grows with their count.
-FAILED_JOBS_PER_TASKMANAGER = 5
-
-
-def _max_failed_job_count(config: FlytConfig) -> int:
-    if config.max_failed_job_count is not None:
-        return config.max_failed_job_count
-    if config.is_application_cluster:
-        return max(DEFAULT_MAX_FAILED_JOB_COUNT, FAILED_JOBS_PER_TASKMANAGER * config.taskmanager_count)
-    return DEFAULT_MAX_FAILED_JOB_COUNT
-
-
-def _make_operation_params(config: FlytConfig, pool: str) -> OperationParams:
+def _make_operation_params(config: FlytConfig, pool: str, cluster: FlinkCluster) -> OperationParams:
     return OperationParams(
-        max_failed_job_count=_max_failed_job_count(config),
+        max_failed_job_count=max_failed_job_count(config, cluster),
         file_paths=list(config.extra_file_paths),
         layer_paths=[],
         pool=pool,
@@ -70,7 +53,6 @@ def launch_vanilla_job(
     yt_client: YtClient,
     job_command: str,
     pool: str,
-    preset: Union[ClusterPreset, ClusterParams] = ClusterPreset.MICRO,
     extra_secrets: Optional[Dict[str, str]] = None,
     wheel_path: Optional[str] = None,
     source_dir: Optional[str] = None,
@@ -82,25 +64,20 @@ def launch_vanilla_job(
     """Submit a PyFlink job as a Vanilla operation (``execute.wait()`` semantics).
 
     With ``config.cluster_mode == ClusterMode.APPLICATION`` the operation runs a JobManager task and a
-    TaskManager task; ``preset`` then sizes every TaskManager.
+    TaskManager task. Every TaskManager, or the MiniCluster job, is sized by ``taskmanager.memory.process.size``
+    and ``flyt.taskmanager.cpu.cores`` of the Flink configuration. An invalid Flink configuration raises :class:`~ytsaurus_flyt.flink_conf.FlinkConfigError` before anything
+    is built or uploaded.
     """
-    if isinstance(preset, ClusterPreset):
-        preset_params = preset.params
-        preset_name = preset.name
-    else:
-        preset_params = preset
-        preset_name = "custom"
     proxy_url = proxy_url_from_client(yt_client)
     logger.info(
-        "Launching Vanilla Flink job on %s in pool %s (%s)",
+        "Launching Vanilla Flink job on %s in pool %s (%s mode)",
         proxy_url or "<unknown proxy>",
         pool,
-        f"application mode, preset={preset_name} per TaskManager"
-        if config.is_application_cluster
-        else f"preset={preset_name}",
+        "application" if config.is_application_cluster else "minicluster",
     )
 
     require_squashfs_runtime_config(config)
+    cluster = resolve_flink_cluster(config, yt_client)  # fails before anything is built or uploaded
 
     logger.info("Fetching credentials...")
     secure_vault = get_secure_credentials(yt_client, extra_secrets=extra_secrets)
@@ -129,7 +106,7 @@ def launch_vanilla_job(
                 cache_prefix=cache_prefix,
             )
         )
-        operation_params = _make_operation_params(config, pool)
+        operation_params = _make_operation_params(config, pool, cluster)
 
         logger.info("Resolving Flink lib JARs...")
         flink_jars = resolve_flink_lib_jars(yt_client, config)
@@ -174,9 +151,9 @@ def launch_vanilla_job(
             config=config,
             operation_params=operation_params,
             secure_vault=secure_vault,
-            preset_params=preset_params,
             yt_client=yt_client,
             use_squashfs_sandbox_unpack=config.squashfs_layer_delivery == "sandbox_unpack",
+            cluster=cluster,
         )
 
         logger.info("Starting YT Vanilla operation...")
