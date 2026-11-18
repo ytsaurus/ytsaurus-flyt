@@ -67,6 +67,13 @@ public class TableFactoryPropertyHelper extends FactoryUtil.FactoryHelper<Dynami
         return getOptionValuesWithPrefix(PROPERTIES_OPTION_PREFIX + prefix);
     }
 
+    /** Returns effective options after {@code properties.*} overrides the corresponding plain options. */
+    public Map<String, String> getEffectiveOptionValuesWithPrefix(String prefix) {
+        return getOptionsWithoutPropertiesPrefix().toMap().entrySet().stream()
+                .filter(e -> e.getKey().startsWith(prefix))
+                .collect(Collectors.toMap(e -> e.getKey().substring(prefix.length()), Map.Entry::getValue));
+    }
+
     private Map<String, String> getOptionValuesWithPrefix(String prefix) {
         return allOptions.toMap().entrySet().stream()
                 .filter(e -> e.getKey().startsWith(prefix))
