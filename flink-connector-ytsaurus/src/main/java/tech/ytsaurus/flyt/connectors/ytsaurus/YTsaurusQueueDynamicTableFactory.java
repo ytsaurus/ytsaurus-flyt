@@ -189,7 +189,8 @@ public class YTsaurusQueueDynamicTableFactory implements DynamicTableSourceFacto
                 if (((TimeType) type).getPrecision() > 0) {
                     throw new ValidationException(
                             "The YSON encoder cannot preserve fractional seconds in TIME values; " +
-                                    "use TIME(0) or 'sink.write-mode' = 'COLUMN' with a format such as 'json'");
+                                    "use TIME(0) if whole seconds are sufficient, " +
+                                    "or represent the value as STRING with the required precision");
                 }
                 break;
             default:

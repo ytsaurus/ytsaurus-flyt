@@ -834,9 +834,11 @@ are rejected. Use `sink.partition-index` to select a tablet instead of declaring
 
 The existing YSON encoder cannot preserve decimal values or fractional seconds in
 `TIME`. The sink rejects these types, including nested fields, instead of writing
-truncated values. Use `TIME(0)` for whole seconds or `COLUMN` mode with a format that
-preserves the required types, such as JSON. This validation also applies to YSON
-payloads in `COLUMN` mode.
+truncated values. This validation also applies to YSON payloads in `COLUMN` mode.
+
+For `DECIMAL`, use `COLUMN` mode with a format such as JSON. For `TIME`, use `TIME(0)`
+if whole seconds are sufficient, or represent the value as `STRING` with the required
+precision. Flink JSON 1.20.1 also drops fractional seconds from `TIME` values.
 
 `COLUMN` writes the configured format's serialized bytes into `sink.value-column`,
 which defaults to `value`. This column must have the YTsaurus `string` type. The Flink
