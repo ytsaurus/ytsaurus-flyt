@@ -2,13 +2,7 @@
 
 import pytest
 
-from ytsaurus_flyt.models import (
-    ClusterParams,
-    ClusterPreset,
-    JobmanagerParams,
-    OperationParams,
-    parse_memory,
-)
+from ytsaurus_flyt.models import OperationParams, parse_memory
 
 
 class TestParseMemory:
@@ -43,52 +37,6 @@ class TestParseMemory:
             parse_memory("abc")
 
 
-class TestClusterParams:
-    def test_memory_bytes(self):
-        params = ClusterParams(cpu=2, memory="4G", max_heap_size="2324M", data_size_per_job="500M")
-        assert params.memory_bytes() == 4 * 1024 * 1024 * 1024
-
-    def test_max_heap_size_bytes(self):
-        params = ClusterParams(cpu=2, memory="4G", max_heap_size="2324M", data_size_per_job="500M")
-        assert params.max_heap_size_bytes() == 2324 * 1024 * 1024
-
-    def test_off_heap_size_bytes_none_by_default(self):
-        params = ClusterParams(cpu=2, memory="4G", max_heap_size="2324M", data_size_per_job="500M")
-        assert params.off_heap_size is None
-        assert params.off_heap_size_bytes() is None
-
-    def test_off_heap_size_bytes(self):
-        params = ClusterParams(
-            cpu=2,
-            memory="4G",
-            max_heap_size="2324M",
-            data_size_per_job="500M",
-            off_heap_size="8G",
-        )
-        assert params.off_heap_size_bytes() == 8 * 1024 * 1024 * 1024
-
-    def test_frozen(self):
-        params = ClusterParams(cpu=2, memory="4G", max_heap_size="2324M", data_size_per_job="500M")
-        with pytest.raises(AttributeError):
-            params.cpu = 4  # type: ignore[misc]
-
-
-class TestClusterPreset:
-    def test_micro_preset(self):
-        assert ClusterPreset.MICRO.params.cpu == 2
-        assert ClusterPreset.MICRO.params.memory == "4G"
-
-    def test_small_preset(self):
-        assert ClusterPreset.SMALL.params.cpu == 2
-        assert ClusterPreset.SMALL.params.memory == "8G"
-
-    def test_large_preset(self):
-        assert ClusterPreset.LARGE.params.cpu == 4
-
-    def test_xlarge_preset(self):
-        assert ClusterPreset.XLARGE.params.cpu == 8
-
-
 class TestOperationParams:
     def test_defaults(self):
         params = OperationParams()
@@ -100,10 +48,3 @@ class TestOperationParams:
         params = OperationParams(pool="my-pool", file_paths=["//path/to/jar"])
         assert params.pool == "my-pool"
         assert params.file_paths == ["//path/to/jar"]
-
-
-class TestJobmanagerParams:
-    def test_defaults(self):
-        params = JobmanagerParams()
-        assert params.cpu == 2
-        assert params.memory == parse_memory("4G")

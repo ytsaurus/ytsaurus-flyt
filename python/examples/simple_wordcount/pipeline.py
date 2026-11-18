@@ -30,12 +30,6 @@ def main():
     settings = EnvironmentSettings.new_instance().in_streaming_mode().build()
     t_env = StreamTableEnvironment.create(env, environment_settings=settings)
 
-    # So kubectl port-forward pod/... 27050:27050 can reach the REST handler (defaults bind elsewhere).
-    # Example only: binding to 0.0.0.0 exposes the REST port on all interfaces inside the job network;
-    # restrict in production if your threat model requires it.
-    t_env.get_config().set("rest.port", "27050")
-    t_env.get_config().set("rest.bind-address", "0.0.0.0")
-
     # Create a datagen source (generates random words)
     t_env.execute_sql("""
         CREATE TABLE words_source (
@@ -67,7 +61,7 @@ def main():
         GROUP BY word
     """)
 
-    # In application mode, we must wait for the job to finish
+    # Block until the job finishes: the YT job (minicluster) or the JobManager (application) ends with the script
     result.wait()
     logger.info("Wordcount pipeline finished.")
 

@@ -1,0 +1,65 @@
+"""flyt validate rows for application mode: the cluster as flyt run resolves it."""
+
+from ytsaurus_flyt.config import FlytConfig
+from ytsaurus_flyt.validate_config import validate_flyt_config
+
+
+def _named(rows, name):
+    return [(ok, msg) for n, ok, msg in rows if n == name]
+
+
+def test_validate_prints_the_application_cluster():
+    sizing = {
+        "flyt.taskmanager.replicas": "2",
+        "flyt.taskmanager.cpu.cores": "4",
+        "taskmanager.memory.process.size": "16g",
+    }
+    rows = validate_flyt_config(FlytConfig(cluster_mode="application", flink_config_override=sizing))
+    ((ok, msg),) = _named(rows, "cluster_mode")
+    assert ok is True
+    assert "2 TaskManager(s) x 4 slot(s) (4 cpu, 16384m JVM each), parallelism.default 8" in msg
+    assert _named(rows, "discovery_timeout")
+
+
+def test_validate_defaults_to_flyt_taskmanager_size():
+    rows = validate_flyt_config(FlytConfig(cluster_mode="application"))
+    assert "x 2 slot(s) (2 cpu, 4096m JVM each)" in _named(rows, "cluster_mode")[0][1]
+    rows = validate_flyt_config(FlytConfig())
+    assert _named(rows, "cluster_mode") == [(True, "minicluster: one TaskManager (2 cpu, 4096m)")]
+    assert not _named(rows, "discovery_timeout")
+
+
+def test_validate_minicluster_sized_as_one_taskmanager():
+    sizing = {"flyt.taskmanager.cpu.cores": "3", "taskmanager.memory.process.size": "6g"}
+    cfg = FlytConfig(flink_config_override=sizing)
+    assert _named(validate_flyt_config(cfg), "cluster_mode") == [(True, "minicluster: one TaskManager (3 cpu, 6144m)")]
+    bad = FlytConfig(flink_config_override={"taskmanager.memory.task.heap.size": "1g"})
+    ((ok, msg),) = _named(validate_flyt_config(bad), "cluster_mode")
+    assert ok is False and "set taskmanager.memory.process.size as well" in msg
+
+
+def test_validate_reads_the_flink_config_in_both_modes(tmp_path):
+    conf = tmp_path / "flink.yaml"
+    conf.write_text("taskmanager.numberOfTaskSlots: 3\nrest.port: 8081\n")
+    for mode in ("minicluster", "application"):
+        rows = validate_flyt_config(FlytConfig(cluster_mode=mode, base_flink_conf_path=str(conf)))
+        flink_rows = _named(rows, "flink config.yaml")
+        assert flink_rows[0] == (True, f"{conf}, 2 user option(s)")
+        assert any(ok is None and "rest.port" in msg for ok, msg in flink_rows)  # a warning, not a failure
+    rows = validate_flyt_config(FlytConfig(cluster_mode="application", base_flink_conf_path=str(conf)))
+    assert "x 3 slot(s)" in _named(rows, "cluster_mode")[0][1]
+
+
+def test_validate_fails_on_a_missing_flink_config_file(tmp_path):
+    rows = validate_flyt_config(
+        FlytConfig(cluster_mode="application", base_flink_conf_path=str(tmp_path / "nope.yaml"))
+    )
+    assert _named(rows, "flink config.yaml")[0][0] is False
+    assert not _named(rows, "cluster_mode")
+
+
+def test_validate_fails_on_an_invalid_memory_size_in_the_flink_config():
+    override = {"jobmanager.memory.process.size": "abc"}
+    rows = validate_flyt_config(FlytConfig(cluster_mode="application", flink_config_override=override))
+    assert _named(rows, "cluster_mode")[0][0] is False
+    assert "not a memory size" in _named(rows, "cluster_mode")[0][1]

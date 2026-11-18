@@ -11,16 +11,12 @@ import java.util.stream.Collectors;
 
 import org.apache.flink.configuration.ReadableConfig;
 
-import tech.ytsaurus.flyt.connectors.ytsaurus.utils.YtClusterUtils;
-
 public interface ClusterPickStrategy extends Closeable, Serializable {
     void open(ReadableConfig options);
 
     String pickCluster();
 
-    default boolean isAvailable(String cluster) {
-        return YtClusterUtils.isAvailable(cluster);
-    }
+    boolean isAvailable(String cluster);
 
     String getName();
 

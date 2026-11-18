@@ -206,6 +206,8 @@ public class YtDynamicTableWriterPoolClientTest {
                 genericRowData.setField(1, TimestampData.fromInstant(OffsetDateTime.now().toInstant()));
                 pool.write(longCommit, genericRowData);
             }
+            // Flink drains through finish() before close(); close() itself no longer commits anything.
+            pool.finish();
         }
 
         Assertions.assertNull(failMessage.get());
@@ -237,6 +239,7 @@ public class YtDynamicTableWriterPoolClientTest {
                 pool.write(pair.getKey(), pair.getValue());
                 total.getAndIncrement();
             });
+            pool.finish();
         }
         Assertions.assertEquals(total.get(), clientPool.getCommittedRows());
         return total.get();

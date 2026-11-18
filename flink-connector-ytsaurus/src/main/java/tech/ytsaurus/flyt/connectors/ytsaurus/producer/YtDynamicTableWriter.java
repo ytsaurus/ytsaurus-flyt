@@ -209,8 +209,7 @@ public class YtDynamicTableWriter implements Serializable {
         } catch (Exception e) {
             log.error("Error open yt writer: {}", path.getFullPath(), e);
 
-            List<Exception> errorsAsync = closeAsyncTasks();
-            errorsAsync.forEach(e::addSuppressed);
+            closeAsyncTasks();
 
             List<Exception> errorsResources = closeResources();
             errorsResources.forEach(e::addSuppressed);
@@ -219,8 +218,10 @@ public class YtDynamicTableWriter implements Serializable {
         }
     }
 
-    private List<Exception> closeAsyncTasks() {
-        return bufferedWriter == null ? Collections.emptyList() : bufferedWriter.closeAsyncTasks();
+    private void closeAsyncTasks() {
+        if (bufferedWriter != null) {
+            bufferedWriter.closeAsyncTasks();
+        }
     }
 
     private List<Exception> closeResources() {
@@ -233,7 +234,7 @@ public class YtDynamicTableWriter implements Serializable {
                 log.info("Client closed successfully: {}", path.getFullPath());
             }
         } catch (Exception e) {
-            log.error("Error closing client {} ", path.getFullPath());
+            log.error("Error closing client {}", path.getFullPath(), e);
             errors.add(e);
         }
 
@@ -241,7 +242,7 @@ public class YtDynamicTableWriter implements Serializable {
             releaseLock();
             log.info("Release lock success [{}:{}]", path.getFullPath(), acquiredLock);
         } catch (Exception e) {
-            log.error("Error release lock [{}:{}]", path.getFullPath(), acquiredLock);
+            log.error("Error release lock [{}:{}]", path.getFullPath(), acquiredLock, e);
             errors.add(e);
         }
 
@@ -249,7 +250,7 @@ public class YtDynamicTableWriter implements Serializable {
             clearMetrics();
             log.info("Metrics closed successfully for writer {}", path.getFullPath());
         } catch (Exception e) {
-            log.error("Error close metrics for writer {}", path.getFullPath());
+            log.error("Error close metrics for writer {}", path.getFullPath(), e);
             errors.add(e);
         }
         return errors;
@@ -302,33 +303,9 @@ public class YtDynamicTableWriter implements Serializable {
             return;
         }
         log.info("Begin closing writer {}", path.getFullPath());
-        List<Exception> errors = new ArrayList<>();
-
-        List<Exception> errorsAsync = closeAsyncTasks();
-
-        try {
-            flushData();
-            log.info("Data flushed successfully for writer {}", path.getFullPath());
-        } catch (Exception e) {
-            log.error("Error flushing data. {}", path.getFullPath(), e);
-            errors.add(e);
-        }
-
-        List<Exception> errorsResources = closeResources();
-
-        errors.addAll(errorsAsync);
-        errors.addAll(errorsResources);
-        if (!errors.isEmpty()) {
-            Exception root = errors.get(0);
-            errors.stream()
-                    .skip(1)
-                    .forEach(root::addSuppressed);
-
-            log.error("Error closing yt writer: {}", path.getFullPath());
-            throw new RuntimeException(root);
-        }
-
-        log.info("Writer {} closed successfully", path.getFullPath());
+        closeAsyncTasks();
+        closeResources();
+        log.info("Writer {} closed", path.getFullPath());
     }
 
     private void clearMetrics() {

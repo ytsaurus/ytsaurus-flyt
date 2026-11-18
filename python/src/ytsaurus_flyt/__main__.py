@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import logging
 import os
 import shlex
@@ -15,7 +16,8 @@ import click
 import yaml
 
 from ytsaurus_flyt.cli_helpers import find_pyproject_for_job, job_command_relative_to_project, resolve_proxy_pool
-from ytsaurus_flyt.config import DEFAULT_JAVA_HOME, FlytConfig
+from ytsaurus_flyt.config import DEFAULT_JAVA_HOME, ClusterMode, FlytConfig
+from ytsaurus_flyt.flink_conf import FLYT_TM_REPLICAS_KEY, FlinkConfigError
 from ytsaurus_flyt.flink_lib_jars import (
     download_flink_lib_jars,
     partition_flink_lib_jars_for_delivery,
@@ -30,7 +32,6 @@ from ytsaurus_flyt.layer_builder import (
     ensure_unsquashfs_tool_remote,
     upload_squashfs_layer,
 )
-from ytsaurus_flyt.models import ClusterPreset
 from ytsaurus_flyt.profiles import (
     default_cypress_base_path,
     list_profile_names,
@@ -102,18 +103,17 @@ def _resolve_connection(
     cli_proxy: Optional[str],
     cli_pool: Optional[str],
 ) -> Tuple[str, str]:
-    pr, pl, _ = resolve_connection_from_profile(profile_data)
+    pr, pl = resolve_connection_from_profile(profile_data)
     try:
         return resolve_proxy_pool(pr, pl, cli_proxy, cli_pool)
     except ValueError as e:
         raise click.ClickException(str(e)) from e
 
 
-def _default_profile_body(proxy: str, pool: str, preset: str, cypress: str) -> Dict[str, Any]:
+def _default_profile_body(proxy: str, pool: str, cypress: str) -> Dict[str, Any]:
     return {
         "proxy": proxy,
         "pool": pool,
-        "preset": preset,
         "cypress_base_path": cypress,
         "squashfs_layer_delivery": "layer_paths",
         "runtime_python_packages": ["apache-flink==1.20.1"],
@@ -133,7 +133,6 @@ def profile_cli() -> None:
 @click.argument("name")
 @click.option("--proxy", required=True, help="YT HTTP proxy URL.")
 @click.option("--pool", default="default", show_default=True)
-@click.option("--preset", default="micro", show_default=True)
 @click.option(
     "--cypress-base-path",
     default=None,
@@ -143,14 +142,13 @@ def profile_add(
     name: str,
     proxy: str,
     pool: str,
-    preset: str,
     cypress_base_path: Optional[str],
 ) -> None:
     """Create a profile. If it is the first profile, it becomes active."""
     if profile_yaml_path(name).exists():
         raise click.ClickException(f"Profile already exists: {name!r}")
     cypress = (cypress_base_path or "").strip() or default_cypress_base_path(name)
-    body = _default_profile_body(proxy, pool, preset, cypress)
+    body = _default_profile_body(proxy, pool, cypress)
     save_profile_dict(name, body)
     names = list_profile_names()
     if len(names) == 1 or not read_active_profile_name():
@@ -164,7 +162,6 @@ def profile_add(
 @click.option("--as", "name", required=True, help="Profile name to create.")
 @click.option("--proxy", default=None, help="Override YT HTTP proxy URL.")
 @click.option("--pool", default=None, help="Override pool.")
-@click.option("--preset", default=None, help="Override preset.")
 @click.option(
     "--cypress-base-path",
     default=None,
@@ -175,7 +172,6 @@ def profile_import(
     name: str,
     proxy: Optional[str],
     pool: Optional[str],
-    preset: Optional[str],
     cypress_base_path: Optional[str],
 ) -> None:
     """Import a YAML file as a named profile. If it is the first profile, it becomes active."""
@@ -190,8 +186,6 @@ def profile_import(
         data["proxy"] = proxy.strip()
     if pool is not None:
         data["pool"] = pool.strip()
-    if preset is not None:
-        data["preset"] = preset.strip()
     cbp_cli = (cypress_base_path or "").strip()
     if cbp_cli:
         data["cypress_base_path"] = cbp_cli
@@ -346,9 +340,20 @@ def validate(
     rows = validate_flyt_config(cfg, proxy=px or None, yt_client=yt_client)
     ok_all = True
     for name, ok, msg in rows:
-        ok_all = ok_all and ok
-        click.echo(f"  [{'OK' if ok else '!!'}] {name}: {msg}")
+        ok_all = ok_all and ok is not False
+        mark = "WARN" if ok is None else ("OK" if ok else "!!")
+        click.echo(f"  [{mark}] {name}: {msg}")
     ctx.exit(0 if ok_all else 1)
+
+
+def _parse_flink_options(options: Tuple[str, ...]) -> Dict[str, str]:
+    parsed: Dict[str, str] = {}
+    for option in options:
+        key, sep, value = option.partition("=")
+        if not sep or not key.strip():
+            raise click.BadParameter(f"expected KEY=VALUE, got {option!r}", param_hint="-D")
+        parsed[key.strip()] = value.strip()
+    return parsed
 
 
 @cli.command(
@@ -364,10 +369,33 @@ def validate(
 )
 @click.option("--pool", default=None, help="YT pool (overrides env / profile).")
 @click.option(
-    "--preset",
-    type=click.Choice(["micro", "small", "large", "xlarge"], case_sensitive=False),
+    "--mode",
+    "cluster_mode",
+    type=click.Choice([mode.value for mode in ClusterMode], case_sensitive=False),
     default=None,
-    help="Resource preset (default: from profile or micro).",
+    help="minicluster: one YT job, in-JVM MiniCluster. application: JobManager + TaskManager tasks "
+    "(default: cluster_mode from profile, or minicluster).",
+)
+@click.option(
+    "--taskmanagers",
+    type=click.IntRange(min=1),
+    default=None,
+    help=f"TaskManager YT jobs for --mode application: shorthand for -D {FLYT_TM_REPLICAS_KEY}=N.",
+)
+@click.option(
+    "--flink-conf",
+    "base_flink_conf_path",
+    default=None,
+    help="Flink config.yaml (local file or Cypress //path) for this run, in both modes; replaces the profile's "
+    "base_flink_conf_path and flink_config_override, flyt defaults still apply underneath.",
+)
+@click.option(
+    "-D",
+    "flink_options",
+    multiple=True,
+    metavar="KEY=VALUE",
+    help="Flink option for this run, in both modes, repeatable; applied over every other layer "
+    "(flyt defaults, the Flink config file, flink_config_override).",
 )
 @click.option("--wheel", "wheel_path", default=None)
 @click.option("--source-dir", "source_dir", default=None)
@@ -392,7 +420,10 @@ def run(
     job_argv: Tuple[str, ...],
     proxy: Optional[str],
     pool: Optional[str],
-    preset: Optional[str],
+    cluster_mode: Optional[str],
+    taskmanagers: Optional[int],
+    base_flink_conf_path: Optional[str],
+    flink_options: Tuple[str, ...],
     wheel_path: Optional[str],
     source_dir: Optional[str],
     cache_wheel: bool,
@@ -405,13 +436,25 @@ def run(
     _echo_profile_line(ctx)
     job_command = shlex.join(list(job_argv))
     cfg, profile_data = _load_flyt_config_from_profile(ctx)
+    cluster_overrides: Dict[str, Any] = {"cluster_mode": cluster_mode} if cluster_mode is not None else {}
+    if base_flink_conf_path is not None:
+        # The file replaces the profile's whole Flink configuration for this run.
+        cluster_overrides["base_flink_conf_path"] = base_flink_conf_path
+        cluster_overrides["flink_config_override"] = {}
+    run_options = _parse_flink_options(flink_options)
+    if taskmanagers is not None:
+        if FLYT_TM_REPLICAS_KEY in run_options:
+            raise click.UsageError(f"--taskmanagers and -D {FLYT_TM_REPLICAS_KEY} set the same option; pass one")
+        run_options[FLYT_TM_REPLICAS_KEY] = str(taskmanagers)
+    if run_options:
+        base = cluster_overrides.get("flink_config_override", cfg.flink_config_override)
+        cluster_overrides["flink_config_override"] = {**base, **run_options}
+    if cluster_overrides:
+        try:
+            cfg = dataclasses.replace(cfg, **cluster_overrides)
+        except ValueError as e:
+            raise click.ClickException(str(e)) from e
     proxy_f, pool_f = _resolve_connection(profile_data, proxy, pool)
-    _, _, pst = resolve_connection_from_profile(profile_data)
-    preset_s = (preset or "").strip().lower() or (pst or "micro").strip().lower()
-    try:
-        preset_enum = ClusterPreset[preset_s.upper()]
-    except KeyError as e:
-        raise click.ClickException("Invalid preset %r. Use one of: micro, small, large, xlarge." % (preset_s,)) from e
 
     with contextlib.ExitStack() as stack:
         project_root: Optional[str] = None
@@ -442,19 +485,21 @@ def run(
             FlinkUIWatcher(proxy=proxy_f, open_in_browser=not headless) if not detach else contextlib.nullcontext()
         )
         with watcher:
-            launch_vanilla_job(
-                config=cfg,
-                yt_client=make_yt_client(proxy_f),
-                job_command=job_command,
-                pool=pool_f,
-                preset=preset_enum,
-                wheel_path=wheel_path,
-                source_dir=source_dir,
-                cache_wheel=cache_wheel,
-                sync=not detach,
-                force_rebuild_layer=force_rebuild_layer,
-                profile_name=resolve_effective_profile_name(gp),
-            )
+            try:
+                launch_vanilla_job(
+                    config=cfg,
+                    yt_client=make_yt_client(proxy_f),
+                    job_command=job_command,
+                    pool=pool_f,
+                    wheel_path=wheel_path,
+                    source_dir=source_dir,
+                    cache_wheel=cache_wheel,
+                    sync=not detach,
+                    force_rebuild_layer=force_rebuild_layer,
+                    profile_name=resolve_effective_profile_name(gp),
+                )
+            except FlinkConfigError as e:
+                raise click.ClickException(str(e)) from e
 
 
 @cli.command("build-layer")
@@ -613,7 +658,7 @@ def ui(
         url = find_ui_url_for_operation(yt_client, op_id)
         if not url:
             raise click.ClickException(
-                f"Flink UI not reachable for operation {op_id} (job not running yet, or port 27050 not open). "
+                f"Flink UI not reachable for operation {op_id} (job not running yet, or the Web UI port not open). "
                 "Use --wait to block until it comes up."
             )
     click.echo(url)

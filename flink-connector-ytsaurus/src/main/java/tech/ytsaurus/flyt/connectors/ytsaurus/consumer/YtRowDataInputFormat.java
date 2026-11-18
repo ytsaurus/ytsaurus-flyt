@@ -26,9 +26,10 @@ public class YtRowDataInputFormat extends AbstractYtRowDataInputFormat {
             DeserializationSchema<RowData> deserializer,
             TypeInformation<RowData> rowDataTypeInfo,
             CredentialsProvider credentialsProvider,
-            SerializableSupplier<RetryStrategy> retryStrategy) {
+            SerializableSupplier<RetryStrategy> retryStrategy,
+            boolean useTls) {
 
-        super(ysonSchemaString, limit, deserializer, rowDataTypeInfo, credentialsProvider, retryStrategy);
+        super(ysonSchemaString, limit, deserializer, rowDataTypeInfo, credentialsProvider, retryStrategy, useTls);
         this.path = path;
     }
 

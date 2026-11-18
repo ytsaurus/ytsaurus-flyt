@@ -22,6 +22,8 @@ import org.apache.flink.table.types.DataType;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.NullSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import tech.ytsaurus.flyt.connectors.ytsaurus.producer.queue.YtQueueDynamicTableSink;
 import tech.ytsaurus.flyt.connectors.ytsaurus.producer.queue.YtQueueSinkFunction;
@@ -39,9 +41,14 @@ class YTsaurusQueueSinkFactoryTest {
                 .isInstanceOf(YTsaurusQueueDynamicTableFactory.class);
     }
 
-    @Test
-    void createsInsertOnlySinkAndPreservesRuntimeOptionsOnCopy() {
+    @ParameterizedTest
+    @NullSource
+    @ValueSource(strings = {"false", "true"})
+    void createsInsertOnlySinkAndPreservesRuntimeOptionsOnCopy(String useTls) {
         Map<String, String> options = validOptions();
+        if (useTls != null) {
+            options.put("use-tls", useTls);
+        }
         options.put("sink.buffer-flush.max-rows", "5");
         options.put("sink.buffer-flush.interval", "250 ms");
         options.put("sink.request-timeout", "30 s");
@@ -53,6 +60,7 @@ class YTsaurusQueueSinkFactoryTest {
             assertThat(current).isInstanceOf(YtQueueDynamicTableSink.class);
             assertThat(current.getChangelogMode(ChangelogMode.all())).isEqualTo(ChangelogMode.insertOnly());
             assertThat(current).extracting("writeMode").isEqualTo(YtQueueWriteMode.ROW);
+            assertThat(current).extracting("useTls").isEqualTo(Boolean.parseBoolean(useTls));
             assertThat(current).extracting("writerOptions.batchSize").isEqualTo(5);
             assertThat(current).extracting("writerOptions.flushInterval").isEqualTo(Duration.ofMillis(250));
             assertThat(current).extracting("writerOptions.requestTimeout").isEqualTo(Duration.ofSeconds(30));
@@ -61,6 +69,7 @@ class YTsaurusQueueSinkFactoryTest {
                     mock(DynamicTableSink.Context.class));
             assertThat(provider.getParallelism()).contains(3);
             assertThat(provider.createSinkFunction()).isInstanceOf(YtQueueSinkFunction.class);
+            assertThat(provider.createSinkFunction()).extracting("useTls").isEqualTo(Boolean.parseBoolean(useTls));
         }
     }
 

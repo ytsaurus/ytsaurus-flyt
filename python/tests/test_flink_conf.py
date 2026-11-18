@@ -1,0 +1,235 @@
+"""Tests for ytsaurus_flyt.flink_conf: the config.yaml flyt generates, the same layers in both modes."""
+
+import pytest
+import yaml
+
+from ytsaurus_flyt.application import application_cluster
+from ytsaurus_flyt.config import FlytConfig
+from ytsaurus_flyt.flink_conf import (
+    FlinkConfigError,
+    flatten_flink_config,
+    flink_config_warnings,
+    load_flink_conf_file,
+    render_flink_config_yaml,
+    user_flink_config,
+)
+from ytsaurus_flyt.minicluster import minicluster
+
+
+def _config(**overrides) -> FlytConfig:
+    base = dict(service_name="svc", java_home="/jdk", python_bin="/py", cluster_mode="application")
+    base.update(overrides)
+    return FlytConfig(**base)
+
+
+def _props(user=None, **overrides) -> dict:
+    return application_cluster(_config(**overrides), user).flink_config
+
+
+def _mini_props(user=None, **overrides) -> dict:
+    return minicluster(_config(cluster_mode="minicluster", **overrides), user).flink_config
+
+
+def test_application_flink_config_sets_ports_memory_slots_and_jvm_flags():
+    props = _props({"flyt.taskmanager.replicas": "3", "flyt.jobmanager.cpu.cores": "4"})
+    assert (props["rest.port"], props["jobmanager.rpc.port"], props["blob.server.port"]) == ("27050", "27051", "27052")
+    for key in ("rest.bind-address", "jobmanager.bind-host", "taskmanager.bind-host"):
+        assert props[key] == "0.0.0.0"
+    assert props["taskmanager.rpc.port"] == props["taskmanager.data.port"] == "0"
+    assert props["taskmanager.numberOfTaskSlots"] == "2"  # flyt's default: 2 cpu
+    assert props["taskmanager.cpu.cores"] == "2"
+    assert props["parallelism.default"] == "6"
+    assert props["jobmanager.memory.process.size"] == "2560m"
+    assert props["taskmanager.memory.process.size"] == "4096m"  # flyt's default 4G container
+    assert props["jobmanager.memory.jvm-overhead.min"] == props["taskmanager.memory.jvm-overhead.min"] == "512m"
+    assert "taskmanager.memory.jvm-overhead.max" not in props  # Flink's 1g
+    assert props["taskmanager.memory.task.off-heap.size"] == "512m"  # 1/8 of the TaskManager JVM
+    assert props["taskmanager.memory.managed.fraction"] == "0.1"  # the Python UDF workers' budget
+    assert props["python.executable"] == props["python.client.executable"] == "/py"
+    # default-opts: env.java.opts.* of the user come after them and win
+    assert props["env.java.default-opts.all"] == (
+        "-Djava.net.preferIPv6Addresses=true -Dfile.encoding=UTF-8 -Dio.netty.tryReflectionSetAccessible=true"
+    )
+    assert props["env.java.default-opts.jobmanager"] == "-XX:ActiveProcessorCount=4 -XX:+ExitOnOutOfMemoryError"
+    assert props["env.java.default-opts.taskmanager"] == "-XX:ActiveProcessorCount=2 -XX:+ExitOnOutOfMemoryError"
+    assert props["taskmanager.jvm-exit-on-oom"] == "true"
+
+
+def test_minicluster_is_one_taskmanager_with_flyt_memory_defaults():
+    props = _mini_props()
+    assert props["taskmanager.memory.process.size"] == "4096m"  # flyt's default 4G container
+    assert props["env.java.default-opts.all"] == (
+        "-XX:ActiveProcessorCount=2 -XX:+ExitOnOutOfMemoryError -Djava.net.preferIPv6Addresses=true"
+        " -Dfile.encoding=UTF-8 -Dio.netty.tryReflectionSetAccessible=true"
+    )  # the run script prepends the JVM flags Flink derives
+    assert props["parallelism.default"] == props["taskmanager.cpu.cores"] == "2"
+    # the MiniCluster picks its slots from the job graph
+    assert "taskmanager.numberOfTaskSlots" not in props
+    assert not [k for k in props if k.startswith("jobmanager.memory.")]
+    user = {"flyt.taskmanager.cpu.cores": "3", "taskmanager.memory.process.size": "6g"}
+    props = _mini_props(user)
+    assert props["taskmanager.memory.task.off-heap.size"] == "768m"  # 1/8 of process.size
+    assert props["taskmanager.memory.managed.fraction"] == "0.1"
+    assert props["taskmanager.memory.jvm-overhead.min"] == "512m"
+    assert props["parallelism.default"] == props["taskmanager.cpu.cores"] == "3"
+
+
+def test_both_modes_share_ports_restarts_and_python():
+    shared = (
+        "rest.port",
+        "rest.bind-address",
+        "restart-strategy.type",
+        "taskmanager.jvm-exit-on-oom",
+        "heartbeat.timeout",
+        "heartbeat.interval",
+        "heartbeat.rpc-failure-threshold",
+        "web.submit.enable",
+        "web.cancel.enable",
+        "python.executable",
+        "python.client.executable",
+    )
+    app, mini = _props(), _mini_props()
+    assert {k: app[k] for k in shared} == {k: mini[k] for k in shared}
+    assert mini["restart-strategy.type"] == "exponential-delay"
+    assert mini["heartbeat.timeout"] == "120000"
+    assert mini["web.submit.enable"] == mini["web.cancel.enable"] == "false"
+
+
+@pytest.mark.parametrize("props_of", [_props, _mini_props])
+def test_user_options_override_flyt_defaults_in_both_modes(props_of):
+    user = {
+        "restart-strategy.type": "fixed-delay",
+        "parallelism.default": "1",
+        "pipeline.name": "wc",
+        "env.java.opts.all": "-XX:+UseG1GC",
+    }
+    props = props_of(user)
+    for key, value in user.items():
+        assert props[key] == value
+
+
+@pytest.mark.parametrize("props_of", [_props, _mini_props])
+def test_flyt_owned_keys_win_over_the_user_in_both_modes(props_of):
+    user = {
+        "rest.port": "8081",
+        "rest.bind-address": "localhost",
+        "rest.bind-port": "8081-8090",
+        "taskmanager.data.port": "6121",
+        "jobmanager.rpc.address": "jm",
+        "env.java.default-opts.all": "-Xmx1g",
+    }
+    props = props_of(user)
+    assert props["rest.port"] == "27050"
+    assert props["rest.bind-address"] == "0.0.0.0"
+    assert props["taskmanager.data.port"] == "0"
+    assert "rest.bind-port" not in props
+    assert "jobmanager.rpc.address" not in props
+    assert "-Xmx1g" not in props["env.java.default-opts.all"]
+
+
+def test_application_flink_config_leaves_per_container_keys_to_the_run_scripts():
+    props = _props()
+    for key in ("jobmanager.rpc.address", "rest.address", "taskmanager.host", "taskmanager.resource-id"):
+        assert key not in props
+
+
+def test_custom_taskmanager_memory_model_drops_flyt_memory_defaults():
+    props = _props({"taskmanager.memory.process.size": "6g", "taskmanager.memory.network.fraction": "0.2"})
+    assert props["taskmanager.memory.process.size"] == "6g"
+    assert "taskmanager.memory.managed.fraction" not in props
+    assert "taskmanager.memory.task.off-heap.size" not in props
+    assert props["jobmanager.memory.process.size"] == "2560m"
+
+
+def test_user_jvm_overhead_bounds_replace_flyt_default():
+    user = {
+        "taskmanager.memory.process.size": "4g",
+        "taskmanager.memory.jvm-overhead.min": "256m",
+        "jobmanager.memory.jvm-overhead.max": "300m",
+    }
+    props = _props(user)
+    assert props["taskmanager.memory.jvm-overhead.min"] == "256m"  # the user's value, not raised
+    assert "jobmanager.memory.jvm-overhead.min" not in props  # a user max drops flyt's min
+    assert props["jobmanager.memory.jvm-overhead.max"] == "300m"
+    # overhead keys only carve process.size: flyt keeps its memory defaults
+    assert props["taskmanager.memory.managed.fraction"] == "0.1"
+    assert flink_config_warnings(_config(), user) == []
+
+
+def test_own_memory_layout_gets_no_flyt_overhead_default():
+    user = {"taskmanager.memory.process.size": "4g", "taskmanager.memory.flink.size": "3g"}
+    props = _props(user)
+    assert "taskmanager.memory.jvm-overhead.min" not in props
+    assert "taskmanager.memory.managed.fraction" not in props
+
+
+def test_flink_config_warnings_cover_owned_and_mode_ignored_keys():
+    user = {"rest.port": "8081", "rest.address": "x", "jobmanager.memory.process.size": "8g"}
+    app = flink_config_warnings(_config(), user)
+    mini = flink_config_warnings(_config(cluster_mode="minicluster"), user)
+    assert any("rest.port" in w for w in app) and any("rest.address" in w for w in app)
+    assert not any("jobmanager.memory.process.size" in w for w in app)
+    assert any("jobmanager.memory.process.size has no effect in minicluster" in w for w in mini)
+    assert flink_config_warnings(_config(), {"rest.port": "27050"}) == []  # flyt's own value is fine
+    # taskmanager.cpu.cores is the container cpu: flyt.taskmanager.cpu.cores
+    (cores,) = flink_config_warnings(_config(), {"taskmanager.cpu.cores": "8"})
+    assert "set by flyt from flyt.taskmanager.cpu.cores" in cores
+    assert _props({"taskmanager.cpu.cores": "8"})["taskmanager.cpu.cores"] == "2"
+
+
+def test_minicluster_warns_about_slots_per_role_jvm_opts_and_cluster_options():
+    user = {
+        "taskmanager.numberOfTaskSlots": "4",
+        "env.java.opts.taskmanager": "-XX:+UseG1GC",
+        "env.java.opts.jobmanager": "-XX:+UseG1GC",
+        "env.java.opts.all": "-XX:+UseG1GC",
+        "flyt.taskmanager.replicas": "2",
+        "flyt.jobmanager.cpu.cores": "4",
+    }
+    mini = flink_config_warnings(_config(cluster_mode="minicluster"), user)
+    assert len(mini) == 5
+    assert any("taskmanager.numberOfTaskSlots is not needed in minicluster" in w for w in mini)
+    assert any("env.java.opts.taskmanager has no effect in minicluster" in w for w in mini)
+    assert any("flyt.taskmanager.replicas has no effect in minicluster" in w for w in mini)
+    assert flink_config_warnings(_config(), user) == []
+
+
+def test_user_flink_config_layers_override_over_the_file(tmp_path):
+    conf = tmp_path / "flink.yaml"
+    conf.write_text("taskmanager:\n  numberOfTaskSlots: 4\npipeline.name: from-file\nexecution.attached: true\n")
+    cfg = _config(base_flink_conf_path=str(conf), flink_config_override={"pipeline.name": "override"})
+    assert user_flink_config(cfg) == {
+        "taskmanager.numberOfTaskSlots": "4",
+        "pipeline.name": "override",
+        "execution.attached": "true",
+    }
+    assert user_flink_config(_config()) == {}
+
+
+def test_load_flink_conf_file_rejects_a_non_mapping(tmp_path):
+    conf = tmp_path / "flink.yaml"
+    conf.write_text("- a\n- b\n")
+    with pytest.raises(ValueError, match="YAML mapping"):
+        load_flink_conf_file(str(conf))
+
+
+def test_load_flink_conf_file_reports_a_missing_file_and_broken_yaml_as_config_errors(tmp_path):
+    with pytest.raises(FlinkConfigError, match="nope.yaml.*No such file"):
+        load_flink_conf_file(str(tmp_path / "nope.yaml"))
+    conf = tmp_path / "flink.yaml"
+    conf.write_text("a: [1\n")
+    with pytest.raises(FlinkConfigError, match="is not valid YAML"):
+        load_flink_conf_file(str(conf))
+
+
+def test_flatten_flink_config_keeps_scalars_as_flink_strings():
+    assert flatten_flink_config({"a": {"b": True, "c": None}, "d": 1.5}) == {"a.b": "true", "a.c": "", "d": "1.5"}
+
+
+def test_render_flink_config_yaml_keeps_values_as_strings_on_one_line():
+    long_opts = " ".join(["-XX:+UseG1GC"] * 20)
+    text = render_flink_config_yaml({"b.key": "true", "a.key": "0.1", "c.key": "x y", "env.java.opts.all": long_opts})
+    assert text.splitlines()[0].startswith("a.key:")  # sorted, flat dotted keys
+    # Flink's bash scripts grep env.java.* line by line: a folded value would be cut
+    assert f"env.java.opts.all: {long_opts}" in text.splitlines()
+    assert yaml.safe_load(text) == {"a.key": "0.1", "b.key": "true", "c.key": "x y", "env.java.opts.all": long_opts}

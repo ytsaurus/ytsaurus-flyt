@@ -211,7 +211,7 @@ class YtDynamicTableWriterTest {
     }
 
     @Test
-    void delegatesBuffersAndPreservesCheckpointCloseFlushAndCommitMetrics() {
+    void delegatesBuffersAndPreservesCheckpointFinishFlushAndCommitMetrics() {
         when(path.getFullPath()).thenReturn("//tmp/table");
         when(path.getClusterName()).thenReturn("test");
         when(runtimeContext.getMetricGroup()).thenReturn(UnregisteredMetricsGroup.createOperatorMetricGroup());
@@ -259,6 +259,8 @@ class YtDynamicTableWriterTest {
             assertThat(recordedMetrics.getMetric("sumCommittedRows").get()).isEqualTo(2);
             assertThat(writer.isBusy()).isFalse();
             writer.write(GenericRowData.of(3L));
+            // close() releases only; finish() is what drains the last row, as Flink calls it before close()
+            writer.finish();
         } finally {
             writer.close();
         }

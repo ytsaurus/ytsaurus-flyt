@@ -31,10 +31,12 @@ public class YtClientConfig implements Serializable {
     private final Duration transactionTimeout;
     @Getter
     private final Duration pendingTimeout;
+    @Getter
+    private final boolean useTls;
 
     @SuppressWarnings("checkstyle:ParameterNumber")
     private YtClientConfig(String proxy, String user, String token, String proxyRole, Duration globalYtTimeout,
-                           int batchSize, Duration transactionTimeout, Duration pendingTimeout) {
+                           int batchSize, Duration transactionTimeout, Duration pendingTimeout, boolean useTls) {
         this.proxy = proxy;
         this.user = user;
         this.token = token;
@@ -43,6 +45,7 @@ public class YtClientConfig implements Serializable {
         this.batchSize = batchSize;
         this.transactionTimeout = transactionTimeout;
         this.pendingTimeout = pendingTimeout;
+        this.useTls = useTls;
     }
 
     @Accessors(chain = true)
@@ -63,6 +66,9 @@ public class YtClientConfig implements Serializable {
         private Duration transactionTimeout = Duration.ofMinutes(5);
         @Setter
         private Duration pendingTimeout = Duration.ofMinutes(5);
+        /** Connect to YT proxies over HTTPS only. */
+        @Setter
+        private boolean useTls = false;
 
         public YtClientConfig build() {
             checkNotNull(proxy);
@@ -75,7 +81,8 @@ public class YtClientConfig implements Serializable {
                     globalTimeout,
                     batchSize,
                     transactionTimeout,
-                    pendingTimeout
+                    pendingTimeout,
+                    useTls
             );
         }
     }

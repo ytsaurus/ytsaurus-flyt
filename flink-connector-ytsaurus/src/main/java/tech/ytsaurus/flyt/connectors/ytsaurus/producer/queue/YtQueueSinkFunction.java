@@ -51,6 +51,7 @@ public class YtQueueSinkFunction extends RichSinkFunction<RowData> implements Ch
     private final YtQueueWriteMode writeMode;
     private final String valueColumn;
     private final YtQueueWriterOptions writerOptions;
+    private final boolean useTls;
 
     private transient YTsaurusClient client;
     private transient YtBufferedTransactionWriter writer;
@@ -69,6 +70,21 @@ public class YtQueueSinkFunction extends RichSinkFunction<RowData> implements Ch
             YtQueueWriteMode writeMode,
             String valueColumn,
             YtQueueWriterOptions writerOptions) {
+        this(proxy, queuePath, credentialsProvider, serializationSchema, rowType, writeMode, valueColumn,
+                writerOptions, false);
+    }
+
+    @SuppressWarnings("checkstyle:ParameterNumber")
+    public YtQueueSinkFunction(
+            String proxy,
+            String queuePath,
+            CredentialsProvider credentialsProvider,
+            SerializationSchema<RowData> serializationSchema,
+            RowType rowType,
+            YtQueueWriteMode writeMode,
+            String valueColumn,
+            YtQueueWriterOptions writerOptions,
+            boolean useTls) {
         this.proxy = Objects.requireNonNull(proxy, "proxy");
         this.queuePath = Objects.requireNonNull(queuePath, "queuePath");
         this.credentialsProvider = Objects.requireNonNull(credentialsProvider, "credentialsProvider");
@@ -77,6 +93,7 @@ public class YtQueueSinkFunction extends RichSinkFunction<RowData> implements Ch
         this.writeMode = Objects.requireNonNull(writeMode, "writeMode");
         this.valueColumn = Objects.requireNonNull(valueColumn, "valueColumn");
         this.writerOptions = Objects.requireNonNull(writerOptions, "writerOptions");
+        this.useTls = useTls;
     }
 
     @Override
@@ -122,7 +139,7 @@ public class YtQueueSinkFunction extends RichSinkFunction<RowData> implements Ch
     }
 
     protected YTsaurusClient createClient() {
-        YTsaurusClient ytClient = YtUtils.makeYtClient(proxy, credentialsProvider.getCredentials(proxy));
+        YTsaurusClient ytClient = YtUtils.makeYtClient(proxy, credentialsProvider.getCredentials(proxy), useTls);
         ytClient.getConfig().getRpcOptions().setGlobalTimeout(writerOptions.getRequestTimeout());
         return ytClient;
     }
@@ -233,7 +250,11 @@ public class YtQueueSinkFunction extends RichSinkFunction<RowData> implements Ch
         if (failure == null) {
             failure = new IOException("Failed to write YTsaurus queue '" + queuePath + "'", cause);
             writer.recordError(failure);
-            writer.closeAsyncTasks().forEach(failure::addSuppressed);
+            try {
+                writer.closeAsyncTasks();
+            } catch (Exception closeFailure) {
+                failure.addSuppressed(closeFailure);
+            }
         }
         return failure;
     }
@@ -287,7 +308,14 @@ public class YtQueueSinkFunction extends RichSinkFunction<RowData> implements Ch
             return;
         }
         synchronized (lock) {
-            List<Exception> errors = writer == null ? new ArrayList<>() : writer.closeAsyncTasks();
+            List<Exception> errors = new ArrayList<>();
+            if (writer != null) {
+                try {
+                    writer.closeAsyncTasks();
+                } catch (Exception e) {
+                    errors.add(e);
+                }
+            }
             try {
                 if (client != null) {
                     YTsaurusClient currentClient = client;

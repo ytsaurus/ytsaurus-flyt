@@ -26,6 +26,7 @@ public class YtQueueDynamicTableSink implements DynamicTableSink {
     private final YtQueueWriterOptions writerOptions;
     @Nullable
     private final Integer parallelism;
+    private final boolean useTls;
 
     @Override
     public ChangelogMode getChangelogMode(ChangelogMode requestedMode) {
@@ -43,7 +44,8 @@ public class YtQueueDynamicTableSink implements DynamicTableSink {
                 (RowType) physicalRowDataType.getLogicalType(),
                 writeMode,
                 valueColumn,
-                writerOptions);
+                writerOptions,
+                useTls);
         return SinkFunctionProvider.of(function, parallelism);
     }
 
@@ -59,6 +61,7 @@ public class YtQueueDynamicTableSink implements DynamicTableSink {
                 .valueColumn(valueColumn)
                 .writerOptions(writerOptions)
                 .parallelism(parallelism)
+                .useTls(useTls)
                 .build();
     }
 

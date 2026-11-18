@@ -88,6 +88,8 @@ public class YtDynamicTableSource
 
     private SerializableSupplier<RetryStrategy> retryStrategy;
 
+    private boolean useTls;
+
     @Override
     public LookupRuntimeProvider getLookupRuntimeProvider(LookupContext context) {
         String[] keyNames = new String[context.getKeys().length];
@@ -119,6 +121,7 @@ public class YtDynamicTableSource
         // TODO: maybe bring to options later, rn needed just to pass
         //       unavailability exception to multicluster lookup function
         final boolean failOnUnavailable = pathMap.size() > 1;
+        final boolean finalUseTls = useTls;
         final SerializableFunction<ComplexYtPath, YtRowDataLookupFunction> function =
                 path -> new YtRowDataLookupFunction(
                         finalCredentialsProvider,
@@ -132,7 +135,8 @@ public class YtDynamicTableSource
                         keyNames,
                         keyTypes,
                         rowType,
-                        failOnUnavailable);
+                        failOnUnavailable,
+                        finalUseTls);
         LookupFunction lookupFunction;
         if (pathMap.size() == 1) {
             lookupFunction = function.apply(pathMap.values().iterator().next());
@@ -191,6 +195,7 @@ public class YtDynamicTableSource
                 .options(options)
                 .retryStrategy(retryStrategy)
                 .clusterPickStrategy(clusterPickStrategy)
+                .useTls(useTls)
                 .build();
     }
 
@@ -247,6 +252,7 @@ public class YtDynamicTableSource
                         .path(path)
                         .ysonSchemaString(ysonSchemaString)
                         .credentialsProvider(credentialsProvider)
+                        .useTls(useTls)
                         .limit(limit)
                         .deserializer(deserializer)
                         .rowDataTypeInfo(typeInfo)
@@ -287,6 +293,7 @@ public class YtDynamicTableSource
                         .clusterPickStrategy(clusterPickStrategy)
                         .ysonSchemaString(ysonSchemaString)
                         .credentialsProvider(credentialsProvider)
+                        .useTls(useTls)
                         .limit(limit)
                         .deserializer(deserializer)
                         .rowDataTypeInfo(typeInfo)
@@ -314,7 +321,8 @@ public class YtDynamicTableSource
                 && Objects.equals(asyncLookup, that.asyncLookup)
                 && Objects.equals(lookupMethod, that.lookupMethod)
                 && Objects.equals(limit, that.limit)
-                && Objects.equals(options, that.options);
+                && Objects.equals(options, that.options)
+                && useTls == that.useTls;
     }
 
     @Override
@@ -330,7 +338,8 @@ public class YtDynamicTableSource
                 asyncLookup,
                 lookupMethod,
                 limit,
-                options);
+                options,
+                useTls);
     }
 
     @Override

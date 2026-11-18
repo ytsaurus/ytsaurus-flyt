@@ -39,6 +39,7 @@ import tech.ytsaurus.flyt.connectors.ytsaurus.utils.YtConfigUtils;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.CREDENTIALS_SOURCE;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.PATH;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.PROXY;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.USE_TLS;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.YT_TOKEN_OPTION;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.YT_USERNAME_OPTION;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.ASYNC_BUFFER_CAPACITY;
@@ -95,6 +96,7 @@ public class YTsaurusQueueDynamicTableFactory implements DynamicTableSourceFacto
                 .valueColumn(options.getOptional(SINK_VALUE_COLUMN).orElse(DEFAULT_VALUE_COLUMN))
                 .writerOptions(createWriterOptions(options))
                 .parallelism(options.getOptional(FactoryUtil.SINK_PARALLELISM).orElse(null))
+                .useTls(options.get(USE_TLS))
                 .build();
     }
 
@@ -129,6 +131,7 @@ public class YTsaurusQueueDynamicTableFactory implements DynamicTableSourceFacto
                 .columnModeOptions(columnModeOptions)
                 .partitionDiscoveryInterval(options.get(PARTITION_DISCOVERY_INTERVAL))
                 .parallelism(options.getOptional(FactoryUtil.SOURCE_PARALLELISM).orElse(null))
+                .useTls(options.get(USE_TLS))
                 .build();
     }
 
@@ -147,6 +150,7 @@ public class YTsaurusQueueDynamicTableFactory implements DynamicTableSourceFacto
         return Set.of(
                 YT_USERNAME_OPTION,
                 YT_TOKEN_OPTION,
+                USE_TLS,
                 STARTUP_MODE,
                 SPECIFIC_OFFSETS,
                 TRIMMED_OFFSET_POLICY,

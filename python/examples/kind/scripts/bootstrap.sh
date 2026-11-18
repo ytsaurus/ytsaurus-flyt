@@ -130,7 +130,7 @@ kind_wait_for_service_endpoints "$KUBE_NAMESPACE" "$OPERATOR_WEBHOOK_SERVICE" "$
 
 CLUSTER_CR="$KIND_ROOT/manifests/cluster_v1_flyt_local.yaml"
 kind_require_cluster_cr "$CLUSTER_CR"
-echo "==> Applying Ytsaurus cluster CR (exec node sized for FLYT MICRO)..."
+echo "==> Applying Ytsaurus cluster CR (exec node sized for flyt's default job)..."
 kubectl apply -f "$CLUSTER_CR"
 kind_cleanup_removed_query_components "$KUBE_NAMESPACE"
 

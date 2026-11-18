@@ -100,8 +100,6 @@ class YtQueueSinkFunctionTest {
         transaction = mock(ApiServiceTransaction.class);
         committer = mock(ScheduledExecutorService.class);
         flusher = mock(ScheduledExecutorService.class);
-        when(committer.awaitTermination(anyLong(), eq(TimeUnit.MILLISECONDS))).thenReturn(true);
-        when(flusher.awaitTermination(anyLong(), eq(TimeUnit.MILLISECONDS))).thenReturn(true);
         executors = mockStatic(Executors.class);
         executors.when(Executors::newSingleThreadScheduledExecutor).thenReturn(committer, flusher);
         metrics = mock(OperatorMetricGroup.class);
@@ -186,6 +184,25 @@ class YtQueueSinkFunctionTest {
     }
 
     @Test
+    void interruptedCheckpointFailsWithoutCommittingPendingRows() throws Exception {
+        when(transaction.modifyRows(any(ModifyRowsRequest.Builder.class))).thenReturn(new CompletableFuture<>());
+        YtQueueSinkFunction sink = openSink(YtQueueWriteMode.ROW, ysonSerializer(), options(10, 0, null));
+        sink.invoke(row(1, "pending"), null);
+
+        try {
+            Thread.currentThread().interrupt();
+            IOException failure = assertThrows(IOException.class, () -> sink.snapshotState(null));
+            assertThat(failure).hasRootCauseInstanceOf(InterruptedException.class);
+            assertThat(Thread.currentThread().isInterrupted()).isTrue();
+        } finally {
+            Thread.interrupted();
+        }
+
+        assertThrows(IOException.class, () -> sink.snapshotState(null));
+        verify(transaction, never()).commit();
+    }
+
+    @Test
     void periodicFlushCommitsLowTrafficBatch() throws Exception {
         YtQueueSinkFunction sink = openSink(YtQueueWriteMode.ROW, ysonSerializer(), options(10, 1, null));
         sink.invoke(row(1, "timer"), null);
@@ -218,10 +235,10 @@ class YtQueueSinkFunctionTest {
 
         sink.close();
 
-        verify(committer).shutdown();
-        verify(flusher).shutdown();
-        verify(committer).awaitTermination(5000, TimeUnit.MILLISECONDS);
-        verify(flusher).awaitTermination(5000, TimeUnit.MILLISECONDS);
+        verify(committer).shutdownNow();
+        verify(flusher).shutdownNow();
+        verify(committer, never()).awaitTermination(anyLong(), any(TimeUnit.class));
+        verify(flusher, never()).awaitTermination(anyLong(), any(TimeUnit.class));
         verify(transaction, never()).commit();
         verify(client).close();
         assertThat(gauges.get("lastCommitTimestamp").getValue()).isEqualTo(-1L);
@@ -366,13 +383,14 @@ class YtQueueSinkFunctionTest {
         verify(client).close();
     }
 
-    @Test
-    void resolvesCredentialsOnlyWhenOpeningRuntime() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void resolvesCredentialsOnlyWhenOpeningRuntimeAndAppliesTls(boolean useTls) throws Exception {
         CredentialsProvider credentials = mock(CredentialsProvider.class);
         OAuthCredentialsConfig config = new OAuthCredentialsConfig("user", "test-token");
         when(credentials.getCredentials(PROXY)).thenReturn(config);
         YtQueueSinkFunction sink = new YtQueueSinkFunction(PROXY, QUEUE_PATH, credentials,
-                ysonSerializer(), ROW_TYPE, YtQueueWriteMode.ROW, "value", options(1, 0, null));
+                ysonSerializer(), ROW_TYPE, YtQueueWriteMode.ROW, "value", options(1, 0, null), useTls);
         sinks.add(sink);
         StreamingRuntimeContext runtimeContext = mock(StreamingRuntimeContext.class);
         when(runtimeContext.getMetricGroup()).thenReturn(metrics);
@@ -380,8 +398,9 @@ class YtQueueSinkFunctionTest {
         verify(credentials, never()).getCredentials(any());
 
         try (MockedStatic<YtUtils> utils = mockStatic(YtUtils.class)) {
-            utils.when(() -> YtUtils.makeYtClient(PROXY, config)).thenReturn(client);
+            utils.when(() -> YtUtils.makeYtClient(PROXY, config, useTls)).thenReturn(client);
             sink.open(new Configuration());
+            utils.verify(() -> YtUtils.makeYtClient(PROXY, config, useTls));
         }
 
         verify(credentials).getCredentials(PROXY);
@@ -391,11 +410,12 @@ class YtQueueSinkFunctionTest {
     @Test
     void runtimeConfigurationCanBeSerializedForFlink() throws Exception {
         YtQueueSinkFunction sink = new YtQueueSinkFunction(PROXY, QUEUE_PATH, new OptionsCredentialsProvider(),
-                ysonSerializer(), ROW_TYPE, YtQueueWriteMode.ROW, "value", options(1, 0, null));
+                ysonSerializer(), ROW_TYPE, YtQueueWriteMode.ROW, "value", options(1, 0, null), true);
 
         YtQueueSinkFunction restored = InstantiationUtil.clone(sink, getClass().getClassLoader());
 
         assertThat(restored).isNotSameAs(sink);
+        assertThat(restored).extracting("useTls").isEqualTo(true);
     }
 
     private YtQueueSinkFunction newSink(YtQueueWriteMode mode, SerializationSchema<RowData> serializer,
