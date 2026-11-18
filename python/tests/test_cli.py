@@ -464,3 +464,31 @@ def test_run_rejects_a_dynamic_option_without_a_value(monkeypatch, tmp_path: Pat
     result = CliRunner().invoke(cli, ["run", "-D", "pipeline.name", "--wheel", "svc.whl", "x.py"])
     assert result.exit_code != 0
     assert "expected KEY=VALUE" in result.output
+
+
+def test_run_sql_script_launches_the_bundled_runner(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("FLYT_CONFIG_DIR", str(tmp_path))
+    _write_profile(tmp_path, "p1")
+    sql = tmp_path / "q.sql"
+    sql.write_text("SELECT 1;", encoding="utf-8")
+    captured: dict = {}
+
+    def fake_launch(**kwargs):  # type: ignore[no-untyped-def]
+        captured.update(kwargs)
+        captured["project_files"] = sorted(p.name for p in Path(kwargs["source_dir"]).rglob("*") if p.is_file())
+
+    monkeypatch.setattr("ytsaurus_flyt.__main__.launch_vanilla_job", fake_launch)
+    monkeypatch.setattr("ytsaurus_flyt.__main__.make_yt_client", lambda _p: object())
+    monkeypatch.setattr("ytsaurus_flyt.__main__.proxy_url_from_client", lambda _c: "http://cluster.example:80")
+
+    args = ["run", "-d", "--mode", "application", str(sql), "--result-table", "//tmp/r"]
+    result = CliRunner().invoke(cli, args, catch_exceptions=False)
+    assert result.exit_code == 0, result.output
+    assert captured["job_command"] == (
+        "flyt_sql_job/run.py flyt_sql_job/script.sql --result-table //tmp/r --yt-proxy http://cluster.example:80"
+    )
+    assert captured["config"].is_application_cluster
+    assert captured["project_files"] == ["__init__.py", "pyproject.toml", "run.py", "script.sql"]
+
+    result = CliRunner().invoke(cli, ["run", "--wheel", "w.whl", str(sql)])
+    assert result.exit_code != 0 and "do not apply to a .sql script" in result.output

@@ -100,6 +100,29 @@ With `--wheel` only, pass the script path as it appears inside the unpacked whee
 
 `-d` / `--detach` submits the operation, waits until it materializes, prints the tracking link and exits. Use `flyt ui --wait` afterwards to find the Flink Web UI. Add `--cache-wheel` to reuse the uploaded wheel across runs (needs `wheel_cache_prefix` or `cypress_base_path`).
 
+### Flink SQL scripts
+
+`flyt run script.sql` runs a Flink SQL script: flyt packages it with the bundled runner
+([`sql_runner.py`](src/ytsaurus_flyt/sql_runner.py)) into a throwaway service wheel and submits it like any
+PyFlink job. Arguments after the script go to the runner: `--result-table PATH`, `--row-limit N`.
+Statements are split on `;` outside quotes and comments and executed on a `TableEnvironment`:
+
+| Statement | Handling |
+|---|---|
+| Leading `SET 'k' = 'v'` | Applied over the job's Flink configuration when the `TableEnvironment` is created |
+| Later `SET` | `TableConfig` option |
+| `ADD JAR '...'` | Appended to `pipeline.jars` |
+| DDL, `USE`, `LOAD` | Executed immediately |
+| `SHOW`, `DESCRIBE`, `EXPLAIN` | Printed to the job log |
+| `SELECT` / `WITH` / `VALUES` | Collected on the driver (`--row-limit`, default 1000) and written to `--result-table` (replaced; second SELECT gets `_2`), or echoed to the job log |
+| `INSERT INTO` | Batched into one statement set and submitted as a single job after the script |
+| `EXECUTE STATEMENT SET BEGIN ... END` | Submitted as its own job |
+
+`execution.runtime-mode` comes from a leading `SET` or from the job's Flink configuration
+(`-D execution.runtime-mode=batch`); the default is streaming. The runner waits for the jobs it submitted.
+Progress is reported on stderr as `FLYT_SQL {json}` lines (`query_result`, `job_submitted`, ...).
+`--result-table` needs `ytsaurus-client` importable by the job's Python. See [examples/simple_sql](examples/simple_sql).
+
 ## JARs
 
 JAR filenames follow `<basename>-<version>.jar`. Place them under `jar_scan_folder`; resolution picks the latest semver per basename.
