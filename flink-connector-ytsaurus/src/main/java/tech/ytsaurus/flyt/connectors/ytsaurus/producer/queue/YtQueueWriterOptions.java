@@ -59,7 +59,7 @@ public final class YtQueueWriterOptions implements Serializable {
     }
 
     private static void validateDuration(Duration value, String name, boolean allowZero) {
-        Objects.requireNonNull(value, name);
+        Objects.requireNonNull(value, "'" + name + "' must not be null");
         if (value.isNegative() || (!allowZero && value.isZero())) {
             throw new IllegalArgumentException("'" + name + "' must be " +
                     (allowZero ? "nonnegative" : "greater than zero"));

@@ -84,14 +84,15 @@ public class YtQueueSinkFunction extends RichSinkFunction<RowData> implements Ch
             String valueColumn,
             YtQueueWriterOptions writerOptions,
             boolean useTls) {
-        this.proxy = Objects.requireNonNull(proxy, "proxy");
-        this.queuePath = Objects.requireNonNull(queuePath, "queuePath");
-        this.credentialsProvider = Objects.requireNonNull(credentialsProvider, "credentialsProvider");
-        this.serializationSchema = Objects.requireNonNull(serializationSchema, "serializationSchema");
-        this.fieldNames = new ArrayList<>(Objects.requireNonNull(rowType, "rowType").getFieldNames());
-        this.writeMode = Objects.requireNonNull(writeMode, "writeMode");
-        this.valueColumn = Objects.requireNonNull(valueColumn, "valueColumn");
-        this.writerOptions = Objects.requireNonNull(writerOptions, "writerOptions");
+        this.proxy = Objects.requireNonNull(proxy, "YTsaurus proxy must not be null");
+        this.queuePath = Objects.requireNonNull(queuePath, "Queue path must not be null");
+        this.credentialsProvider = Objects.requireNonNull(credentialsProvider, "Credentials provider must not be null");
+        this.serializationSchema = Objects.requireNonNull(serializationSchema, "Serialization schema must not be null");
+        this.fieldNames = new ArrayList<>(
+                Objects.requireNonNull(rowType, "Row type must not be null").getFieldNames());
+        this.writeMode = Objects.requireNonNull(writeMode, "Queue write mode must not be null");
+        this.valueColumn = Objects.requireNonNull(valueColumn, "Queue payload column must not be null");
+        this.writerOptions = Objects.requireNonNull(writerOptions, "Queue writer options must not be null");
         this.useTls = useTls;
     }
 
