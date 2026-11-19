@@ -132,7 +132,7 @@ class YtQueueSinkFunctionTest {
     @Test
     void schedulesFlushAndCommitUsingTheirOwnPeriods() throws Exception {
         openSink(YtQueueWriteMode.ROW, ysonSerializer(),
-                new YtQueueWriterOptions(100, Duration.ofMillis(10), Duration.ofMillis(20),
+                new YtQueueWriterOptions(100, 1000, Duration.ofMillis(10), Duration.ofMillis(20),
                         Duration.ofSeconds(5), null));
 
         verify(flusher).scheduleAtFixedRate(any(Runnable.class), eq(0L), eq(10L), eq(TimeUnit.MILLISECONDS));
@@ -140,13 +140,15 @@ class YtQueueSinkFunctionTest {
     }
 
     @Test
-    void batchFlushCopiesReusedRowsAndRoutesToFixedPartition() throws Exception {
+    void flushCopiesReusedRowsAndRoutesToFixedPartition() throws Exception {
         YtQueueSinkFunction sink = openSink(YtQueueWriteMode.ROW, ysonSerializer(), options(2, 0, 1));
         GenericRowData row = row(1, "first");
         sink.invoke(row, null);
         row.setField(0, 2L);
         row.setField(1, StringData.fromString("second"));
         sink.invoke(row, null);
+        verify(transaction, never()).commit();
+        sink.finish();
 
         ModifyRowsRequest request = writtenRequest();
         List<YTreeMapNode> records = records(request);
@@ -172,12 +174,48 @@ class YtQueueSinkFunctionTest {
 
         sink.invoke(row(1, "unused"), null);
         sink.invoke(row(2, "unused"), null);
+        sink.finish();
 
         ModifyRowsRequest request = writtenRequest();
         List<YTreeMapNode> records = records(request);
         assertThat(records.get(0).getOrThrow("value").bytesValue()).containsExactly((byte) 1);
         assertThat(records.get(1).getOrThrow("value").bytesValue()).containsExactly((byte) 2);
         assertThat(request.getSchema().findColumn("$tablet_index")).isEqualTo(-1);
+    }
+
+    @Test
+    void sharedWriterUsesIndependentModificationAndTransactionLimits() throws Exception {
+        YtQueueSinkFunction sink = openSink(YtQueueWriteMode.ROW, ysonSerializer(), options(2, 5, 0, null));
+        sink.invoke(row(1, "first"), null);
+        sink.invoke(row(2, "second"), null);
+        verify(client, never()).startTransaction(any(StartTransaction.class));
+
+        for (int id = 3; id <= 6; id++) {
+            sink.invoke(row(id, "buffered"), null);
+        }
+        verify(transaction, times(2)).modifyRows(any(ModifyRowsRequest.Builder.class));
+        verify(transaction, never()).commit();
+        assertThat(gauges.get("sumCommittedRows").getValue()).isEqualTo(0L);
+
+        sink.invoke(row(7, "next transaction"), null);
+
+        ArgumentCaptor<ModifyRowsRequest.Builder> requests = ArgumentCaptor.forClass(ModifyRowsRequest.Builder.class);
+        verify(transaction, times(3)).modifyRows(requests.capture());
+        List<Long> writtenIds = new ArrayList<>();
+        for (ModifyRowsRequest.Builder request : requests.getAllValues()) {
+            List<YTreeMapNode> rows = records(request.build());
+            assertThat(rows).hasSize(2);
+            rows.forEach(value -> writtenIds.add(value.getLong("id")));
+        }
+        assertThat(writtenIds).containsExactly(1L, 2L, 3L, 4L, 5L, 6L);
+        verify(transaction).commit();
+        assertThat(gauges.get("sumCommittedRows").getValue()).isEqualTo(6L);
+
+        sink.finish();
+
+        verify(client, times(2)).startTransaction(any(StartTransaction.class));
+        verify(transaction, times(2)).commit();
+        assertThat(gauges.get("sumCommittedRows").getValue()).isEqualTo(7L);
     }
 
     @Test
@@ -260,7 +298,8 @@ class YtQueueSinkFunctionTest {
                 .thenReturn(CompletableFuture.failedFuture(new IllegalStateException("write failed")));
         YtQueueSinkFunction sink = openSink(YtQueueWriteMode.ROW, ysonSerializer(), options(1, 0, null));
 
-        assertThrows(IOException.class, () -> sink.invoke(row(1, "failure"), null));
+        sink.invoke(row(1, "pending failure"), null);
+        assertThrows(IOException.class, () -> sink.invoke(row(2, "not written"), null));
         assertThrows(IOException.class, () -> sink.snapshotState(null));
         assertThrows(IOException.class, sink::finish);
 
@@ -278,17 +317,18 @@ class YtQueueSinkFunctionTest {
 
         sink.invoke(row(1, "first"), null);
         sink.invoke(row(2, "second"), null);
+        sink.invoke(row(3, "third"), null);
         assertThat(gauges.get("sumCommittedRows").getValue()).isEqualTo(2L);
         long committedAt = (Long) gauges.get("lastCommitTimestamp").getValue();
         assertThat(committedAt).isPositive();
 
         when(transaction.commit()).thenReturn(CompletableFuture.failedFuture(new IOException("unknown commit")));
-        sink.invoke(row(3, "third"), null);
-        IOException failure = assertThrows(IOException.class, () -> sink.invoke(row(4, "failure"), null));
+        sink.invoke(row(4, "fourth"), null);
+        IOException failure = assertThrows(IOException.class, () -> sink.invoke(row(5, "failure"), null));
 
         flushAndCommitFromTimers(sink);
 
-        IOException repeated = assertThrows(IOException.class, () -> sink.invoke(row(5, "not written"), null));
+        IOException repeated = assertThrows(IOException.class, () -> sink.invoke(row(6, "not written"), null));
         assertThat(repeated.getCause()).isSameAs(failure);
 
         assertThat(gauges.get("sumCommittedRows").getValue()).isEqualTo(2L);
@@ -489,9 +529,15 @@ class YtQueueSinkFunctionTest {
         return new YsonRowDataSerializationSchema(ROW_TYPE, TimestampFormat.SQL);
     }
 
-    private static YtQueueWriterOptions options(int batchSize, long intervalMillis, Integer partition) {
+    private static YtQueueWriterOptions options(int rowLimit, long intervalMillis, Integer partition) {
+        return options(rowLimit, rowLimit, intervalMillis, partition);
+    }
+
+    private static YtQueueWriterOptions options(
+            int modificationLimit, int transactionLimit, long intervalMillis, Integer partition) {
         Duration interval = Duration.ofMillis(intervalMillis);
-        return new YtQueueWriterOptions(batchSize, interval, interval, Duration.ofSeconds(5), partition);
+        return new YtQueueWriterOptions(
+                modificationLimit, transactionLimit, interval, interval, Duration.ofSeconds(5), partition);
     }
 
     private static YTreeNode queueMetadata(TableSchema schema, boolean dynamic, boolean sorted) {

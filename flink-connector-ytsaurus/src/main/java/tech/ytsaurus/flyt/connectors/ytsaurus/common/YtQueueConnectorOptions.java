@@ -26,11 +26,6 @@ public class YtQueueConnectorOptions {
                     .stringType()
                     .noDefaultValue();
 
-    public static final ConfigOption<Integer> SINK_BATCH_SIZE =
-            ConfigOptions.key("sink.buffer-flush.max-rows")
-                    .intType()
-                    .defaultValue(1000);
-
     public static final ConfigOption<Integer> SINK_PARTITION_INDEX =
             ConfigOptions.key("sink.partition-index")
                     .intType()

@@ -56,7 +56,6 @@ public class YtQueueSinkFunction extends RichSinkFunction<RowData> implements Ch
     private transient YTsaurusClient client;
     private transient YtBufferedTransactionWriter writer;
     private transient Object lock;
-    private transient int rowsSinceFlush;
     private transient volatile boolean closed;
     private transient IOException failure;
 
@@ -102,7 +101,6 @@ public class YtQueueSinkFunction extends RichSinkFunction<RowData> implements Ch
         lock = new Object();
         closed = false;
         failure = null;
-        rowsSinceFlush = 0;
         try {
             serializationSchema.open(
                     RuntimeContextInitializationContextAdapters.serializationAdapter(getRuntimeContext()));
@@ -111,8 +109,8 @@ public class YtQueueSinkFunction extends RichSinkFunction<RowData> implements Ch
                     .client(client)
                     .path(queuePath)
                     .schema(loadWriteSchema())
-                    .rowsInModificationLimit(writerOptions.getBatchSize())
-                    .rowsInTransactionLimit(writerOptions.getBatchSize())
+                    .rowsInModificationLimit(writerOptions.getRowsInModificationLimit())
+                    .rowsInTransactionLimit(writerOptions.getRowsInTransactionLimit())
                     .commitTransactionPeriod(writerOptions.getCommitTransactionPeriod())
                     .flushModificationPeriod(writerOptions.getFlushModificationPeriod())
                     .transactionTimeout(writerOptions.getTransactionTimeout())
@@ -191,11 +189,6 @@ public class YtQueueSinkFunction extends RichSinkFunction<RowData> implements Ch
             Map<String, ?> row = serialize(value);
             try {
                 writer.write(() -> row);
-                rowsSinceFlush++;
-                if (rowsSinceFlush >= writerOptions.getBatchSize()) {
-                    writer.flush();
-                    rowsSinceFlush = 0;
-                }
             } catch (Exception e) {
                 throw recordFailure(e);
             }
@@ -233,7 +226,6 @@ public class YtQueueSinkFunction extends RichSinkFunction<RowData> implements Ch
             if (!closed && writer.isBusy()) {
                 try {
                     writer.flush();
-                    rowsSinceFlush = 0;
                 } catch (Exception e) {
                     throw recordFailure(e);
                 }

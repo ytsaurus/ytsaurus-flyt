@@ -41,6 +41,8 @@ import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.C
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.FLUSH_MODIFICATION_PERIOD;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.PATH;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.PROXY;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.ROWS_IN_MODIFICATION_LIMIT;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.ROWS_IN_TRANSACTION_LIMIT;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.TRANSACTION_TIMEOUT;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.USE_TLS;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.YT_TOKEN_OPTION;
@@ -54,7 +56,6 @@ import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOpti
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.PARTITION_DISCOVERY_INTERVAL;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.POLL_BACKOFF;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.READ_MODE;
-import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.SINK_BATCH_SIZE;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.SINK_PARTITION_INDEX;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.SINK_VALUE_COLUMN;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.SPECIFIC_OFFSETS;
@@ -65,6 +66,8 @@ import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOpti
 import static tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.table.YtQueueColumnValueDeserializer.DEFAULT_VALUE_COLUMN;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.producer.YtWriterOptions.DEFAULT_COMMIT_TRANSACTION_PERIOD;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.producer.YtWriterOptions.DEFAULT_FLUSH_MODIFICATION_PERIOD;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.producer.YtWriterOptions.DEFAULT_ROWS_IN_MODIFICATION_LIMIT;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.producer.YtWriterOptions.DEFAULT_ROWS_IN_TRANSACTION_LIMIT;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.producer.YtWriterOptions.DEFAULT_TRANSACTION_TIMEOUT;
 
 public class YTsaurusQueueDynamicTableFactory implements DynamicTableSourceFactory, DynamicTableSinkFactory {
@@ -91,7 +94,8 @@ public class YTsaurusQueueDynamicTableFactory implements DynamicTableSourceFacto
             IGNORE_DECOMPRESSION_ERRORS,
             WRITE_MODE,
             SINK_VALUE_COLUMN,
-            SINK_BATCH_SIZE,
+            ROWS_IN_MODIFICATION_LIMIT,
+            ROWS_IN_TRANSACTION_LIMIT,
             FLUSH_MODIFICATION_PERIOD,
             COMMIT_TRANSACTION_PERIOD,
             TRANSACTION_TIMEOUT,
@@ -228,7 +232,8 @@ public class YTsaurusQueueDynamicTableFactory implements DynamicTableSourceFacto
         });
         try {
             return new YtQueueWriterOptions(
-                    options.get(SINK_BATCH_SIZE),
+                    options.getOptional(ROWS_IN_MODIFICATION_LIMIT).orElse(DEFAULT_ROWS_IN_MODIFICATION_LIMIT),
+                    options.getOptional(ROWS_IN_TRANSACTION_LIMIT).orElse(DEFAULT_ROWS_IN_TRANSACTION_LIMIT),
                     options.getOptional(FLUSH_MODIFICATION_PERIOD).orElse(DEFAULT_FLUSH_MODIFICATION_PERIOD),
                     options.getOptional(COMMIT_TRANSACTION_PERIOD).orElse(DEFAULT_COMMIT_TRANSACTION_PERIOD),
                     options.getOptional(TRANSACTION_TIMEOUT).orElse(DEFAULT_TRANSACTION_TIMEOUT),

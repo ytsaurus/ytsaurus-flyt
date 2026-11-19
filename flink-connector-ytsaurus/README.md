@@ -852,7 +852,8 @@ CREATE TABLE queue_output (
     'path' = '//tmp/events_queue',
     'credentials-source' = 'env',
     'format' = 'yson',
-    'sink.buffer-flush.max-rows' = '1000',
+    'rows-in-modification-limit' = '1000',
+    'rows-in-transaction-limit' = '99000',
     'flush-modification-period' = '1 s',
     'commit-transaction-period' = '1 s'
 );
@@ -904,10 +905,13 @@ encoder's trailing semicolon.
 
 ### Delivery and buffering
 
-Each batch is written in a tablet transaction using the
+Rows are sent in modifications within tablet transactions using the
 [dynamic table API](https://ytsaurus.tech/docs/en/user-guide/dynamic-tables/queues#writing-data).
-The sink commits when the row limit is reached, before acknowledging a Flink
-checkpoint, and at the end of bounded input. Background modification flushing and
+The shared writer uses `rows-in-modification-limit` for the size of each modification
+and `rows-in-transaction-limit` as the commit threshold. It checks these thresholds
+before buffering the next row. A transaction can exceed its threshold because
+modifications are sent as a whole. Checkpoints and the end of bounded input flush
+and commit all pending rows. Background modification flushing and
 transaction commits use `flush-modification-period` and `commit-transaction-period`,
 respectively. For low-volume streams, buffered rows must be flushed into the
 transaction before a subsequent commit makes them visible. Enable Flink checkpointing for
@@ -920,8 +924,9 @@ from this sink is written to that partition. Multiple sink subtasks can append
 concurrently; there is no global ordering guarantee. Keep the queue schema and tablet
 layout unchanged while the job is running.
 
-The buffer holds at most `sink.buffer-flush.max-rows` serialized records per subtask;
-the limit is a row count, so large messages still require appropriately sized memory.
+The writer retains buffered and uncommitted rows in memory. Both row limits must
+be positive, and their sum must not exceed `100000`. These limits count rows, so
+large messages still require appropriately sized memory.
 Setting either period to `0 ms` disables its corresponding background task; setting
 both to zero disables all periodic flushing and commits. Row-count, checkpoint,
 and bounded input flushing remain active. Closing the sink stops its background
@@ -940,7 +945,8 @@ Credentials are resolved on the task at runtime.
 |--------|------|---------|-------------|
 | `sink.write-mode` | Enum | `ROW` | `ROW` writes columns using YSON; `COLUMN` stores a serialized message |
 | `sink.value-column` | String | `value` | Payload column for `COLUMN` mode |
-| `sink.buffer-flush.max-rows` | Integer | `1000` | Positive maximum batch size |
+| `rows-in-modification-limit` | Integer | `1000` | Maximum rows per modification |
+| `rows-in-transaction-limit` | Integer | `99000` | Commit threshold for rows sent to the current transaction |
 | `flush-modification-period` | Duration | `1 s` | Period for sending buffered rows to the transaction; `0 ms` disables this background task |
 | `commit-transaction-period` | Duration | `10 s` | Transaction commit period; `0 ms` disables periodic commits |
 | `transaction-timeout` | Duration | `5 min` | Maximum wait for pending modifications before commit; at least `1 s`. Does not override RPC timeouts |

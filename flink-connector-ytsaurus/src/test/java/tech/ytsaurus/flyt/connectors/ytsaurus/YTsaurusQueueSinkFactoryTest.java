@@ -49,7 +49,8 @@ class YTsaurusQueueSinkFactoryTest {
         if (useTls != null) {
             options.put("use-tls", useTls);
         }
-        options.put("sink.buffer-flush.max-rows", "5");
+        options.put("rows-in-modification-limit", "5");
+        options.put("rows-in-transaction-limit", "30");
         options.put("flush-modification-period", "250 ms");
         options.put("commit-transaction-period", "2 s");
         options.put("transaction-timeout", "30 s");
@@ -62,7 +63,8 @@ class YTsaurusQueueSinkFactoryTest {
             assertThat(current.getChangelogMode(ChangelogMode.all())).isEqualTo(ChangelogMode.insertOnly());
             assertThat(current).extracting("writeMode").isEqualTo(YtQueueWriteMode.ROW);
             assertThat(current).extracting("useTls").isEqualTo(Boolean.parseBoolean(useTls));
-            assertThat(current).extracting("writerOptions.batchSize").isEqualTo(5);
+            assertThat(current).extracting("writerOptions.rowsInModificationLimit").isEqualTo(5);
+            assertThat(current).extracting("writerOptions.rowsInTransactionLimit").isEqualTo(30);
             assertThat(current).extracting("writerOptions.flushModificationPeriod").isEqualTo(Duration.ofMillis(250));
             assertThat(current).extracting("writerOptions.commitTransactionPeriod").isEqualTo(Duration.ofSeconds(2));
             assertThat(current).extracting("writerOptions.transactionTimeout").isEqualTo(Duration.ofSeconds(30));
@@ -79,6 +81,8 @@ class YTsaurusQueueSinkFactoryTest {
     void usesSharedWriterDefaults() {
         DynamicTableSink sink = createSink(validOptions());
 
+        assertThat(sink).extracting("writerOptions.rowsInModificationLimit").isEqualTo(1_000);
+        assertThat(sink).extracting("writerOptions.rowsInTransactionLimit").isEqualTo(99_000);
         assertThat(sink).extracting("writerOptions.flushModificationPeriod").isEqualTo(Duration.ofSeconds(1));
         assertThat(sink).extracting("writerOptions.commitTransactionPeriod").isEqualTo(Duration.ofSeconds(10));
         assertThat(sink).extracting("writerOptions.transactionTimeout").isEqualTo(Duration.ofMinutes(5));
@@ -110,8 +114,14 @@ class YTsaurusQueueSinkFactoryTest {
 
     @ParameterizedTest(name = "{0}={1}")
     @CsvSource({
-            "sink.buffer-flush.max-rows, 0",
-            "sink.buffer-flush.max-rows, -1",
+            "rows-in-modification-limit, 0",
+            "rows-in-modification-limit, -1",
+            "rows-in-modification-limit, 1001",
+            "rows-in-modification-limit, 2147483647",
+            "rows-in-transaction-limit, 0",
+            "rows-in-transaction-limit, -1",
+            "rows-in-transaction-limit, 99001",
+            "rows-in-transaction-limit, 2147483647",
             "flush-modification-period, -1 ms",
             "flush-modification-period, 1 ns",
             "commit-transaction-period, -1 ms",
@@ -150,10 +160,14 @@ class YTsaurusQueueSinkFactoryTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"sink.buffer-flush.interval", "sink.request-timeout"})
-    void rejectsRemovedQueueSpecificOptions(String key) {
+    @CsvSource({
+            "sink.buffer-flush.interval, 1 s",
+            "sink.request-timeout, 1 s",
+            "sink.buffer-flush.max-rows, 5"
+    })
+    void rejectsRemovedQueueSpecificOptions(String key, String value) {
         Map<String, String> options = validOptions();
-        options.put(key, "1 s");
+        options.put(key, value);
 
         assertThat(assertThrows(ValidationException.class, () -> createSink(options)))
                 .hasStackTraceContaining("Unsupported options")

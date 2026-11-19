@@ -18,6 +18,8 @@ public class YtWriterOptions implements Serializable {
     private static final long serialVersionUID = 1L;
 
     public static final int ROWS_LIMIT = 100_000;
+    public static final int DEFAULT_ROWS_IN_MODIFICATION_LIMIT = 1_000;
+    public static final int DEFAULT_ROWS_IN_TRANSACTION_LIMIT = 99_000;
 
     public static final Atomicity DEFAULT_ATOMICITY = Atomicity.Full;
 
@@ -65,8 +67,8 @@ public class YtWriterOptions implements Serializable {
         private Duration commitTransactionPeriod = DEFAULT_COMMIT_TRANSACTION_PERIOD;
         private Duration flushModificationPeriod = DEFAULT_FLUSH_MODIFICATION_PERIOD;
         private Duration transactionTimeout = DEFAULT_TRANSACTION_TIMEOUT;
-        private int rowsInTransactionLimit = 99_000;
-        private int rowsInModificationLimit = 1_000;
+        private int rowsInTransactionLimit = DEFAULT_ROWS_IN_TRANSACTION_LIMIT;
+        private int rowsInModificationLimit = DEFAULT_ROWS_IN_MODIFICATION_LIMIT;
         private MountMode mountMode = MountMode.ALWAYS;
         private Atomicity atomicity = DEFAULT_ATOMICITY;
         private LocksConfig locksConfig = new LocksConfig("noop", new Configuration());
