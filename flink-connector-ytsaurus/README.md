@@ -853,7 +853,8 @@ CREATE TABLE queue_output (
     'credentials-source' = 'env',
     'format' = 'yson',
     'sink.buffer-flush.max-rows' = '1000',
-    'sink.buffer-flush.interval' = '1 s'
+    'flush-modification-period' = '1 s',
+    'commit-transaction-period' = '1 s'
 );
 
 INSERT INTO queue_output VALUES (1, 'hello'), (2, 'world');
@@ -907,8 +908,9 @@ Each batch is written in a tablet transaction using the
 [dynamic table API](https://ytsaurus.tech/docs/en/user-guide/dynamic-tables/queues#writing-data).
 The sink commits when the row limit is reached, before acknowledging a Flink
 checkpoint, and at the end of bounded input. Background modification flushing and
-transaction commits use the configured interval; a low-volume stream can need two
-intervals before its buffered rows are committed. Enable Flink checkpointing for
+transaction commits use `flush-modification-period` and `commit-transaction-period`,
+respectively. For low-volume streams, buffered rows must be flushed into the
+transaction before a subsequent commit makes them visible. Enable Flink checkpointing for
 **at-least-once** recovery. Rows committed after the last completed checkpoint can be
 written again after a restart; the sink does not provide producer-session deduplication
 or exactly-once delivery. Transaction errors fail the task instead of discarding rows.
@@ -920,9 +922,10 @@ layout unchanged while the job is running.
 
 The buffer holds at most `sink.buffer-flush.max-rows` serialized records per subtask;
 the limit is a row count, so large messages still require appropriately sized memory.
-An interval of `0 ms` disables periodic flushing; row-count, checkpoint, and bounded
-input flushing remain active. Closing the sink stops its background tasks without
-a final flush.
+Setting either period to `0 ms` disables its corresponding background task; setting
+both to zero disables all periodic flushing and commits. Row-count, checkpoint,
+and bounded input flushing remain active. Closing the sink stops its background
+tasks without a final flush.
 
 The sink exposes `sumCommittedRows`, `sumFailedRows`, and `lastCommitTimestamp`
 gauges. Failed rows count failed commit attempts; a failed request before commit
@@ -938,8 +941,9 @@ Credentials are resolved on the task at runtime.
 | `sink.write-mode` | Enum | `ROW` | `ROW` writes columns using YSON; `COLUMN` stores a serialized message |
 | `sink.value-column` | String | `value` | Payload column for `COLUMN` mode |
 | `sink.buffer-flush.max-rows` | Integer | `1000` | Positive maximum batch size |
-| `sink.buffer-flush.interval` | Duration | `1 s` | Flush interval; `0 ms` disables periodic flushing |
-| `sink.request-timeout` | Duration | `60 s` | Timeout for each YTsaurus request; at least `1 s` |
+| `flush-modification-period` | Duration | `1 s` | Period for sending buffered rows to the transaction; `0 ms` disables this background task |
+| `commit-transaction-period` | Duration | `10 s` | Transaction commit period; `0 ms` disables periodic commits |
+| `transaction-timeout` | Duration | `5 min` | Maximum wait for pending modifications before commit; at least `1 s`. Does not override RPC timeouts |
 | `sink.partition-index` | Integer | - | Fixed zero-based partition index; otherwise YTsaurus selects the tablet |
 | `sink.parallelism` | Integer | - | Optional positive Flink sink parallelism |
 

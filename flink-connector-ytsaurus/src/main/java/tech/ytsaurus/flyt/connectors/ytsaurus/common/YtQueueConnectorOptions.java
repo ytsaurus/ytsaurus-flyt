@@ -31,16 +31,6 @@ public class YtQueueConnectorOptions {
                     .intType()
                     .defaultValue(1000);
 
-    public static final ConfigOption<Duration> SINK_FLUSH_INTERVAL =
-            ConfigOptions.key("sink.buffer-flush.interval")
-                    .durationType()
-                    .defaultValue(Duration.ofSeconds(1));
-
-    public static final ConfigOption<Duration> SINK_REQUEST_TIMEOUT =
-            ConfigOptions.key("sink.request-timeout")
-                    .durationType()
-                    .defaultValue(Duration.ofSeconds(60));
-
     public static final ConfigOption<Integer> SINK_PARTITION_INDEX =
             ConfigOptions.key("sink.partition-index")
                     .intType()

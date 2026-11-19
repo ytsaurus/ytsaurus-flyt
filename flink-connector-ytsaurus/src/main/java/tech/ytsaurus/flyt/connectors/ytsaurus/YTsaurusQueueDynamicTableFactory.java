@@ -36,9 +36,12 @@ import tech.ytsaurus.flyt.connectors.ytsaurus.producer.queue.YtQueueWriteMode;
 import tech.ytsaurus.flyt.connectors.ytsaurus.producer.queue.YtQueueWriterOptions;
 import tech.ytsaurus.flyt.connectors.ytsaurus.utils.YtConfigUtils;
 
+import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.COMMIT_TRANSACTION_PERIOD;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.CREDENTIALS_SOURCE;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.FLUSH_MODIFICATION_PERIOD;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.PATH;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.PROXY;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.TRANSACTION_TIMEOUT;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.USE_TLS;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.YT_TOKEN_OPTION;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.YT_USERNAME_OPTION;
@@ -52,9 +55,7 @@ import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOpti
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.POLL_BACKOFF;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.READ_MODE;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.SINK_BATCH_SIZE;
-import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.SINK_FLUSH_INTERVAL;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.SINK_PARTITION_INDEX;
-import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.SINK_REQUEST_TIMEOUT;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.SINK_VALUE_COLUMN;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.SPECIFIC_OFFSETS;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.STARTUP_MODE;
@@ -62,6 +63,9 @@ import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOpti
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.VALUE_COLUMN;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.WRITE_MODE;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.table.YtQueueColumnValueDeserializer.DEFAULT_VALUE_COLUMN;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.producer.YtWriterOptions.DEFAULT_COMMIT_TRANSACTION_PERIOD;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.producer.YtWriterOptions.DEFAULT_FLUSH_MODIFICATION_PERIOD;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.producer.YtWriterOptions.DEFAULT_TRANSACTION_TIMEOUT;
 
 public class YTsaurusQueueDynamicTableFactory implements DynamicTableSourceFactory, DynamicTableSinkFactory {
     public static final String IDENTIFIER = "ytsaurus-queue";
@@ -167,8 +171,9 @@ public class YTsaurusQueueDynamicTableFactory implements DynamicTableSourceFacto
                 WRITE_MODE,
                 SINK_VALUE_COLUMN,
                 SINK_BATCH_SIZE,
-                SINK_FLUSH_INTERVAL,
-                SINK_REQUEST_TIMEOUT,
+                FLUSH_MODIFICATION_PERIOD,
+                COMMIT_TRANSACTION_PERIOD,
+                TRANSACTION_TIMEOUT,
                 SINK_PARTITION_INDEX,
                 FactoryUtil.SINK_PARALLELISM,
                 FactoryUtil.SOURCE_PARALLELISM);
@@ -221,8 +226,9 @@ public class YTsaurusQueueDynamicTableFactory implements DynamicTableSourceFacto
         try {
             return new YtQueueWriterOptions(
                     options.get(SINK_BATCH_SIZE),
-                    options.get(SINK_FLUSH_INTERVAL),
-                    options.get(SINK_REQUEST_TIMEOUT),
+                    options.getOptional(FLUSH_MODIFICATION_PERIOD).orElse(DEFAULT_FLUSH_MODIFICATION_PERIOD),
+                    options.getOptional(COMMIT_TRANSACTION_PERIOD).orElse(DEFAULT_COMMIT_TRANSACTION_PERIOD),
+                    options.getOptional(TRANSACTION_TIMEOUT).orElse(DEFAULT_TRANSACTION_TIMEOUT),
                     options.getOptional(SINK_PARTITION_INDEX).orElse(null));
         } catch (IllegalArgumentException e) {
             throw new ValidationException("Invalid queue writer options", e);

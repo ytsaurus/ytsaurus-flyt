@@ -50,8 +50,9 @@ class YTsaurusQueueSinkFactoryTest {
             options.put("use-tls", useTls);
         }
         options.put("sink.buffer-flush.max-rows", "5");
-        options.put("sink.buffer-flush.interval", "250 ms");
-        options.put("sink.request-timeout", "30 s");
+        options.put("flush-modification-period", "250 ms");
+        options.put("commit-transaction-period", "2 s");
+        options.put("transaction-timeout", "30 s");
         options.put("sink.partition-index", "2");
         options.put("sink.parallelism", "3");
         DynamicTableSink sink = createSink(options);
@@ -62,8 +63,9 @@ class YTsaurusQueueSinkFactoryTest {
             assertThat(current).extracting("writeMode").isEqualTo(YtQueueWriteMode.ROW);
             assertThat(current).extracting("useTls").isEqualTo(Boolean.parseBoolean(useTls));
             assertThat(current).extracting("writerOptions.batchSize").isEqualTo(5);
-            assertThat(current).extracting("writerOptions.flushInterval").isEqualTo(Duration.ofMillis(250));
-            assertThat(current).extracting("writerOptions.requestTimeout").isEqualTo(Duration.ofSeconds(30));
+            assertThat(current).extracting("writerOptions.flushModificationPeriod").isEqualTo(Duration.ofMillis(250));
+            assertThat(current).extracting("writerOptions.commitTransactionPeriod").isEqualTo(Duration.ofSeconds(2));
+            assertThat(current).extracting("writerOptions.transactionTimeout").isEqualTo(Duration.ofSeconds(30));
             assertThat(current).extracting("writerOptions.partitionIndex").isEqualTo(2);
             SinkFunctionProvider provider = (SinkFunctionProvider) current.getSinkRuntimeProvider(
                     mock(DynamicTableSink.Context.class));
@@ -71,6 +73,15 @@ class YTsaurusQueueSinkFactoryTest {
             assertThat(provider.createSinkFunction()).isInstanceOf(YtQueueSinkFunction.class);
             assertThat(provider.createSinkFunction()).extracting("useTls").isEqualTo(Boolean.parseBoolean(useTls));
         }
+    }
+
+    @Test
+    void usesSharedWriterDefaults() {
+        DynamicTableSink sink = createSink(validOptions());
+
+        assertThat(sink).extracting("writerOptions.flushModificationPeriod").isEqualTo(Duration.ofSeconds(1));
+        assertThat(sink).extracting("writerOptions.commitTransactionPeriod").isEqualTo(Duration.ofSeconds(10));
+        assertThat(sink).extracting("writerOptions.transactionTimeout").isEqualTo(Duration.ofMinutes(5));
     }
 
     @Test
@@ -101,10 +112,14 @@ class YTsaurusQueueSinkFactoryTest {
     @CsvSource({
             "sink.buffer-flush.max-rows, 0",
             "sink.buffer-flush.max-rows, -1",
-            "sink.buffer-flush.interval, -1 ms",
-            "sink.buffer-flush.interval, 1 ns",
-            "sink.request-timeout, 0 ms",
-            "sink.request-timeout, 1 ns",
+            "flush-modification-period, -1 ms",
+            "flush-modification-period, 1 ns",
+            "commit-transaction-period, -1 ms",
+            "commit-transaction-period, 1 ns",
+            "transaction-timeout, -1 ms",
+            "transaction-timeout, 0 ms",
+            "transaction-timeout, 1 ns",
+            "transaction-timeout, 999 ms",
             "sink.partition-index, -1",
             "sink.parallelism, 0",
             "sink.parallelism, -1",
@@ -117,11 +132,32 @@ class YTsaurusQueueSinkFactoryTest {
         assertThrows(ValidationException.class, () -> createSink(options));
     }
 
-    @Test
-    void allowsDisablingPeriodicFlush() {
+    @ParameterizedTest
+    @CsvSource({
+            "flush-modification-period, 0, 10",
+            "commit-transaction-period, 1, 0"
+    })
+    void allowsDisablingEachPeriodIndependently(String key, long flushSeconds, long commitSeconds) {
         Map<String, String> options = validOptions();
-        options.put("sink.buffer-flush.interval", "0 ms");
-        assertThat(createSink(options)).extracting("writerOptions.flushInterval").isEqualTo(Duration.ZERO);
+        options.put(key, "0 ms");
+        DynamicTableSink sink = createSink(options);
+
+        assertThat(sink).extracting("writerOptions.flushModificationPeriod")
+                .isEqualTo(Duration.ofSeconds(flushSeconds));
+        assertThat(sink).extracting("writerOptions.commitTransactionPeriod")
+                .isEqualTo(Duration.ofSeconds(commitSeconds));
+        assertThat(sink).extracting("writerOptions.transactionTimeout").isEqualTo(Duration.ofMinutes(5));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"sink.buffer-flush.interval", "sink.request-timeout"})
+    void rejectsRemovedQueueSpecificOptions(String key) {
+        Map<String, String> options = validOptions();
+        options.put(key, "1 s");
+
+        assertThat(assertThrows(ValidationException.class, () -> createSink(options)))
+                .hasStackTraceContaining("Unsupported options")
+                .hasStackTraceContaining(key);
     }
 
     @Test

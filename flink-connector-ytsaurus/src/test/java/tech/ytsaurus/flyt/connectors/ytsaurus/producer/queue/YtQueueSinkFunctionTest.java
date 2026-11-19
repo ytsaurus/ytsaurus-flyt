@@ -130,6 +130,16 @@ class YtQueueSinkFunctionTest {
     }
 
     @Test
+    void schedulesFlushAndCommitUsingTheirOwnPeriods() throws Exception {
+        openSink(YtQueueWriteMode.ROW, ysonSerializer(),
+                new YtQueueWriterOptions(100, Duration.ofMillis(10), Duration.ofMillis(20),
+                        Duration.ofSeconds(5), null));
+
+        verify(flusher).scheduleAtFixedRate(any(Runnable.class), eq(0L), eq(10L), eq(TimeUnit.MILLISECONDS));
+        verify(committer).scheduleAtFixedRate(any(Runnable.class), eq(0L), eq(20L), eq(TimeUnit.MILLISECONDS));
+    }
+
+    @Test
     void batchFlushCopiesReusedRowsAndRoutesToFixedPartition() throws Exception {
         YtQueueSinkFunction sink = openSink(YtQueueWriteMode.ROW, ysonSerializer(), options(2, 0, 1));
         GenericRowData row = row(1, "first");
@@ -374,12 +384,13 @@ class YtQueueSinkFunctionTest {
     }
 
     @Test
-    void metadataTimeoutIsBoundedAndClosesClient() {
-        when(client.getNode(any(GetNode.class))).thenReturn(new CompletableFuture<>());
-        YtQueueSinkFunction sink = newSink(YtQueueWriteMode.ROW, ysonSerializer(),
-                new YtQueueWriterOptions(1, Duration.ZERO, Duration.ofSeconds(1), null));
+    void metadataRequestFailureClosesClient() {
+        TimeoutException timeout = new TimeoutException("metadata request timed out");
+        when(client.getNode(any(GetNode.class))).thenReturn(CompletableFuture.failedFuture(timeout));
+        YtQueueSinkFunction sink = newSink(YtQueueWriteMode.ROW, ysonSerializer(), options(1, 0, null));
 
-        assertThrows(TimeoutException.class, () -> sink.open(new Configuration()));
+        IOException failure = assertThrows(IOException.class, () -> sink.open(new Configuration()));
+        assertThat(failure).hasCause(timeout);
         verify(client).close();
     }
 
@@ -396,6 +407,7 @@ class YtQueueSinkFunctionTest {
         when(runtimeContext.getMetricGroup()).thenReturn(metrics);
         sink.setRuntimeContext(runtimeContext);
         verify(credentials, never()).getCredentials(any());
+        Duration rpcTimeout = client.getConfig().getRpcOptions().getGlobalTimeout();
 
         try (MockedStatic<YtUtils> utils = mockStatic(YtUtils.class)) {
             utils.when(() -> YtUtils.makeYtClient(PROXY, config, useTls)).thenReturn(client);
@@ -404,7 +416,7 @@ class YtQueueSinkFunctionTest {
         }
 
         verify(credentials).getCredentials(PROXY);
-        assertThat(client.getConfig().getRpcOptions().getGlobalTimeout()).isEqualTo(Duration.ofSeconds(5));
+        assertThat(client.getConfig().getRpcOptions().getGlobalTimeout()).isEqualTo(rpcTimeout);
     }
 
     @Test
@@ -478,7 +490,8 @@ class YtQueueSinkFunctionTest {
     }
 
     private static YtQueueWriterOptions options(int batchSize, long intervalMillis, Integer partition) {
-        return new YtQueueWriterOptions(batchSize, Duration.ofMillis(intervalMillis), Duration.ofSeconds(5), partition);
+        Duration interval = Duration.ofMillis(intervalMillis);
+        return new YtQueueWriterOptions(batchSize, interval, interval, Duration.ofSeconds(5), partition);
     }
 
     private static YTreeNode queueMetadata(TableSchema schema, boolean dynamic, boolean sorted) {

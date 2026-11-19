@@ -13,30 +13,34 @@ public final class YtQueueWriterOptions implements Serializable {
     private static final long serialVersionUID = 1L;
 
     private final int batchSize;
-    private final Duration flushInterval;
-    private final Duration requestTimeout;
+    private final Duration flushModificationPeriod;
+    private final Duration commitTransactionPeriod;
+    private final Duration transactionTimeout;
     @Nullable
     private final Integer partitionIndex;
 
     public YtQueueWriterOptions(
             int batchSize,
-            Duration flushInterval,
-            Duration requestTimeout,
+            Duration flushModificationPeriod,
+            Duration commitTransactionPeriod,
+            Duration transactionTimeout,
             @Nullable Integer partitionIndex) {
         if (batchSize <= 0) {
             throw new IllegalArgumentException("'sink.buffer-flush.max-rows' must be greater than zero");
         }
-        validateDuration(flushInterval, "sink.buffer-flush.interval", true);
-        validateDuration(requestTimeout, "sink.request-timeout", false);
-        if (requestTimeout.compareTo(Duration.ofSeconds(1)) < 0) {
-            throw new IllegalArgumentException("'sink.request-timeout' must be at least one second");
+        validateDuration(flushModificationPeriod, "flush-modification-period", true);
+        validateDuration(commitTransactionPeriod, "commit-transaction-period", true);
+        validateDuration(transactionTimeout, "transaction-timeout", false);
+        if (transactionTimeout.compareTo(Duration.ofSeconds(1)) < 0) {
+            throw new IllegalArgumentException("'transaction-timeout' must be at least one second");
         }
         if (partitionIndex != null && partitionIndex < 0) {
             throw new IllegalArgumentException("'sink.partition-index' must be nonnegative");
         }
         this.batchSize = batchSize;
-        this.flushInterval = flushInterval;
-        this.requestTimeout = requestTimeout;
+        this.flushModificationPeriod = flushModificationPeriod;
+        this.commitTransactionPeriod = commitTransactionPeriod;
+        this.transactionTimeout = transactionTimeout;
         this.partitionIndex = partitionIndex;
     }
 

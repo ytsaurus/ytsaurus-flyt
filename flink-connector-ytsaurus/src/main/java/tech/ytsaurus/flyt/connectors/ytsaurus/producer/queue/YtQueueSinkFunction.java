@@ -11,7 +11,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeUnit;
 
 import org.apache.flink.api.common.serialization.RuntimeContextInitializationContextAdapters;
 import org.apache.flink.api.common.serialization.SerializationSchema;
@@ -113,9 +112,9 @@ public class YtQueueSinkFunction extends RichSinkFunction<RowData> implements Ch
                     .schema(loadWriteSchema())
                     .rowsInModificationLimit(writerOptions.getBatchSize())
                     .rowsInTransactionLimit(writerOptions.getBatchSize())
-                    .commitTransactionPeriod(writerOptions.getFlushInterval())
-                    .flushModificationPeriod(writerOptions.getFlushInterval())
-                    .transactionTimeout(writerOptions.getRequestTimeout())
+                    .commitTransactionPeriod(writerOptions.getCommitTransactionPeriod())
+                    .flushModificationPeriod(writerOptions.getFlushModificationPeriod())
+                    .transactionTimeout(writerOptions.getTransactionTimeout())
                     .atomicity(Atomicity.Full)
                     .retryStrategy(new FixedRetryStrategy(0, Duration.ZERO))
                     .onCommitSuccess(() -> { })
@@ -125,9 +124,7 @@ public class YtQueueSinkFunction extends RichSinkFunction<RowData> implements Ch
             metrics.gauge("sumCommittedRows", writer::getCommittedRowCount);
             metrics.gauge("sumFailedRows", writer::getFailedRowCount);
             metrics.gauge("lastCommitTimestamp", writer::getLastCommitTimestamp);
-            if (!writerOptions.getFlushInterval().isZero()) {
-                writer.open();
-            }
+            writer.open();
         } catch (Exception e) {
             try {
                 close();
@@ -139,16 +136,13 @@ public class YtQueueSinkFunction extends RichSinkFunction<RowData> implements Ch
     }
 
     protected YTsaurusClient createClient() {
-        YTsaurusClient ytClient = YtUtils.makeYtClient(proxy, credentialsProvider.getCredentials(proxy), useTls);
-        ytClient.getConfig().getRpcOptions().setGlobalTimeout(writerOptions.getRequestTimeout());
-        return ytClient;
+        return YtUtils.makeYtClient(proxy, credentialsProvider.getCredentials(proxy), useTls);
     }
 
     private TableSchema loadWriteSchema() throws Exception {
         YTreeNode queue = await(client.getNode(GetNode.builder()
                 .setPath(YPath.simple(queuePath))
                 .setAttributes(List.of("dynamic", "sorted", "schema", "tablet_count"))
-                .setTimeout(writerOptions.getRequestTimeout())
                 .build()));
         if (!queue.getAttributeOrThrow("dynamic").boolValue() ||
                 queue.getAttributeOrThrow("sorted").boolValue()) {
@@ -274,7 +268,7 @@ public class YtQueueSinkFunction extends RichSinkFunction<RowData> implements Ch
 
     private <T> T await(CompletableFuture<T> future) throws Exception {
         try {
-            return future.get(writerOptions.getRequestTimeout().toMillis(), TimeUnit.MILLISECONDS);
+            return future.get();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw e;
