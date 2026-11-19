@@ -117,37 +117,40 @@ public final class YtBufferedTransactionWriter {
     }
 
     public void open() {
-        transactionCommitter = Executors.newSingleThreadScheduledExecutor();
-        modificationFlusher = Executors.newSingleThreadScheduledExecutor();
-
-        transactionCommitter.scheduleAtFixedRate(() -> {
-            if (lastTransactionCommit.get() + commitTransactionPeriod.toMillis() < System.currentTimeMillis()) {
-                boolean committed = false;
-                commitTransactionLock.lock();
-                try {
-                    committed = commitTransaction();
-                } catch (Exception e) {
-                    error.compareAndSet(null, e);
-                } finally {
-                    commitTransactionLock.unlock();
+        if (!commitTransactionPeriod.isZero()) {
+            transactionCommitter = Executors.newSingleThreadScheduledExecutor();
+            transactionCommitter.scheduleAtFixedRate(() -> {
+                if (lastTransactionCommit.get() + commitTransactionPeriod.toMillis() < System.currentTimeMillis()) {
+                    boolean committed = false;
+                    commitTransactionLock.lock();
+                    try {
+                        committed = commitTransaction();
+                    } catch (Exception e) {
+                        error.compareAndSet(null, e);
+                    } finally {
+                        commitTransactionLock.unlock();
+                    }
+                    if (committed) {
+                        notifyCommit();
+                    }
                 }
-                if (committed) {
-                    notifyCommit();
+            }, 0L, commitTransactionPeriod.toMillis(), TimeUnit.MILLISECONDS);
+        }
+        if (!flushModificationPeriod.isZero()) {
+            modificationFlusher = Executors.newSingleThreadScheduledExecutor();
+            modificationFlusher.scheduleAtFixedRate(() -> {
+                if (lastModificationFlush.get() + flushModificationPeriod.toMillis() < System.currentTimeMillis()) {
+                    flushModificationLock.lock();
+                    try {
+                        flushModification();
+                    } catch (Exception e) {
+                        error.compareAndSet(null, e);
+                    } finally {
+                        flushModificationLock.unlock();
+                    }
                 }
-            }
-        }, 0L, commitTransactionPeriod.toMillis(), TimeUnit.MILLISECONDS);
-        modificationFlusher.scheduleAtFixedRate(() -> {
-            if (lastModificationFlush.get() + flushModificationPeriod.toMillis() < System.currentTimeMillis()) {
-                flushModificationLock.lock();
-                try {
-                    flushModification();
-                } catch (Exception e) {
-                    error.compareAndSet(null, e);
-                } finally {
-                    flushModificationLock.unlock();
-                }
-            }
-        }, 0L, flushModificationPeriod.toMillis(), TimeUnit.MILLISECONDS);
+            }, 0L, flushModificationPeriod.toMillis(), TimeUnit.MILLISECONDS);
+        }
     }
 
     public void closeAsyncTasks() {
@@ -357,7 +360,11 @@ public final class YtBufferedTransactionWriter {
                 .setSchema(schema);
     }
 
-    private void checkError() {
+    public void recordError(Throwable failure) {
+        error.compareAndSet(null, failure);
+    }
+
+    public void checkError() {
         Throwable e = this.error.get();
         if (e != null) {
             throw new RuntimeException("Error while writing to YT", e);

@@ -11,9 +11,25 @@ import org.apache.flink.configuration.MemorySize;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.config.YtQueueReadMode;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.config.YtQueueStartupMode;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.config.YtQueueTrimmedOffsetPolicy;
+import tech.ytsaurus.flyt.connectors.ytsaurus.producer.queue.YtQueueWriteMode;
 
 @UtilityClass
 public class YtQueueConnectorOptions {
+
+    public static final ConfigOption<YtQueueWriteMode> WRITE_MODE =
+            ConfigOptions.key("sink.write-mode")
+                    .enumType(YtQueueWriteMode.class)
+                    .defaultValue(YtQueueWriteMode.ROW);
+
+    public static final ConfigOption<String> SINK_VALUE_COLUMN =
+            ConfigOptions.key("sink.value-column")
+                    .stringType()
+                    .noDefaultValue();
+
+    public static final ConfigOption<Integer> SINK_PARTITION_INDEX =
+            ConfigOptions.key("sink.partition-index")
+                    .intType()
+                    .noDefaultValue();
 
     public static final ConfigOption<YtQueueStartupMode> STARTUP_MODE =
             ConfigOptions.key("scan.startup.mode")
