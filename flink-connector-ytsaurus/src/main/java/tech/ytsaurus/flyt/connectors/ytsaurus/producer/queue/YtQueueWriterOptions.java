@@ -11,6 +11,7 @@ import lombok.Getter;
 @Getter
 public final class YtQueueWriterOptions implements Serializable {
     private static final long serialVersionUID = 1L;
+    private static final Duration MIN_TRANSACTION_TIMEOUT = Duration.ofSeconds(1);
 
     private final int batchSize;
     private final Duration flushModificationPeriod;
@@ -31,7 +32,7 @@ public final class YtQueueWriterOptions implements Serializable {
         validateDuration(flushModificationPeriod, "flush-modification-period", true);
         validateDuration(commitTransactionPeriod, "commit-transaction-period", true);
         validateDuration(transactionTimeout, "transaction-timeout", false);
-        if (transactionTimeout.compareTo(Duration.ofSeconds(1)) < 0) {
+        if (transactionTimeout.compareTo(MIN_TRANSACTION_TIMEOUT) < 0) {
             throw new IllegalArgumentException("'transaction-timeout' must be at least one second");
         }
         if (partitionIndex != null && partitionIndex < 0) {

@@ -70,6 +70,34 @@ import static tech.ytsaurus.flyt.connectors.ytsaurus.producer.YtWriterOptions.DE
 public class YTsaurusQueueDynamicTableFactory implements DynamicTableSourceFactory, DynamicTableSinkFactory {
     public static final String IDENTIFIER = "ytsaurus-queue";
     static final String SUPPORTED_FORMAT = "yson";
+    private static final Set<ConfigOption<?>> REQUIRED_OPTIONS =
+            Set.of(PROXY, PATH, CREDENTIALS_SOURCE, FactoryUtil.FORMAT);
+    private static final Set<ConfigOption<?>> OPTIONAL_OPTIONS = Set.of(
+            YT_USERNAME_OPTION,
+            YT_TOKEN_OPTION,
+            USE_TLS,
+            STARTUP_MODE,
+            SPECIFIC_OFFSETS,
+            TRIMMED_OFFSET_POLICY,
+            MAX_ROW_COUNT,
+            MAX_DATA_WEIGHT,
+            POLL_BACKOFF,
+            ASYNC_WORKER_COUNT,
+            ASYNC_BUFFER_CAPACITY,
+            PARTITION_DISCOVERY_INTERVAL,
+            READ_MODE,
+            VALUE_COLUMN,
+            CODEC_COLUMN,
+            IGNORE_DECOMPRESSION_ERRORS,
+            WRITE_MODE,
+            SINK_VALUE_COLUMN,
+            SINK_BATCH_SIZE,
+            FLUSH_MODIFICATION_PERIOD,
+            COMMIT_TRANSACTION_PERIOD,
+            TRANSACTION_TIMEOUT,
+            SINK_PARTITION_INDEX,
+            FactoryUtil.SINK_PARALLELISM,
+            FactoryUtil.SOURCE_PARALLELISM);
 
     @Override
     public DynamicTableSink createDynamicTableSink(Context context) {
@@ -146,37 +174,12 @@ public class YTsaurusQueueDynamicTableFactory implements DynamicTableSourceFacto
 
     @Override
     public Set<ConfigOption<?>> requiredOptions() {
-        return Set.of(PROXY, PATH, CREDENTIALS_SOURCE, FactoryUtil.FORMAT);
+        return REQUIRED_OPTIONS;
     }
 
     @Override
     public Set<ConfigOption<?>> optionalOptions() {
-        return Set.of(
-                YT_USERNAME_OPTION,
-                YT_TOKEN_OPTION,
-                USE_TLS,
-                STARTUP_MODE,
-                SPECIFIC_OFFSETS,
-                TRIMMED_OFFSET_POLICY,
-                MAX_ROW_COUNT,
-                MAX_DATA_WEIGHT,
-                POLL_BACKOFF,
-                ASYNC_WORKER_COUNT,
-                ASYNC_BUFFER_CAPACITY,
-                PARTITION_DISCOVERY_INTERVAL,
-                READ_MODE,
-                VALUE_COLUMN,
-                CODEC_COLUMN,
-                IGNORE_DECOMPRESSION_ERRORS,
-                WRITE_MODE,
-                SINK_VALUE_COLUMN,
-                SINK_BATCH_SIZE,
-                FLUSH_MODIFICATION_PERIOD,
-                COMMIT_TRANSACTION_PERIOD,
-                TRANSACTION_TIMEOUT,
-                SINK_PARTITION_INDEX,
-                FactoryUtil.SINK_PARALLELISM,
-                FactoryUtil.SOURCE_PARALLELISM);
+        return OPTIONAL_OPTIONS;
     }
 
     static void validateSinkFormatIdentifier(ReadableConfig options) {

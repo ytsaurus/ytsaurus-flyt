@@ -41,6 +41,7 @@ import tech.ytsaurus.flyt.connectors.ytsaurus.utils.YtUtils;
 public class YtQueueSinkFunction extends RichSinkFunction<RowData> implements CheckpointedFunction {
     private static final long serialVersionUID = 1L;
     private static final String TABLET_INDEX = "$tablet_index";
+    private static final List<String> QUEUE_ATTRIBUTES = List.of("dynamic", "sorted", "schema", "tablet_count");
 
     private final String proxy;
     private final String queuePath;
@@ -142,7 +143,7 @@ public class YtQueueSinkFunction extends RichSinkFunction<RowData> implements Ch
     private TableSchema loadWriteSchema() throws Exception {
         YTreeNode queue = await(client.getNode(GetNode.builder()
                 .setPath(YPath.simple(queuePath))
-                .setAttributes(List.of("dynamic", "sorted", "schema", "tablet_count"))
+                .setAttributes(QUEUE_ATTRIBUTES)
                 .build()));
         if (!queue.getAttributeOrThrow("dynamic").boolValue() ||
                 queue.getAttributeOrThrow("sorted").boolValue()) {
