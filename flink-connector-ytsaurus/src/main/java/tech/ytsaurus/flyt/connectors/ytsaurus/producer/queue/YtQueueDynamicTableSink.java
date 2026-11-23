@@ -11,6 +11,8 @@ import org.apache.flink.table.connector.sink.SinkFunctionProvider;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.types.DataType;
 import org.apache.flink.table.types.logical.RowType;
+import org.apache.flink.util.concurrent.RetryStrategy;
+import org.apache.flink.util.function.SerializableSupplier;
 
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.credentials.CredentialsProvider;
 
@@ -24,6 +26,7 @@ public class YtQueueDynamicTableSink implements DynamicTableSink {
     private final YtQueueWriteMode writeMode;
     private final String valueColumn;
     private final YtQueueWriterOptions writerOptions;
+    private final SerializableSupplier<RetryStrategy> retryStrategy;
     @Nullable
     private final Integer parallelism;
     private final boolean useTls;
@@ -45,7 +48,8 @@ public class YtQueueDynamicTableSink implements DynamicTableSink {
                 writeMode,
                 valueColumn,
                 writerOptions,
-                useTls);
+                useTls,
+                retryStrategy);
         return SinkFunctionProvider.of(function, parallelism);
     }
 
@@ -60,6 +64,7 @@ public class YtQueueDynamicTableSink implements DynamicTableSink {
                 .writeMode(writeMode)
                 .valueColumn(valueColumn)
                 .writerOptions(writerOptions)
+                .retryStrategy(retryStrategy)
                 .parallelism(parallelism)
                 .useTls(useTls)
                 .build();

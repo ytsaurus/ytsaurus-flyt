@@ -917,7 +917,12 @@ respectively. For low-volume streams, buffered rows must be flushed into the
 transaction before a subsequent commit makes them visible. Enable Flink checkpointing for
 **at-least-once** recovery. Rows committed after the last completed checkpoint can be
 written again after a restart; the sink does not provide producer-session deduplication
-or exactly-once delivery. Transaction errors fail the task instead of discarding rows.
+or exactly-once delivery. With the default `retry-strategy = 'EXPONENTIAL'`, a failed
+commit is retried up to five times with delays from 10 seconds to 2 minutes. Each retry
+replays the uncommitted rows in a new transaction. If the previous commit succeeded but
+its response was lost, this replay can produce duplicates. `NO_RETRY` disables these
+commit retries. Errors before commit or after retries are exhausted fail the task
+instead of discarding rows.
 
 Without `sink.partition-index`, YTsaurus chooses a mounted tablet. With it, every row
 from this sink is written to that partition. Multiple sink subtasks can append
@@ -950,6 +955,7 @@ Credentials are resolved on the task at runtime.
 | `flush-modification-period` | Duration | `1 s` | Period for sending buffered rows to the transaction; `0 ms` disables this background task |
 | `commit-transaction-period` | Duration | `10 s` | Transaction commit period; `0 ms` disables periodic commits |
 | `transaction-timeout` | Duration | `5 min` | Maximum wait for pending modifications before commit; at least `1 s`. Does not override RPC timeouts |
+| `retry-strategy` | Enum | `EXPONENTIAL` | Commit retry strategy: `EXPONENTIAL` or `NO_RETRY`; retries replay rows in a new transaction and may produce duplicates |
 | `sink.partition-index` | Integer | - | Fixed zero-based partition index; otherwise YTsaurus selects the tablet |
 | `sink.parallelism` | Integer | - | Optional positive Flink sink parallelism |
 

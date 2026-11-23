@@ -41,6 +41,7 @@ import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.C
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.FLUSH_MODIFICATION_PERIOD;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.PATH;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.PROXY;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.RETRY_STRATEGY;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.ROWS_IN_MODIFICATION_LIMIT;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.ROWS_IN_TRANSACTION_LIMIT;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.TRANSACTION_TIMEOUT;
@@ -69,6 +70,7 @@ import static tech.ytsaurus.flyt.connectors.ytsaurus.producer.YtWriterOptions.DE
 import static tech.ytsaurus.flyt.connectors.ytsaurus.producer.YtWriterOptions.DEFAULT_ROWS_IN_MODIFICATION_LIMIT;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.producer.YtWriterOptions.DEFAULT_ROWS_IN_TRANSACTION_LIMIT;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.producer.YtWriterOptions.DEFAULT_TRANSACTION_TIMEOUT;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.utils.RetryUtils.getRetryStrategy;
 
 public class YTsaurusQueueDynamicTableFactory implements DynamicTableSourceFactory, DynamicTableSinkFactory {
     public static final String IDENTIFIER = "ytsaurus-queue";
@@ -99,6 +101,7 @@ public class YTsaurusQueueDynamicTableFactory implements DynamicTableSourceFacto
             FLUSH_MODIFICATION_PERIOD,
             COMMIT_TRANSACTION_PERIOD,
             TRANSACTION_TIMEOUT,
+            RETRY_STRATEGY,
             SINK_PARTITION_INDEX,
             FactoryUtil.SINK_PARALLELISM,
             FactoryUtil.SOURCE_PARALLELISM);
@@ -131,6 +134,7 @@ public class YTsaurusQueueDynamicTableFactory implements DynamicTableSourceFacto
                 .writeMode(options.get(WRITE_MODE))
                 .valueColumn(options.getOptional(SINK_VALUE_COLUMN).orElse(DEFAULT_VALUE_COLUMN))
                 .writerOptions(createWriterOptions(options))
+                .retryStrategy(getRetryStrategy(options))
                 .parallelism(options.getOptional(FactoryUtil.SINK_PARALLELISM).orElse(null))
                 .useTls(options.get(USE_TLS))
                 .build();

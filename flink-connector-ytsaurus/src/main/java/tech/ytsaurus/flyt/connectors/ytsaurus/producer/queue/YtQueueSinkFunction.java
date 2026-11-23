@@ -2,7 +2,6 @@ package tech.ytsaurus.flyt.connectors.ytsaurus.producer.queue;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -23,7 +22,8 @@ import org.apache.flink.streaming.api.functions.sink.RichSinkFunction;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.types.RowKind;
-import org.apache.flink.util.concurrent.FixedRetryStrategy;
+import org.apache.flink.util.concurrent.RetryStrategy;
+import org.apache.flink.util.function.SerializableSupplier;
 import tech.ytsaurus.client.YTsaurusClient;
 import tech.ytsaurus.client.request.Atomicity;
 import tech.ytsaurus.client.request.GetNode;
@@ -38,6 +38,9 @@ import tech.ytsaurus.flyt.connectors.ytsaurus.common.credentials.CredentialsProv
 import tech.ytsaurus.flyt.connectors.ytsaurus.producer.YtBufferedTransactionWriter;
 import tech.ytsaurus.flyt.connectors.ytsaurus.utils.YtUtils;
 
+import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.RETRY_STRATEGY;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.utils.RetryUtils.getRetryStrategy;
+
 public class YtQueueSinkFunction extends RichSinkFunction<RowData> implements CheckpointedFunction {
     private static final long serialVersionUID = 1L;
     private static final String TABLET_INDEX = "$tablet_index";
@@ -51,6 +54,7 @@ public class YtQueueSinkFunction extends RichSinkFunction<RowData> implements Ch
     private final YtQueueWriteMode writeMode;
     private final String valueColumn;
     private final YtQueueWriterOptions writerOptions;
+    private final SerializableSupplier<RetryStrategy> retryStrategy;
     private final boolean useTls;
 
     private transient YTsaurusClient client;
@@ -84,6 +88,22 @@ public class YtQueueSinkFunction extends RichSinkFunction<RowData> implements Ch
             String valueColumn,
             YtQueueWriterOptions writerOptions,
             boolean useTls) {
+        this(proxy, queuePath, credentialsProvider, serializationSchema, rowType, writeMode, valueColumn,
+                writerOptions, useTls, getRetryStrategy(RETRY_STRATEGY.defaultValue()));
+    }
+
+    @SuppressWarnings("checkstyle:ParameterNumber")
+    public YtQueueSinkFunction(
+            String proxy,
+            String queuePath,
+            CredentialsProvider credentialsProvider,
+            SerializationSchema<RowData> serializationSchema,
+            RowType rowType,
+            YtQueueWriteMode writeMode,
+            String valueColumn,
+            YtQueueWriterOptions writerOptions,
+            boolean useTls,
+            SerializableSupplier<RetryStrategy> retryStrategy) {
         this.proxy = Objects.requireNonNull(proxy, "YTsaurus proxy must not be null");
         this.queuePath = Objects.requireNonNull(queuePath, "Queue path must not be null");
         this.credentialsProvider = Objects.requireNonNull(credentialsProvider, "Credentials provider must not be null");
@@ -93,6 +113,7 @@ public class YtQueueSinkFunction extends RichSinkFunction<RowData> implements Ch
         this.writeMode = Objects.requireNonNull(writeMode, "Queue write mode must not be null");
         this.valueColumn = Objects.requireNonNull(valueColumn, "Queue payload column must not be null");
         this.writerOptions = Objects.requireNonNull(writerOptions, "Queue writer options must not be null");
+        this.retryStrategy = Objects.requireNonNull(retryStrategy, "Retry strategy supplier must not be null");
         this.useTls = useTls;
     }
 
@@ -116,7 +137,7 @@ public class YtQueueSinkFunction extends RichSinkFunction<RowData> implements Ch
                     .flushModificationPeriod(writerOptions.getFlushModificationPeriod())
                     .transactionTimeout(writerOptions.getTransactionTimeout())
                     .atomicity(Atomicity.Full)
-                    .retryStrategy(new FixedRetryStrategy(0, Duration.ZERO))
+                    .retryStrategy(retryStrategy.get())
                     .onCommitSuccess(() -> { })
                     .onTransactionCommitted(() -> { })
                     .build();

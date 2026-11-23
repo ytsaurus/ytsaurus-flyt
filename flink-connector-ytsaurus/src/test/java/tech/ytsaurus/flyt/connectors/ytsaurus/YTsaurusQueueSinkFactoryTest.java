@@ -19,6 +19,8 @@ import org.apache.flink.table.connector.sink.SinkFunctionProvider;
 import org.apache.flink.table.factories.DynamicTableSinkFactory;
 import org.apache.flink.table.factories.FactoryUtil;
 import org.apache.flink.table.types.DataType;
+import org.apache.flink.util.concurrent.RetryStrategy;
+import org.apache.flink.util.function.SerializableSupplier;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -88,6 +90,27 @@ class YTsaurusQueueSinkFactoryTest {
         assertThat(sink).extracting("writerOptions.transactionTimeout").isEqualTo(Duration.ofMinutes(5));
     }
 
+    @ParameterizedTest
+    @NullSource
+    @ValueSource(strings = {"EXPONENTIAL", "NO_RETRY"})
+    void preservesRetryStrategyInCopyAndRuntime(String configuredStrategy) {
+        Map<String, String> options = validOptions();
+        if (configuredStrategy != null) {
+            options.put("retry-strategy", configuredStrategy);
+        }
+        DynamicTableSink sink = createSink(options);
+        boolean noRetry = "NO_RETRY".equals(configuredStrategy);
+        int retries = noRetry ? 0 : 5;
+        Duration delay = noRetry ? Duration.ZERO : Duration.ofSeconds(10);
+
+        for (DynamicTableSink current : new DynamicTableSink[]{sink, sink.copy()}) {
+            assertRetryStrategy(current, retries, delay);
+            SinkFunctionProvider provider = (SinkFunctionProvider) current.getSinkRuntimeProvider(
+                    mock(DynamicTableSink.Context.class));
+            assertRetryStrategy(provider.createSinkFunction(), retries, delay);
+        }
+    }
+
     @Test
     void supportsColumnPayloadsWithIndependentReadOptions() {
         Map<String, String> options = validOptions();
@@ -133,6 +156,7 @@ class YTsaurusQueueSinkFactoryTest {
             "sink.partition-index, -1",
             "sink.parallelism, 0",
             "sink.parallelism, -1",
+            "retry-strategy, UNKNOWN",
             "sink.write-mode, UNKNOWN",
             "sink.value-column, payload"
     })
@@ -216,6 +240,14 @@ class YTsaurusQueueSinkFactoryTest {
         options.put("sink.write-mode", "COLUMN");
         options.put("format", "json");
         assertThat(createSink(options, DataTypes.DECIMAL(12, 2))).isInstanceOf(YtQueueDynamicTableSink.class);
+    }
+
+    private static void assertRetryStrategy(Object sink, int retries, Duration delay) {
+        assertThat(sink).extracting("retryStrategy").satisfies(value -> {
+            RetryStrategy strategy = (RetryStrategy) ((SerializableSupplier<?>) value).get();
+            assertThat(strategy.getNumRemainingRetries()).isEqualTo(retries);
+            assertThat(strategy.getRetryDelay()).isEqualTo(delay);
+        });
     }
 
     private static DynamicTableSink createSink(Map<String, String> options) {

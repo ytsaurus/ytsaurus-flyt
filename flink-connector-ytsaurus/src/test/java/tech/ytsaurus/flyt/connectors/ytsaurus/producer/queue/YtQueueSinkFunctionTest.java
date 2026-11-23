@@ -28,6 +28,9 @@ import org.apache.flink.table.data.StringData;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.types.RowKind;
 import org.apache.flink.util.InstantiationUtil;
+import org.apache.flink.util.concurrent.FixedRetryStrategy;
+import org.apache.flink.util.concurrent.RetryStrategy;
+import org.apache.flink.util.function.SerializableSupplier;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -71,6 +74,8 @@ import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.common.RetryStrategy.NO_RETRY;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.utils.RetryUtils.getRetryStrategy;
 
 class YtQueueSinkFunctionTest {
     private static final String PROXY = "localhost:18000";
@@ -232,6 +237,42 @@ class YtQueueSinkFunctionTest {
     }
 
     @Test
+    void failedCommitReplaysAllRowsInNewTransactionBeforeCompletingCheckpoint() throws Exception {
+        ApiServiceTransaction retryTransaction = mock(ApiServiceTransaction.class);
+        when(client.startTransaction(any(StartTransaction.class)))
+                .thenReturn(CompletableFuture.completedFuture(transaction),
+                        CompletableFuture.completedFuture(retryTransaction));
+        when(transaction.commit()).thenReturn(CompletableFuture.failedFuture(new IOException("unknown commit")));
+        when(retryTransaction.modifyRows(any(ModifyRowsRequest.Builder.class)))
+                .thenReturn(CompletableFuture.completedFuture(null));
+        when(retryTransaction.commit()).thenReturn(CompletableFuture.completedFuture(null));
+        YtQueueSinkFunction sink = newSink(YtQueueWriteMode.ROW, ysonSerializer(), options(2, 10, 0, 1),
+                () -> new FixedRetryStrategy(1, Duration.ZERO));
+        sink.open(new Configuration());
+
+        sink.invoke(row(1, "first"), null);
+        sink.invoke(row(2, "second"), null);
+        sink.invoke(row(3, "third"), null);
+        sink.snapshotState(null);
+
+        verify(client, times(2)).startTransaction(any(StartTransaction.class));
+        verify(transaction, times(2)).modifyRows(any(ModifyRowsRequest.Builder.class));
+        verify(transaction).commit();
+        ArgumentCaptor<ModifyRowsRequest.Builder> replay = ArgumentCaptor.forClass(ModifyRowsRequest.Builder.class);
+        verify(retryTransaction).modifyRows(replay.capture());
+        List<YTreeMapNode> replayedRows = records(replay.getValue().build());
+        assertThat(replayedRows).extracting(value -> value.getLong("id")).containsExactly(1L, 2L, 3L);
+        assertThat(replayedRows).extracting(value -> value.getString("name"))
+                .containsExactly("first", "second", "third");
+        assertThat(replayedRows).allSatisfy(value -> assertThat(value.getLong("$tablet_index")).isEqualTo(1L));
+        assertThat(gauges.get("sumFailedRows").getValue()).isEqualTo(3L);
+        assertThat(gauges.get("sumCommittedRows").getValue()).isEqualTo(3L);
+
+        sink.snapshotState(null);
+        verify(retryTransaction).commit();
+    }
+
+    @Test
     void interruptedCheckpointFailsWithoutCommittingPendingRows() throws Exception {
         when(transaction.modifyRows(any(ModifyRowsRequest.Builder.class))).thenReturn(new CompletableFuture<>());
         YtQueueSinkFunction sink = openSink(YtQueueWriteMode.ROW, ysonSerializer(), options(10, 0, null));
@@ -310,7 +351,7 @@ class YtQueueSinkFunctionTest {
     }
 
     @Test
-    void exposesSharedWriterMetricsAndDoesNotRetryFailedCommit() throws Exception {
+    void noRetryStrategyExposesMetricsAndDoesNotRetryFailedCommit() throws Exception {
         YtQueueSinkFunction sink = openSink(YtQueueWriteMode.ROW, ysonSerializer(), options(2, 1, null));
         assertThat(gauges.get("sumCommittedRows").getValue()).isEqualTo(0L);
         assertThat(gauges.get("lastCommitTimestamp").getValue()).isEqualTo(0L);
@@ -472,8 +513,13 @@ class YtQueueSinkFunctionTest {
 
     private YtQueueSinkFunction newSink(YtQueueWriteMode mode, SerializationSchema<RowData> serializer,
                                         YtQueueWriterOptions options) {
+        return newSink(mode, serializer, options, getRetryStrategy(NO_RETRY));
+    }
+
+    private YtQueueSinkFunction newSink(YtQueueWriteMode mode, SerializationSchema<RowData> serializer,
+                                        YtQueueWriterOptions options, SerializableSupplier<RetryStrategy> retryStrategy) {
         YtQueueSinkFunction sink = spy(new YtQueueSinkFunction(PROXY, QUEUE_PATH,
-                new OptionsCredentialsProvider(), serializer, ROW_TYPE, mode, "value", options));
+                new OptionsCredentialsProvider(), serializer, ROW_TYPE, mode, "value", options, false, retryStrategy));
         doReturn(client).when(sink).createClient();
         StreamingRuntimeContext runtimeContext = mock(StreamingRuntimeContext.class);
         when(runtimeContext.getMetricGroup()).thenReturn(metrics);
