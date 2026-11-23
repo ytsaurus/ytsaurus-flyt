@@ -15,7 +15,7 @@ import org.apache.flink.table.catalog.ResolvedCatalogTable;
 import org.apache.flink.table.catalog.ResolvedSchema;
 import org.apache.flink.table.connector.ChangelogMode;
 import org.apache.flink.table.connector.sink.DynamicTableSink;
-import org.apache.flink.table.connector.sink.SinkFunctionProvider;
+import org.apache.flink.table.connector.sink.SinkV2Provider;
 import org.apache.flink.table.factories.DynamicTableSinkFactory;
 import org.apache.flink.table.factories.FactoryUtil;
 import org.apache.flink.table.types.DataType;
@@ -28,7 +28,7 @@ import org.junit.jupiter.params.provider.NullSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import tech.ytsaurus.flyt.connectors.ytsaurus.producer.queue.YtQueueDynamicTableSink;
-import tech.ytsaurus.flyt.connectors.ytsaurus.producer.queue.YtQueueSinkFunction;
+import tech.ytsaurus.flyt.connectors.ytsaurus.producer.queue.YtQueueSink;
 import tech.ytsaurus.flyt.connectors.ytsaurus.producer.queue.YtQueueWriteMode;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -71,11 +71,11 @@ class YTsaurusQueueSinkFactoryTest {
             assertThat(current).extracting("writerOptions.commitTransactionPeriod").isEqualTo(Duration.ofSeconds(2));
             assertThat(current).extracting("writerOptions.transactionTimeout").isEqualTo(Duration.ofSeconds(30));
             assertThat(current).extracting("writerOptions.partitionIndex").isEqualTo(2);
-            SinkFunctionProvider provider = (SinkFunctionProvider) current.getSinkRuntimeProvider(
+            SinkV2Provider provider = (SinkV2Provider) current.getSinkRuntimeProvider(
                     mock(DynamicTableSink.Context.class));
             assertThat(provider.getParallelism()).contains(3);
-            assertThat(provider.createSinkFunction()).isInstanceOf(YtQueueSinkFunction.class);
-            assertThat(provider.createSinkFunction()).extracting("useTls").isEqualTo(Boolean.parseBoolean(useTls));
+            assertThat(provider.createSink()).isInstanceOf(YtQueueSink.class);
+            assertThat(provider.createSink()).extracting("useTls").isEqualTo(Boolean.parseBoolean(useTls));
         }
     }
 
@@ -105,9 +105,9 @@ class YTsaurusQueueSinkFactoryTest {
 
         for (DynamicTableSink current : new DynamicTableSink[]{sink, sink.copy()}) {
             assertRetryStrategy(current, retries, delay);
-            SinkFunctionProvider provider = (SinkFunctionProvider) current.getSinkRuntimeProvider(
+            SinkV2Provider provider = (SinkV2Provider) current.getSinkRuntimeProvider(
                     mock(DynamicTableSink.Context.class));
-            assertRetryStrategy(provider.createSinkFunction(), retries, delay);
+            assertRetryStrategy(provider.createSink(), retries, delay);
         }
     }
 

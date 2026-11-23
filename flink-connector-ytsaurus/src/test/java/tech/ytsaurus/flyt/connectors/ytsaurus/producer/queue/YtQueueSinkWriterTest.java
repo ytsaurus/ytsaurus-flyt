@@ -16,11 +16,10 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
 
 import org.apache.flink.api.common.serialization.SerializationSchema;
-import org.apache.flink.configuration.Configuration;
+import org.apache.flink.api.connector.sink2.WriterInitContext;
 import org.apache.flink.formats.common.TimestampFormat;
 import org.apache.flink.metrics.Gauge;
-import org.apache.flink.metrics.groups.OperatorMetricGroup;
-import org.apache.flink.streaming.api.operators.StreamingRuntimeContext;
+import org.apache.flink.metrics.groups.SinkWriterMetricGroup;
 import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.RowData;
@@ -77,7 +76,7 @@ import static org.mockito.Mockito.when;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.RetryStrategy.NO_RETRY;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.utils.RetryUtils.getRetryStrategy;
 
-class YtQueueSinkFunctionTest {
+class YtQueueSinkWriterTest {
     private static final String PROXY = "localhost:18000";
     private static final String QUEUE_PATH = "//tmp/test_queue";
     private static final RowType ROW_TYPE = (RowType) DataTypes.ROW(
@@ -89,13 +88,14 @@ class YtQueueSinkFunctionTest {
             .addValue("value", ColumnValueType.STRING)
             .build();
 
-    private final List<YtQueueSinkFunction> sinks = new ArrayList<>();
+    private final List<YtQueueSinkWriter> sinks = new ArrayList<>();
     private YTsaurusClient client;
     private ApiServiceTransaction transaction;
     private ScheduledExecutorService committer;
     private ScheduledExecutorService flusher;
     private MockedStatic<Executors> executors;
-    private OperatorMetricGroup metrics;
+    private SinkWriterMetricGroup metrics;
+    private SerializationSchema.InitializationContext serializationContext;
     private Map<String, Gauge<?>> gauges;
 
     @BeforeEach
@@ -107,7 +107,8 @@ class YtQueueSinkFunctionTest {
         flusher = mock(ScheduledExecutorService.class);
         executors = mockStatic(Executors.class);
         executors.when(Executors::newSingleThreadScheduledExecutor).thenReturn(committer, flusher);
-        metrics = mock(OperatorMetricGroup.class);
+        metrics = mock(SinkWriterMetricGroup.class);
+        serializationContext = mock(SerializationSchema.InitializationContext.class);
         gauges = new HashMap<>();
         doAnswer(invocation -> {
             Gauge<?> gauge = invocation.getArgument(1);
@@ -126,7 +127,7 @@ class YtQueueSinkFunctionTest {
     @AfterEach
     void closeSinks() throws Exception {
         try {
-            for (YtQueueSinkFunction sink : sinks) {
+            for (YtQueueSinkWriter sink : sinks) {
                 sink.close();
             }
         } finally {
@@ -136,7 +137,7 @@ class YtQueueSinkFunctionTest {
 
     @Test
     void schedulesFlushAndCommitUsingTheirOwnPeriods() throws Exception {
-        openSink(YtQueueWriteMode.ROW, ysonSerializer(),
+        openWriter(YtQueueWriteMode.ROW, ysonSerializer(),
                 new YtQueueWriterOptions(100, 1000, Duration.ofMillis(10), Duration.ofMillis(20),
                         Duration.ofSeconds(5), null));
 
@@ -146,14 +147,14 @@ class YtQueueSinkFunctionTest {
 
     @Test
     void flushCopiesReusedRowsAndRoutesToFixedPartition() throws Exception {
-        YtQueueSinkFunction sink = openSink(YtQueueWriteMode.ROW, ysonSerializer(), options(2, 0, 1));
+        YtQueueSinkWriter sink = openWriter(YtQueueWriteMode.ROW, ysonSerializer(), options(2, 0, 1));
         GenericRowData row = row(1, "first");
-        sink.invoke(row, null);
+        sink.write(row, null);
         row.setField(0, 2L);
         row.setField(1, StringData.fromString("second"));
-        sink.invoke(row, null);
+        sink.write(row, null);
         verify(transaction, never()).commit();
-        sink.finish();
+        sink.flush(true);
 
         ModifyRowsRequest request = writtenRequest();
         List<YTreeMapNode> records = records(request);
@@ -164,7 +165,7 @@ class YtQueueSinkFunctionTest {
         assertThat(records.get(1).getLong("id")).isEqualTo(2);
         assertThat(records.get(1).getLong("$tablet_index")).isEqualTo(1);
         verify(transaction).commit();
-        sink.finish();
+        sink.flush(true);
         verify(transaction).commit();
     }
 
@@ -175,11 +176,11 @@ class YtQueueSinkFunctionTest {
             reused[0] = (byte) value.getLong(0);
             return reused;
         };
-        YtQueueSinkFunction sink = openSink(YtQueueWriteMode.COLUMN, serializer, options(2, 0, null));
+        YtQueueSinkWriter sink = openWriter(YtQueueWriteMode.COLUMN, serializer, options(2, 0, null));
 
-        sink.invoke(row(1, "unused"), null);
-        sink.invoke(row(2, "unused"), null);
-        sink.finish();
+        sink.write(row(1, "unused"), null);
+        sink.write(row(2, "unused"), null);
+        sink.flush(true);
 
         ModifyRowsRequest request = writtenRequest();
         List<YTreeMapNode> records = records(request);
@@ -190,19 +191,19 @@ class YtQueueSinkFunctionTest {
 
     @Test
     void sharedWriterUsesIndependentModificationAndTransactionLimits() throws Exception {
-        YtQueueSinkFunction sink = openSink(YtQueueWriteMode.ROW, ysonSerializer(), options(2, 5, 0, null));
-        sink.invoke(row(1, "first"), null);
-        sink.invoke(row(2, "second"), null);
+        YtQueueSinkWriter sink = openWriter(YtQueueWriteMode.ROW, ysonSerializer(), options(2, 5, 0, null));
+        sink.write(row(1, "first"), null);
+        sink.write(row(2, "second"), null);
         verify(client, never()).startTransaction(any(StartTransaction.class));
 
         for (int id = 3; id <= 6; id++) {
-            sink.invoke(row(id, "buffered"), null);
+            sink.write(row(id, "buffered"), null);
         }
         verify(transaction, times(2)).modifyRows(any(ModifyRowsRequest.Builder.class));
         verify(transaction, never()).commit();
         assertThat(gauges.get("sumCommittedRows").getValue()).isEqualTo(0L);
 
-        sink.invoke(row(7, "next transaction"), null);
+        sink.write(row(7, "next transaction"), null);
 
         ArgumentCaptor<ModifyRowsRequest.Builder> requests = ArgumentCaptor.forClass(ModifyRowsRequest.Builder.class);
         verify(transaction, times(3)).modifyRows(requests.capture());
@@ -216,7 +217,7 @@ class YtQueueSinkFunctionTest {
         verify(transaction).commit();
         assertThat(gauges.get("sumCommittedRows").getValue()).isEqualTo(6L);
 
-        sink.finish();
+        sink.flush(true);
 
         verify(client, times(2)).startTransaction(any(StartTransaction.class));
         verify(transaction, times(2)).commit();
@@ -225,13 +226,13 @@ class YtQueueSinkFunctionTest {
 
     @Test
     void checkpointAndFinishCommitPartialBatches() throws Exception {
-        YtQueueSinkFunction sink = openSink(YtQueueWriteMode.ROW, ysonSerializer(), options(10, 0, null));
-        sink.invoke(row(1, "checkpoint"), null);
+        YtQueueSinkWriter sink = openWriter(YtQueueWriteMode.ROW, ysonSerializer(), options(10, 0, null));
+        sink.write(row(1, "checkpoint"), null);
         verify(transaction, never()).commit();
 
-        sink.snapshotState(null);
-        sink.invoke(row(2, "finish"), null);
-        sink.finish();
+        sink.flush(false);
+        sink.write(row(2, "finish"), null);
+        sink.flush(true);
 
         verify(transaction, times(2)).commit();
     }
@@ -246,14 +247,14 @@ class YtQueueSinkFunctionTest {
         when(retryTransaction.modifyRows(any(ModifyRowsRequest.Builder.class)))
                 .thenReturn(CompletableFuture.completedFuture(null));
         when(retryTransaction.commit()).thenReturn(CompletableFuture.completedFuture(null));
-        YtQueueSinkFunction sink = newSink(YtQueueWriteMode.ROW, ysonSerializer(), options(2, 10, 0, 1),
+        YtQueueSinkWriter sink = newWriter(YtQueueWriteMode.ROW, ysonSerializer(), options(2, 10, 0, 1),
                 () -> new FixedRetryStrategy(1, Duration.ZERO));
-        sink.open(new Configuration());
+        sink.open(serializationContext, metrics);
 
-        sink.invoke(row(1, "first"), null);
-        sink.invoke(row(2, "second"), null);
-        sink.invoke(row(3, "third"), null);
-        sink.snapshotState(null);
+        sink.write(row(1, "first"), null);
+        sink.write(row(2, "second"), null);
+        sink.write(row(3, "third"), null);
+        sink.flush(false);
 
         verify(client, times(2)).startTransaction(any(StartTransaction.class));
         verify(transaction, times(2)).modifyRows(any(ModifyRowsRequest.Builder.class));
@@ -268,59 +269,59 @@ class YtQueueSinkFunctionTest {
         assertThat(gauges.get("sumFailedRows").getValue()).isEqualTo(3L);
         assertThat(gauges.get("sumCommittedRows").getValue()).isEqualTo(3L);
 
-        sink.snapshotState(null);
+        sink.flush(false);
         verify(retryTransaction).commit();
     }
 
     @Test
     void interruptedCheckpointFailsWithoutCommittingPendingRows() throws Exception {
         when(transaction.modifyRows(any(ModifyRowsRequest.Builder.class))).thenReturn(new CompletableFuture<>());
-        YtQueueSinkFunction sink = openSink(YtQueueWriteMode.ROW, ysonSerializer(), options(10, 0, null));
-        sink.invoke(row(1, "pending"), null);
+        YtQueueSinkWriter sink = openWriter(YtQueueWriteMode.ROW, ysonSerializer(), options(10, 0, null));
+        sink.write(row(1, "pending"), null);
 
         try {
             Thread.currentThread().interrupt();
-            IOException failure = assertThrows(IOException.class, () -> sink.snapshotState(null));
+            IOException failure = assertThrows(IOException.class, () -> sink.flush(false));
             assertThat(failure).hasRootCauseInstanceOf(InterruptedException.class);
             assertThat(Thread.currentThread().isInterrupted()).isTrue();
         } finally {
             Thread.interrupted();
         }
 
-        assertThrows(IOException.class, () -> sink.snapshotState(null));
+        assertThrows(IOException.class, () -> sink.flush(false));
         verify(transaction, never()).commit();
     }
 
     @Test
     void periodicFlushCommitsLowTrafficBatch() throws Exception {
-        YtQueueSinkFunction sink = openSink(YtQueueWriteMode.ROW, ysonSerializer(), options(10, 1, null));
-        sink.invoke(row(1, "timer"), null);
+        YtQueueSinkWriter sink = openWriter(YtQueueWriteMode.ROW, ysonSerializer(), options(10, 1, null));
+        sink.write(row(1, "timer"), null);
         verify(transaction, never()).commit();
 
         flushAndCommitFromTimers(sink);
 
         verify(transaction).commit();
         assertThat(gauges.get("sumCommittedRows").getValue()).isEqualTo(1L);
-        sink.finish();
+        sink.flush(true);
         verify(transaction).commit();
     }
 
     @Test
     void closeDropsUncheckpointedBatchWithoutPublishingIt() throws Exception {
-        YtQueueSinkFunction sink = openSink(YtQueueWriteMode.ROW, ysonSerializer(), options(10, 0, null));
-        sink.invoke(row(1, "uncheckpointed"), null);
+        YtQueueSinkWriter sink = openWriter(YtQueueWriteMode.ROW, ysonSerializer(), options(10, 0, null));
+        sink.write(row(1, "uncheckpointed"), null);
 
         sink.close();
 
         verify(client, never()).startTransaction(any(StartTransaction.class));
         verify(client).close();
-        assertThrows(IllegalStateException.class, () -> sink.invoke(row(2, "closed"), null));
+        assertThrows(IllegalStateException.class, () -> sink.write(row(2, "closed"), null));
     }
 
     @Test
     void closeStopsSharedSchedulersWithoutPublishingBufferedRows() throws Exception {
-        YtQueueSinkFunction sink = openSink(YtQueueWriteMode.ROW, ysonSerializer(), options(10, 1, null));
-        sink.invoke(row(1, "pending"), null);
+        YtQueueSinkWriter sink = openWriter(YtQueueWriteMode.ROW, ysonSerializer(), options(10, 1, null));
+        sink.write(row(1, "pending"), null);
 
         sink.close();
 
@@ -337,12 +338,12 @@ class YtQueueSinkFunctionTest {
     void writeFailurePreventsCheckpointAndDoesNotRetryUncertainWrites() throws Exception {
         when(transaction.modifyRows(any(ModifyRowsRequest.Builder.class)))
                 .thenReturn(CompletableFuture.failedFuture(new IllegalStateException("write failed")));
-        YtQueueSinkFunction sink = openSink(YtQueueWriteMode.ROW, ysonSerializer(), options(1, 0, null));
+        YtQueueSinkWriter sink = openWriter(YtQueueWriteMode.ROW, ysonSerializer(), options(1, 0, null));
 
-        sink.invoke(row(1, "pending failure"), null);
-        assertThrows(IOException.class, () -> sink.invoke(row(2, "not written"), null));
-        assertThrows(IOException.class, () -> sink.snapshotState(null));
-        assertThrows(IOException.class, sink::finish);
+        sink.write(row(1, "pending failure"), null);
+        assertThrows(IOException.class, () -> sink.write(row(2, "not written"), null));
+        assertThrows(IOException.class, () -> sink.flush(false));
+        assertThrows(IOException.class, () -> sink.flush(true));
 
         verify(client).startTransaction(any(StartTransaction.class));
         verify(transaction, never()).commit();
@@ -352,24 +353,24 @@ class YtQueueSinkFunctionTest {
 
     @Test
     void noRetryStrategyExposesMetricsAndDoesNotRetryFailedCommit() throws Exception {
-        YtQueueSinkFunction sink = openSink(YtQueueWriteMode.ROW, ysonSerializer(), options(2, 1, null));
+        YtQueueSinkWriter sink = openWriter(YtQueueWriteMode.ROW, ysonSerializer(), options(2, 1, null));
         assertThat(gauges.get("sumCommittedRows").getValue()).isEqualTo(0L);
         assertThat(gauges.get("lastCommitTimestamp").getValue()).isEqualTo(0L);
 
-        sink.invoke(row(1, "first"), null);
-        sink.invoke(row(2, "second"), null);
-        sink.invoke(row(3, "third"), null);
+        sink.write(row(1, "first"), null);
+        sink.write(row(2, "second"), null);
+        sink.write(row(3, "third"), null);
         assertThat(gauges.get("sumCommittedRows").getValue()).isEqualTo(2L);
         long committedAt = (Long) gauges.get("lastCommitTimestamp").getValue();
         assertThat(committedAt).isPositive();
 
         when(transaction.commit()).thenReturn(CompletableFuture.failedFuture(new IOException("unknown commit")));
-        sink.invoke(row(4, "fourth"), null);
-        IOException failure = assertThrows(IOException.class, () -> sink.invoke(row(5, "failure"), null));
+        sink.write(row(4, "fourth"), null);
+        IOException failure = assertThrows(IOException.class, () -> sink.write(row(5, "failure"), null));
 
         flushAndCommitFromTimers(sink);
 
-        IOException repeated = assertThrows(IOException.class, () -> sink.invoke(row(6, "not written"), null));
+        IOException repeated = assertThrows(IOException.class, () -> sink.write(row(6, "not written"), null));
         assertThat(repeated.getCause()).isSameAs(failure);
 
         assertThat(gauges.get("sumCommittedRows").getValue()).isEqualTo(2L);
@@ -389,42 +390,42 @@ class YtQueueSinkFunctionTest {
             when(transaction.modifyRows(any(ModifyRowsRequest.Builder.class)))
                     .thenReturn(CompletableFuture.failedFuture(new IOException("periodic write failed")));
         }
-        YtQueueSinkFunction sink = openSink(YtQueueWriteMode.ROW, ysonSerializer(), options(10, 1, null));
-        sink.invoke(row(1, "timer failure"), null);
+        YtQueueSinkWriter sink = openWriter(YtQueueWriteMode.ROW, ysonSerializer(), options(10, 1, null));
+        sink.write(row(1, "timer failure"), null);
 
         flushAndCommitFromTimers(sink);
 
-        assertThrows(IOException.class, () -> sink.invoke(row(2, "not written"), null));
-        assertThrows(IOException.class, () -> sink.snapshotState(null));
-        assertThrows(IOException.class, sink::finish);
+        assertThrows(IOException.class, () -> sink.write(row(2, "not written"), null));
+        assertThrows(IOException.class, () -> sink.flush(false));
+        assertThrows(IOException.class, () -> sink.flush(true));
         verify(transaction, times(failCommit ? 1 : 0)).commit();
     }
 
     @ParameterizedTest
     @EnumSource(value = RowKind.class, names = {"UPDATE_BEFORE", "UPDATE_AFTER", "DELETE"})
     void rejectsNonInsertRows(RowKind rowKind) throws Exception {
-        YtQueueSinkFunction sink = openSink(YtQueueWriteMode.ROW, ysonSerializer(), options(1, 0, null));
+        YtQueueSinkWriter sink = openWriter(YtQueueWriteMode.ROW, ysonSerializer(), options(1, 0, null));
         GenericRowData value = row(1, "changelog");
         value.setRowKind(rowKind);
 
-        assertThrows(IllegalArgumentException.class, () -> sink.invoke(value, null));
+        assertThrows(IllegalArgumentException.class, () -> sink.write(value, null));
         verify(client, never()).startTransaction(any(StartTransaction.class));
     }
 
     @Test
     void rejectsNullPayloadInsteadOfLosingRecord() throws Exception {
-        YtQueueSinkFunction sink = openSink(YtQueueWriteMode.COLUMN, value -> null, options(1, 0, null));
+        YtQueueSinkWriter sink = openWriter(YtQueueWriteMode.COLUMN, value -> null, options(1, 0, null));
 
-        assertThrows(NullPointerException.class, () -> sink.invoke(row(1, "null"), null));
+        assertThrows(NullPointerException.class, () -> sink.write(row(1, "null"), null));
         verify(client, never()).startTransaction(any(StartTransaction.class));
     }
 
     @Test
     void rejectsNonMapOrMultipleYsonRecords() throws Exception {
         for (String encoded : List.of("42;", "{id=1;};{id=2;};", "{undeclared=1;};")) {
-            YtQueueSinkFunction sink = openSink(YtQueueWriteMode.ROW,
+            YtQueueSinkWriter sink = openWriter(YtQueueWriteMode.ROW,
                     value -> encoded.getBytes(StandardCharsets.UTF_8), options(1, 0, null));
-            assertThrows(IllegalArgumentException.class, () -> sink.invoke(row(1, "invalid"), null));
+            assertThrows(IllegalArgumentException.class, () -> sink.write(row(1, "invalid"), null));
         }
         verify(client, never()).startTransaction(any(StartTransaction.class));
     }
@@ -434,8 +435,8 @@ class YtQueueSinkFunctionTest {
         for (boolean dynamic : new boolean[]{false, true}) {
             when(client.getNode(any(GetNode.class)))
                     .thenReturn(CompletableFuture.completedFuture(queueMetadata(QUEUE_SCHEMA, dynamic, true)));
-            YtQueueSinkFunction sink = newSink(YtQueueWriteMode.ROW, ysonSerializer(), options(1, 0, null));
-            assertThrows(IllegalArgumentException.class, () -> sink.open(new Configuration()));
+            YtQueueSinkWriter sink = newWriter(YtQueueWriteMode.ROW, ysonSerializer(), options(1, 0, null));
+            assertThrows(IllegalArgumentException.class, () -> sink.open(serializationContext, metrics));
         }
         verify(client, times(2)).close();
     }
@@ -447,30 +448,30 @@ class YtQueueSinkFunctionTest {
                 TableSchema.builder().addValue("value", ColumnValueType.INT64).build())) {
             when(client.getNode(any(GetNode.class)))
                     .thenReturn(CompletableFuture.completedFuture(queueMetadata(schema, true, false)));
-            YtQueueSinkFunction sink = newSink(YtQueueWriteMode.COLUMN, ysonSerializer(), options(1, 0, null));
-            assertThrows(IllegalArgumentException.class, () -> sink.open(new Configuration()));
+            YtQueueSinkWriter sink = newWriter(YtQueueWriteMode.COLUMN, ysonSerializer(), options(1, 0, null));
+            assertThrows(IllegalArgumentException.class, () -> sink.open(serializationContext, metrics));
         }
     }
 
     @Test
     void rejectsUnknownRowFieldsAndOutOfRangePartitions() {
-        YtQueueSinkFunction wrongPartition = newSink(YtQueueWriteMode.ROW, ysonSerializer(), options(1, 0, 2));
-        assertThrows(IllegalArgumentException.class, () -> wrongPartition.open(new Configuration()));
+        YtQueueSinkWriter wrongPartition = newWriter(YtQueueWriteMode.ROW, ysonSerializer(), options(1, 0, 2));
+        assertThrows(IllegalArgumentException.class, () -> wrongPartition.open(serializationContext, metrics));
 
         TableSchema schema = TableSchema.builder().addValue("id", ColumnValueType.INT64).build();
         when(client.getNode(any(GetNode.class)))
                 .thenReturn(CompletableFuture.completedFuture(queueMetadata(schema, true, false)));
-        YtQueueSinkFunction missingField = newSink(YtQueueWriteMode.ROW, ysonSerializer(), options(1, 0, null));
-        assertThrows(IllegalArgumentException.class, () -> missingField.open(new Configuration()));
+        YtQueueSinkWriter missingField = newWriter(YtQueueWriteMode.ROW, ysonSerializer(), options(1, 0, null));
+        assertThrows(IllegalArgumentException.class, () -> missingField.open(serializationContext, metrics));
     }
 
     @Test
     void metadataRequestFailureClosesClient() {
         TimeoutException timeout = new TimeoutException("metadata request timed out");
         when(client.getNode(any(GetNode.class))).thenReturn(CompletableFuture.failedFuture(timeout));
-        YtQueueSinkFunction sink = newSink(YtQueueWriteMode.ROW, ysonSerializer(), options(1, 0, null));
+        YtQueueSinkWriter sink = newWriter(YtQueueWriteMode.ROW, ysonSerializer(), options(1, 0, null));
 
-        IOException failure = assertThrows(IOException.class, () -> sink.open(new Configuration()));
+        IOException failure = assertThrows(IOException.class, () -> sink.open(serializationContext, metrics));
         assertThat(failure).hasCause(timeout);
         verify(client).close();
     }
@@ -481,57 +482,60 @@ class YtQueueSinkFunctionTest {
         CredentialsProvider credentials = mock(CredentialsProvider.class);
         OAuthCredentialsConfig config = new OAuthCredentialsConfig("user", "test-token");
         when(credentials.getCredentials(PROXY)).thenReturn(config);
-        YtQueueSinkFunction sink = new YtQueueSinkFunction(PROXY, QUEUE_PATH, credentials,
-                ysonSerializer(), ROW_TYPE, YtQueueWriteMode.ROW, "value", options(1, 0, null), useTls);
-        sinks.add(sink);
-        StreamingRuntimeContext runtimeContext = mock(StreamingRuntimeContext.class);
-        when(runtimeContext.getMetricGroup()).thenReturn(metrics);
-        sink.setRuntimeContext(runtimeContext);
+        SerializationSchema<RowData> serializer = spy(ysonSerializer());
+        YtQueueSink sink = new YtQueueSink(PROXY, QUEUE_PATH, credentials,
+                serializer, ROW_TYPE, YtQueueWriteMode.ROW, "value", options(1, 0, null), useTls,
+                getRetryStrategy(NO_RETRY));
+        WriterInitContext context = mock(WriterInitContext.class);
+        when(context.metricGroup()).thenReturn(metrics);
+        when(context.asSerializationSchemaInitializationContext()).thenReturn(serializationContext);
         verify(credentials, never()).getCredentials(any());
         Duration rpcTimeout = client.getConfig().getRpcOptions().getGlobalTimeout();
 
         try (MockedStatic<YtUtils> utils = mockStatic(YtUtils.class)) {
             utils.when(() -> YtUtils.makeYtClient(PROXY, config, useTls)).thenReturn(client);
-            sink.open(new Configuration());
+            sinks.add((YtQueueSinkWriter) sink.createWriter(context));
             utils.verify(() -> YtUtils.makeYtClient(PROXY, config, useTls));
         }
 
+        verify(serializer).open(serializationContext);
         verify(credentials).getCredentials(PROXY);
         assertThat(client.getConfig().getRpcOptions().getGlobalTimeout()).isEqualTo(rpcTimeout);
     }
 
     @Test
     void runtimeConfigurationCanBeSerializedForFlink() throws Exception {
-        YtQueueSinkFunction sink = new YtQueueSinkFunction(PROXY, QUEUE_PATH, new OptionsCredentialsProvider(),
-                ysonSerializer(), ROW_TYPE, YtQueueWriteMode.ROW, "value", options(1, 0, null), true);
+        YtQueueSink sink = new YtQueueSink(PROXY, QUEUE_PATH, new OptionsCredentialsProvider(),
+                ysonSerializer(), ROW_TYPE, YtQueueWriteMode.ROW, "value", options(1, 0, null), true,
+                getRetryStrategy(NO_RETRY));
 
-        YtQueueSinkFunction restored = InstantiationUtil.clone(sink, getClass().getClassLoader());
+        YtQueueSink restored = InstantiationUtil.clone(sink, getClass().getClassLoader());
 
         assertThat(restored).isNotSameAs(sink);
         assertThat(restored).extracting("useTls").isEqualTo(true);
+        assertThat(restored).extracting("retryStrategy").satisfies(value ->
+                assertThat(((RetryStrategy) ((SerializableSupplier<?>) value).get()).getNumRemainingRetries())
+                        .isZero());
     }
 
-    private YtQueueSinkFunction newSink(YtQueueWriteMode mode, SerializationSchema<RowData> serializer,
+    private YtQueueSinkWriter newWriter(YtQueueWriteMode mode, SerializationSchema<RowData> serializer,
                                         YtQueueWriterOptions options) {
-        return newSink(mode, serializer, options, getRetryStrategy(NO_RETRY));
+        return newWriter(mode, serializer, options, getRetryStrategy(NO_RETRY));
     }
 
-    private YtQueueSinkFunction newSink(YtQueueWriteMode mode, SerializationSchema<RowData> serializer,
+    private YtQueueSinkWriter newWriter(YtQueueWriteMode mode, SerializationSchema<RowData> serializer,
                                         YtQueueWriterOptions options, SerializableSupplier<RetryStrategy> retryStrategy) {
-        YtQueueSinkFunction sink = spy(new YtQueueSinkFunction(PROXY, QUEUE_PATH,
+        YtQueueSinkWriter sink = spy(new YtQueueSinkWriter(PROXY, QUEUE_PATH,
                 new OptionsCredentialsProvider(), serializer, ROW_TYPE, mode, "value", options, false, retryStrategy));
         doReturn(client).when(sink).createClient();
-        StreamingRuntimeContext runtimeContext = mock(StreamingRuntimeContext.class);
-        when(runtimeContext.getMetricGroup()).thenReturn(metrics);
-        sink.setRuntimeContext(runtimeContext);
         sinks.add(sink);
         return sink;
     }
 
-    private YtQueueSinkFunction openSink(YtQueueWriteMode mode, SerializationSchema<RowData> serializer,
+    private YtQueueSinkWriter openWriter(YtQueueWriteMode mode, SerializationSchema<RowData> serializer,
                                          YtQueueWriterOptions options) throws Exception {
-        YtQueueSinkFunction sink = newSink(mode, serializer, options);
-        sink.open(new Configuration());
+        YtQueueSinkWriter sink = newWriter(mode, serializer, options);
+        sink.open(serializationContext, metrics);
         return sink;
     }
 
@@ -541,8 +545,8 @@ class YtQueueSinkFunctionTest {
         return captor.getValue().build();
     }
 
-    private void flushAndCommitFromTimers(YtQueueSinkFunction sink) throws ReflectiveOperationException {
-        Field writerField = YtQueueSinkFunction.class.getDeclaredField("writer");
+    private void flushAndCommitFromTimers(YtQueueSinkWriter sink) throws ReflectiveOperationException {
+        Field writerField = YtQueueSinkWriter.class.getDeclaredField("writer");
         writerField.setAccessible(true);
         YtBufferedTransactionWriter writer = (YtBufferedTransactionWriter) writerField.get(sink);
         for (String name : List.of("lastModificationFlush", "lastTransactionCommit")) {

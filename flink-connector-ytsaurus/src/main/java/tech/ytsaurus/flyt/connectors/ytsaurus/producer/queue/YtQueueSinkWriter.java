@@ -11,14 +11,9 @@ import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 
-import org.apache.flink.api.common.serialization.RuntimeContextInitializationContextAdapters;
 import org.apache.flink.api.common.serialization.SerializationSchema;
-import org.apache.flink.configuration.Configuration;
+import org.apache.flink.api.connector.sink2.SinkWriter;
 import org.apache.flink.metrics.MetricGroup;
-import org.apache.flink.runtime.state.FunctionInitializationContext;
-import org.apache.flink.runtime.state.FunctionSnapshotContext;
-import org.apache.flink.streaming.api.checkpoint.CheckpointedFunction;
-import org.apache.flink.streaming.api.functions.sink.RichSinkFunction;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.types.logical.RowType;
 import org.apache.flink.types.RowKind;
@@ -38,11 +33,7 @@ import tech.ytsaurus.flyt.connectors.ytsaurus.common.credentials.CredentialsProv
 import tech.ytsaurus.flyt.connectors.ytsaurus.producer.YtBufferedTransactionWriter;
 import tech.ytsaurus.flyt.connectors.ytsaurus.utils.YtUtils;
 
-import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.RETRY_STRATEGY;
-import static tech.ytsaurus.flyt.connectors.ytsaurus.utils.RetryUtils.getRetryStrategy;
-
-public class YtQueueSinkFunction extends RichSinkFunction<RowData> implements CheckpointedFunction {
-    private static final long serialVersionUID = 1L;
+class YtQueueSinkWriter implements SinkWriter<RowData> {
     private static final String TABLET_INDEX = "$tablet_index";
     private static final List<String> QUEUE_ATTRIBUTES = List.of("dynamic", "sorted", "schema", "tablet_count");
 
@@ -57,43 +48,14 @@ public class YtQueueSinkFunction extends RichSinkFunction<RowData> implements Ch
     private final SerializableSupplier<RetryStrategy> retryStrategy;
     private final boolean useTls;
 
-    private transient YTsaurusClient client;
-    private transient YtBufferedTransactionWriter writer;
-    private transient Object lock;
-    private transient volatile boolean closed;
-    private transient IOException failure;
+    private YTsaurusClient client;
+    private YtBufferedTransactionWriter writer;
+    private final Object lock = new Object();
+    private volatile boolean closed;
+    private IOException failure;
 
     @SuppressWarnings("checkstyle:ParameterNumber")
-    public YtQueueSinkFunction(
-            String proxy,
-            String queuePath,
-            CredentialsProvider credentialsProvider,
-            SerializationSchema<RowData> serializationSchema,
-            RowType rowType,
-            YtQueueWriteMode writeMode,
-            String valueColumn,
-            YtQueueWriterOptions writerOptions) {
-        this(proxy, queuePath, credentialsProvider, serializationSchema, rowType, writeMode, valueColumn,
-                writerOptions, false);
-    }
-
-    @SuppressWarnings("checkstyle:ParameterNumber")
-    public YtQueueSinkFunction(
-            String proxy,
-            String queuePath,
-            CredentialsProvider credentialsProvider,
-            SerializationSchema<RowData> serializationSchema,
-            RowType rowType,
-            YtQueueWriteMode writeMode,
-            String valueColumn,
-            YtQueueWriterOptions writerOptions,
-            boolean useTls) {
-        this(proxy, queuePath, credentialsProvider, serializationSchema, rowType, writeMode, valueColumn,
-                writerOptions, useTls, getRetryStrategy(RETRY_STRATEGY.defaultValue()));
-    }
-
-    @SuppressWarnings("checkstyle:ParameterNumber")
-    public YtQueueSinkFunction(
+    YtQueueSinkWriter(
             String proxy,
             String queuePath,
             CredentialsProvider credentialsProvider,
@@ -117,15 +79,9 @@ public class YtQueueSinkFunction extends RichSinkFunction<RowData> implements Ch
         this.useTls = useTls;
     }
 
-    @Override
-    public void open(Configuration parameters) throws Exception {
-        super.open(parameters);
-        lock = new Object();
-        closed = false;
-        failure = null;
+    void open(SerializationSchema.InitializationContext serializationContext, MetricGroup metrics) throws Exception {
         try {
-            serializationSchema.open(
-                    RuntimeContextInitializationContextAdapters.serializationAdapter(getRuntimeContext()));
+            serializationSchema.open(serializationContext);
             client = createClient();
             writer = YtBufferedTransactionWriter.builder()
                     .client(client)
@@ -141,7 +97,6 @@ public class YtQueueSinkFunction extends RichSinkFunction<RowData> implements Ch
                     .onCommitSuccess(() -> { })
                     .onTransactionCommitted(() -> { })
                     .build();
-            MetricGroup metrics = getRuntimeContext().getMetricGroup();
             metrics.gauge("sumCommittedRows", writer::getCommittedRowCount);
             metrics.gauge("sumFailedRows", writer::getFailedRowCount);
             metrics.gauge("lastCommitTimestamp", writer::getLastCommitTimestamp);
@@ -199,7 +154,7 @@ public class YtQueueSinkFunction extends RichSinkFunction<RowData> implements Ch
     }
 
     @Override
-    public void invoke(RowData value, Context context) throws Exception {
+    public void write(RowData value, Context context) throws IOException {
         synchronized (lock) {
             checkFailure();
             if (closed) {
@@ -242,7 +197,8 @@ public class YtQueueSinkFunction extends RichSinkFunction<RowData> implements Ch
         return row;
     }
 
-    private void flush() throws Exception {
+    @Override
+    public void flush(boolean endOfInput) throws IOException {
         synchronized (lock) {
             checkFailure();
             if (!closed && writer.isBusy()) {
@@ -293,29 +249,11 @@ public class YtQueueSinkFunction extends RichSinkFunction<RowData> implements Ch
     }
 
     @Override
-    public void snapshotState(FunctionSnapshotContext context) throws Exception {
-        flush();
-    }
-
-    @Override
-    public void initializeState(FunctionInitializationContext context) {
-    }
-
-    @Override
-    public void finish() throws Exception {
-        flush();
-    }
-
-    @Override
     public synchronized void close() throws Exception {
         if (closed) {
             return;
         }
         closed = true;
-        if (lock == null) {
-            super.close();
-            return;
-        }
         synchronized (lock) {
             List<Exception> errors = new ArrayList<>();
             if (writer != null) {
@@ -338,7 +276,6 @@ public class YtQueueSinkFunction extends RichSinkFunction<RowData> implements Ch
                     writer.clearMetrics();
                     writer = null;
                 }
-                super.close();
             }
             if (!errors.isEmpty()) {
                 Exception first = errors.get(0);

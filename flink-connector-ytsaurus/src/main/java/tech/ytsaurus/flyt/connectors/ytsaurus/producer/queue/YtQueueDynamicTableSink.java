@@ -7,7 +7,7 @@ import org.apache.flink.api.common.serialization.SerializationSchema;
 import org.apache.flink.table.connector.ChangelogMode;
 import org.apache.flink.table.connector.format.EncodingFormat;
 import org.apache.flink.table.connector.sink.DynamicTableSink;
-import org.apache.flink.table.connector.sink.SinkFunctionProvider;
+import org.apache.flink.table.connector.sink.SinkV2Provider;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.types.DataType;
 import org.apache.flink.table.types.logical.RowType;
@@ -39,7 +39,7 @@ public class YtQueueDynamicTableSink implements DynamicTableSink {
     @Override
     public SinkRuntimeProvider getSinkRuntimeProvider(Context context) {
         SerializationSchema<RowData> serializer = encodingFormat.createRuntimeEncoder(context, physicalRowDataType);
-        YtQueueSinkFunction function = new YtQueueSinkFunction(
+        YtQueueSink sink = new YtQueueSink(
                 proxy,
                 queuePath,
                 credentialsProvider,
@@ -50,7 +50,7 @@ public class YtQueueDynamicTableSink implements DynamicTableSink {
                 writerOptions,
                 useTls,
                 retryStrategy);
-        return SinkFunctionProvider.of(function, parallelism);
+        return SinkV2Provider.of(sink, parallelism);
     }
 
     @Override
