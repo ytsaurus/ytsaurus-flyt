@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -23,9 +24,23 @@ logger = logging.getLogger(__name__)
 
 LAYER_SCHEMA_VERSION = "1"
 
+# Needed by flyt's own job code (the SQL runner); a profile entry for the same package wins.
+SYSTEM_RUNTIME_PACKAGES = ("sqlparse>=0.4.4", "ytsaurus-client>=0.13")
+
 _PYFLINK_HOME_PY = (
     "import os, pyflink\nfrom pathlib import Path\nprint(Path(os.path.dirname(os.path.abspath(pyflink.__file__))))"
 )
+
+
+def _package_name(spec: str) -> str:
+    return re.split(r"[^A-Za-z0-9._-]", spec.strip(), maxsplit=1)[0].lower().replace("_", "-")
+
+
+def layer_python_packages(config: FlytConfig) -> List[str]:
+    """``runtime_python_packages`` of the profile plus flyt's system packages."""
+    own = {_package_name(spec) for spec in config.runtime_python_packages}
+    system = [spec for spec in SYSTEM_RUNTIME_PACKAGES if _package_name(spec) not in own]
+    return [*config.runtime_python_packages, *system]
 
 
 def compute_layer_hash(
@@ -34,7 +49,7 @@ def compute_layer_hash(
 ) -> str:
     payload = {
         "v": LAYER_SCHEMA_VERSION,
-        "runtime_python_packages": sorted(config.runtime_python_packages),
+        "runtime_python_packages": sorted(layer_python_packages(config)),
         "runtime_python_version": config.runtime_python_version,
         "java_home": config.java_home,
         "python_bin": config.python_bin,
@@ -144,15 +159,16 @@ def build_runtime_squashfs(
         wheels_dir = os.path.join(tmp, "wheels")
         os.makedirs(wheels_dir, exist_ok=True)
 
+        packages = layer_python_packages(config)
         download_runtime_wheels(
-            config.runtime_python_packages,
+            packages,
             output_dir=wheels_dir,
             python_version=py_ver,
         )
         _pip_install_target_in_container(
             py_ver,
             wheels_dir,
-            config.runtime_python_packages,
+            packages,
             rt_target,
         )
         container_pyflink = _pyflink_home_in_container(py_ver, rt_target)

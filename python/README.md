@@ -58,6 +58,7 @@ flink_config_override:
 ```
 
 `runtime_python_version` must match the Python ABI of `python_bin` on exec nodes.
+The layer also gets the packages flyt's own job code needs (`sqlparse`, `ytsaurus-client`); a profile entry for the same package wins.
 
 Default `squashfs_layer_delivery` is `layer_paths`. For Kind local dev, use `sandbox_unpack` (see [examples/kind/README.md](examples/kind/README.md)).
 
