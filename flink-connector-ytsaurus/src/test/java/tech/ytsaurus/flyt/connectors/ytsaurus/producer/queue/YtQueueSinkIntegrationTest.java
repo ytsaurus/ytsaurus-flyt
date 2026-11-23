@@ -66,7 +66,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 @EnabledIfEnvironmentVariable(named = "YT_QUEUE_TEST_PROXY", matches = ".+")
 @Timeout(120)
 class YtQueueSinkIntegrationTest {
-    private static final int ROW_COUNT = 7;
+    // Two transactions of six rows each, followed by one row flushed at end of input.
+    private static final int ROW_COUNT = 13;
     private static final RowType ROW_TYPE = (RowType) DataTypes.ROW(
             DataTypes.FIELD("id", DataTypes.BIGINT()),
             DataTypes.FIELD("name", DataTypes.STRING())).getLogicalType();
@@ -111,7 +112,7 @@ class YtQueueSinkIntegrationTest {
 
     @ParameterizedTest
     @EnumSource(YtQueueWriteMode.class)
-    void boundedFlinkJobCommitsFullBatchesAndFinalPartialBatch(YtQueueWriteMode mode) throws Exception {
+    void boundedFlinkJobPreservesOrderAcrossTransactions(YtQueueWriteMode mode) throws Exception {
         createQueue(mode);
         Configuration configuration = new Configuration();
         configuration.setString("rest.bind-port", "0");
@@ -139,8 +140,7 @@ class YtQueueSinkIntegrationTest {
                 assertThat(payload.get("name").textValue()).isEqualTo(name(id));
             }
         }
-        // Asynchronous modifications in one transaction may reach YT in a different order.
-        assertThat(ids).containsExactlyInAnyOrderElementsOf(
+        assertThat(ids).containsExactlyElementsOf(
                 LongStream.rangeClosed(1, ROW_COUNT).boxed().collect(Collectors.toList()));
     }
 

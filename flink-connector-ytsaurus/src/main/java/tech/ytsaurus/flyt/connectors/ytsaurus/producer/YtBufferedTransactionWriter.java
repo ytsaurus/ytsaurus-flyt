@@ -4,6 +4,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -30,7 +31,6 @@ import tech.ytsaurus.client.request.StartTransaction;
 import tech.ytsaurus.client.request.TransactionType;
 import tech.ytsaurus.core.GUID;
 import tech.ytsaurus.core.tables.TableSchema;
-import tech.ytsaurus.flyt.connectors.ytsaurus.utils.FutureUtils;
 
 @Slf4j
 public final class YtBufferedTransactionWriter {
@@ -52,13 +52,15 @@ public final class YtBufferedTransactionWriter {
     @Nullable
     private final Runnable commitListener;
 
-    private List<CompletableFuture<Void>> transactionDataBuffer;
+    private CompletableFuture<Void> pendingModifications;
     private final List<Map<String, ?>> uncommittedRows;
     private final List<Map<String, ?>> unflushedRows;
     private ApiServiceTransaction currentTransaction;
     private ModifyRowsRequest.Builder modificationBuffer;
     private final Lock commitTransactionLock;
     private final Lock flushModificationLock;
+    private final Object modificationSubmissionLock = new Object();
+    private boolean closed;
     private ScheduledExecutorService transactionCommitter;
     private ScheduledExecutorService modificationFlusher;
     private final AtomicLong lastTransactionCommit;
@@ -100,7 +102,7 @@ public final class YtBufferedTransactionWriter {
         this.onTransactionCommitted = onTransactionCommitted;
         this.commitListener = commitListener;
 
-        transactionDataBuffer = new ArrayList<>();
+        pendingModifications = CompletableFuture.completedFuture(null);
         uncommittedRows = new ArrayList<>(rowsInTransactionLimit + rowsInModificationLimit);
         unflushedRows = new ArrayList<>(rowsInModificationLimit);
         error = new AtomicReference<>();
@@ -154,6 +156,9 @@ public final class YtBufferedTransactionWriter {
     }
 
     public void closeAsyncTasks() {
+        synchronized (modificationSubmissionLock) {
+            closed = true;
+        }
         // Interrupt the committer thread; the open transaction is aborted automatically after yt client ttl (15 sec)
         log.info("Close async tasks: {}", path);
         if (transactionCommitter != null) {
@@ -263,14 +268,14 @@ public final class YtBufferedTransactionWriter {
         boolean committedData = false;
         if (currentTransaction != null && rowsInTransaction.get() != 0) {
             try {
-                FutureUtils.allOf(transactionDataBuffer).get(transactionTimeout.getSeconds(), TimeUnit.SECONDS);
+                pendingModifications.get(transactionTimeout.getSeconds(), TimeUnit.SECONDS);
                 commitWithRetry();
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 log.warn("Commit interrupted for table {}, {} rows left uncommitted", path, rowsInTransaction.get());
                 return false;
             }
-            transactionDataBuffer = new ArrayList<>();
+            pendingModifications = CompletableFuture.completedFuture(null);
 
             final GUID currentTransactionId = currentTransaction.getId();
             currentTransaction = null;
@@ -331,13 +336,22 @@ public final class YtBufferedTransactionWriter {
     private void flushModification() {
         commitTransactionLock.lock();
         try {
+            checkError();
             if (rowsInBuffer.get() != 0) {
                 if (currentTransaction == null) {
                     currentTransaction = createTransaction();
                     log.info("Start transaction {} for table {}", currentTransaction.getId(), path);
                 }
-                CompletableFuture<Void> future = currentTransaction.modifyRows(modificationBuffer);
-                transactionDataBuffer.add(future);
+                // Capture this batch: the callback may run after the writer has replaced its buffers.
+                ApiServiceTransaction transaction = currentTransaction;
+                ModifyRowsRequest.Builder request = modificationBuffer;
+                pendingModifications = pendingModifications
+                        .thenCompose(ignored -> sendModification(transaction, request))
+                        .whenComplete((ignored, failure) -> {
+                            if (failure != null) {
+                                error.compareAndSet(null, failure);
+                            }
+                        });
                 lastModificationFlush.set(System.currentTimeMillis());
                 rowsInTransaction.updateAndGet(v -> v + modificationSize());
                 uncommittedRows.addAll(unflushedRows);
@@ -346,6 +360,18 @@ public final class YtBufferedTransactionWriter {
             }
         } finally {
             commitTransactionLock.unlock();
+        }
+    }
+
+    private CompletableFuture<Void> sendModification(
+            ApiServiceTransaction transaction, ModifyRowsRequest.Builder request) {
+        // Commit waits for this callback while holding commitTransactionLock; use a separate lock for close.
+        synchronized (modificationSubmissionLock) {
+            if (closed) {
+                return CompletableFuture.failedFuture(new CancellationException("YT writer is closed"));
+            }
+            checkError();
+            return transaction.modifyRows(request);
         }
     }
 

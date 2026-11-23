@@ -91,7 +91,8 @@ YT_QUEUE_TEST_PROXY=localhost:18000 ./gradlew :flink-connector-ytsaurus:test \
   --tests '*YtQueueSinkIntegrationTest' --rerun-tasks
 ```
 
-The tests run bounded Flink jobs for ROW/YSON and COLUMN/JSON and check checkpoint/close behavior against YTsaurus.
+The tests run bounded Flink jobs for ROW/YSON and COLUMN/JSON, check row order across
+transaction boundaries, and check checkpoint/close behavior against YTsaurus.
 They create and remove their own queues under `//tmp`. Without `YT_QUEUE_TEST_PROXY`, these tests are skipped.
 
 ## Quick Start Guide
@@ -937,10 +938,12 @@ commit retries. Errors before commit or after retries are exhausted fail the tas
 instead of discarding rows.
 
 Without `sink.partition-index`, YTsaurus chooses a mounted tablet. With it, every row
-from this sink is written to that partition. Multiple sink subtasks can append
-concurrently; there is no global ordering guarantee. Even with one subtask and a fixed
-partition, asynchronous modification batches within a transaction can be appended in
-a different order. Keep the queue schema and tablet layout unchanged while the job is running.
+from this sink is written to that partition. Within each transaction, a writer sends
+modification batches in input order, waiting for each modification to complete before
+sending the next. Multiple sink subtasks can append concurrently; there is no global
+ordering guarantee across subtasks or partitions. Recovery and commit retries can
+append earlier rows again, as described above. Keep the queue schema and tablet layout
+unchanged while the job is running.
 
 The writer retains buffered and uncommitted rows in memory. Both row limits must
 be positive, and their sum must not exceed `100000`. These limits count rows, so
