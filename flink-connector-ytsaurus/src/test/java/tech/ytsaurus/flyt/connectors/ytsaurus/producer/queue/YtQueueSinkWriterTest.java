@@ -66,6 +66,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
@@ -73,6 +74,7 @@ import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.common.RetryStrategy.EXPONENTIAL;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.RetryStrategy.NO_RETRY;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.utils.RetryUtils.getRetryStrategy;
 
@@ -466,13 +468,52 @@ class YtQueueSinkWriterTest {
     }
 
     @Test
-    void metadataRequestFailureClosesClient() {
+    void serializerInitializationFailureDoesNotCreateClient() throws Exception {
+        CredentialsProvider credentials = mock(CredentialsProvider.class);
+        SerializationSchema<RowData> serializer = spy(ysonSerializer());
+        IOException initializationFailure = new IOException("serializer initialization failed");
+        doThrow(initializationFailure).when(serializer).open(serializationContext);
+        YtQueueSink sink = new YtQueueSink(PROXY, QUEUE_PATH, credentials,
+                serializer, ROW_TYPE, YtQueueWriteMode.ROW, "value", options(1, 0, null), false,
+                getRetryStrategy(NO_RETRY));
+
+        try (MockedStatic<YtUtils> utils = mockStatic(YtUtils.class)) {
+            IOException failure = assertThrows(IOException.class, () -> sink.createWriter(writerContext()));
+            assertThat(failure).isSameAs(initializationFailure);
+            utils.verifyNoInteractions();
+        }
+
+        verify(serializer).open(serializationContext);
+        verify(credentials, never()).getCredentials(any());
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void metadataRequestFailureClosesClientAndPreservesOriginalError(boolean cleanupFails) {
         TimeoutException timeout = new TimeoutException("metadata request timed out");
         when(client.getNode(any(GetNode.class))).thenReturn(CompletableFuture.failedFuture(timeout));
-        YtQueueSinkWriter sink = newWriter(YtQueueWriteMode.ROW, ysonSerializer(), options(1, 0, null));
+        IllegalStateException cleanupFailure = new IllegalStateException("client cleanup failed");
+        if (cleanupFails) {
+            doThrow(cleanupFailure).when(client).close();
+        }
+        CredentialsProvider credentials = mock(CredentialsProvider.class);
+        OAuthCredentialsConfig config = new OAuthCredentialsConfig("user", "test-token");
+        when(credentials.getCredentials(PROXY)).thenReturn(config);
+        YtQueueSink sink = new YtQueueSink(PROXY, QUEUE_PATH, credentials,
+                ysonSerializer(), ROW_TYPE, YtQueueWriteMode.ROW, "value", options(1, 0, null), false,
+                getRetryStrategy(NO_RETRY));
 
-        IOException failure = assertThrows(IOException.class, () -> sink.open(serializationContext, metrics));
-        assertThat(failure).hasCause(timeout);
+        try (MockedStatic<YtUtils> utils = mockStatic(YtUtils.class)) {
+            utils.when(() -> YtUtils.makeYtClient(PROXY, config, false)).thenReturn(client);
+            IOException failure = assertThrows(IOException.class, () -> sink.createWriter(writerContext()));
+            assertThat(failure).hasCause(timeout);
+            if (cleanupFails) {
+                assertThat(failure.getSuppressed()).containsExactly(cleanupFailure);
+            } else {
+                assertThat(failure.getSuppressed()).isEmpty();
+            }
+        }
+
         verify(client).close();
     }
 
@@ -486,15 +527,12 @@ class YtQueueSinkWriterTest {
         YtQueueSink sink = new YtQueueSink(PROXY, QUEUE_PATH, credentials,
                 serializer, ROW_TYPE, YtQueueWriteMode.ROW, "value", options(1, 0, null), useTls,
                 getRetryStrategy(NO_RETRY));
-        WriterInitContext context = mock(WriterInitContext.class);
-        when(context.metricGroup()).thenReturn(metrics);
-        when(context.asSerializationSchemaInitializationContext()).thenReturn(serializationContext);
         verify(credentials, never()).getCredentials(any());
         Duration rpcTimeout = client.getConfig().getRpcOptions().getGlobalTimeout();
 
         try (MockedStatic<YtUtils> utils = mockStatic(YtUtils.class)) {
             utils.when(() -> YtUtils.makeYtClient(PROXY, config, useTls)).thenReturn(client);
-            sinks.add((YtQueueSinkWriter) sink.createWriter(context));
+            sinks.add((YtQueueSinkWriter) sink.createWriter(writerContext()));
             utils.verify(() -> YtUtils.makeYtClient(PROXY, config, useTls));
         }
 
@@ -503,11 +541,12 @@ class YtQueueSinkWriterTest {
         assertThat(client.getConfig().getRpcOptions().getGlobalTimeout()).isEqualTo(rpcTimeout);
     }
 
-    @Test
-    void runtimeConfigurationCanBeSerializedForFlink() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void runtimeConfigurationCanBeSerializedForFlink(boolean retryEnabled) throws Exception {
         YtQueueSink sink = new YtQueueSink(PROXY, QUEUE_PATH, new OptionsCredentialsProvider(),
                 ysonSerializer(), ROW_TYPE, YtQueueWriteMode.ROW, "value", options(1, 0, null), true,
-                getRetryStrategy(NO_RETRY));
+                getRetryStrategy(retryEnabled ? EXPONENTIAL : NO_RETRY));
 
         YtQueueSink restored = InstantiationUtil.clone(sink, getClass().getClassLoader());
 
@@ -515,7 +554,14 @@ class YtQueueSinkWriterTest {
         assertThat(restored).extracting("useTls").isEqualTo(true);
         assertThat(restored).extracting("retryStrategy").satisfies(value ->
                 assertThat(((RetryStrategy) ((SerializableSupplier<?>) value).get()).getNumRemainingRetries())
-                        .isZero());
+                        .isEqualTo(retryEnabled ? 5 : 0));
+    }
+
+    private WriterInitContext writerContext() {
+        WriterInitContext context = mock(WriterInitContext.class);
+        when(context.metricGroup()).thenReturn(metrics);
+        when(context.asSerializationSchemaInitializationContext()).thenReturn(serializationContext);
+        return context;
     }
 
     private YtQueueSinkWriter newWriter(YtQueueWriteMode mode, SerializationSchema<RowData> serializer,
