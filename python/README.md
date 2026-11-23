@@ -101,6 +101,29 @@ With `--wheel` only, pass the script path as it appears inside the unpacked whee
 
 `-d` / `--detach` submits the operation, waits until it materializes, prints the tracking link and exits. Use `flyt ui --wait` afterwards to find the Flink Web UI. Add `--cache-wheel` to reuse the uploaded wheel across runs (needs `wheel_cache_prefix` or `cypress_base_path`).
 
+### Flink SQL scripts
+
+`flyt run script.sql` runs a Flink SQL script: flyt packages the bundled runner
+([`sql_runner.py`](src/ytsaurus_flyt/sql_runner.py)) as the service wheel, ships the script as a separate file of the
+operation and submits it like any PyFlink job. Arguments after the script go to the runner: `--result-table PATH`, `--row-limit N`.
+Statements are split on `;` outside quotes and comments and executed on a `TableEnvironment`:
+
+| Statement | Handling |
+|---|---|
+| Leading `SET 'k' = 'v'` | Applied over the job's Flink configuration when the `TableEnvironment` is created |
+| Later `SET` | `TableConfig` option |
+| DDL, `USE`, `LOAD`, `ADD JAR` | Executed immediately |
+| `SHOW`, `DESCRIBE`, `EXPLAIN` | Printed to the job log |
+| `SELECT` / `WITH` / `VALUES` | Collected on the driver (`--row-limit`, default 1000) and written to `--result-table` (replaced; second SELECT gets `_2`), or echoed to the job log |
+| `INSERT INTO` | Batched into one statement set and submitted as a single job after the script |
+| `EXECUTE STATEMENT SET BEGIN ... END`, `CREATE TABLE ... AS SELECT`, other statements that submit a job | Submitted as its own job |
+
+`execution.runtime-mode` comes from a leading `SET` or from the job's Flink configuration
+(`-D execution.runtime-mode=batch`); the default is streaming. The runner waits for the jobs it submitted.
+Progress is reported on stderr as `FLYT_SQL {json}` lines (`query_result`, `job_submitted`, `statement_failed` with the error, ...).
+The runner needs `sqlparse` (and `ytsaurus-client` for `--result-table`) in the job's Python: flyt adds both to the
+layers it builds, a pre-built layer must include them. See [examples/simple_sql](examples/simple_sql).
+
 ## JARs
 
 JAR filenames follow `<basename>-<version>.jar`. Place them under `jar_scan_folder`; resolution picks the latest semver per basename.
