@@ -278,6 +278,20 @@ The YTsaurus connector supports a wide range of configuration options to customi
 | `rows-in-modification-limit` | Integer | - | Maximum rows per modification |
 | `retry-strategy` | Enum | `EXPONENTIAL` | Retry strategy (`EXPONENTIAL`, `NO_RETRY`) |
 
+### Write ordering
+
+Each writer sends modification batches to a table in input order, waiting for a
+batch to be acknowledged before sending the next one. Commit waits for all batches
+in the transaction. This prevents a delayed earlier batch from overwriting a later
+update to the same key within that writer. A failed batch stops subsequent batches
+and prevents the transaction from being committed.
+
+This uses one modification RPC in flight per writer and may reduce throughput
+compared with concurrent batches. It does not order writes from different sink
+subtasks or jobs: route updates for the same YT key to one writer and preserve their
+order upstream. Checkpoint recovery can replay previously committed updates; the
+sink does not provide exactly-once writes or reject updates by application version.
+
 ### Lookup Options
 
 | Option | Type | Default | Description                                                                                                                                                           |
