@@ -86,6 +86,79 @@ tasks.withType<Checkstyle> {
     exclude("**/tech/ytsaurus/flyt/connectors/ytsaurus/YtConnectorInfo**")
 }
 
+val connectorGroup = project.group.toString()
+val connectorArtifact = "flink-connector-ytsaurus"
+val connectorVersion = project.version.toString()
+val connectorReadme = layout.projectDirectory.file("README.md")
+
+val checkReadmeVersion by tasks.registering {
+    group = "verification"
+    description = "Checks this connector's Maven and Gradle README examples against the project version."
+    inputs.file(connectorReadme)
+    inputs.property("connectorVersion", connectorVersion)
+
+    doLast {
+        val readme = connectorReadme.asFile.readText()
+        val coordinate = "$connectorGroup:$connectorArtifact"
+        fun checkVersion(example: String, found: String?) {
+            if (found != connectorVersion) {
+                throw GradleException("README.md $example for $coordinate: expected version " +
+                        "$connectorVersion, found ${found?.takeIf { it.isNotBlank() } ?: "<missing>"}.")
+            }
+        }
+        fun xmlValues(dependency: String, element: String): List<String> =
+            Regex("""<$element\s*>([^<]*)</$element\s*>""").findAll(dependency)
+                .map { it.groupValues[1].trim() }.toList()
+
+        val mavenExamples = Regex("""<dependency\s*>(.*?)</dependency\s*>""", RegexOption.DOT_MATCHES_ALL)
+            .findAll(readme).map { it.groupValues[1] }
+            .filter { connectorGroup in xmlValues(it, "groupId") && connectorArtifact in xmlValues(it, "artifactId") }
+            .toList()
+        if (mavenExamples.isEmpty()) {
+            throw GradleException("README.md: expected a Maven dependency example for $coordinate:$connectorVersion, found none.")
+        }
+        mavenExamples.forEachIndexed { index, dependency ->
+            val versions = xmlValues(dependency, "version")
+            if (versions.isEmpty()) checkVersion("Maven example ${index + 1}", null)
+            versions.forEach { checkVersion("Maven example ${index + 1}", it) }
+        }
+
+        val gradleExamples = Regex(
+            """(["'])\s*${Regex.escape(connectorGroup)}\s*:\s*${Regex.escape(connectorArtifact)}\s*(?::([^"']*))?\1"""
+        ).findAll(readme).toList()
+        if (gradleExamples.isEmpty()) {
+            throw GradleException("README.md: expected a Gradle dependency example for $coordinate:$connectorVersion, found none.")
+        }
+        gradleExamples.forEachIndexed { index, example ->
+            checkVersion("Gradle example ${index + 1}", example.groupValues[2].substringBefore(':').substringBefore('@').trim())
+        }
+    }
+}
+
+tasks.check {
+    dependsOn(checkReadmeVersion)
+}
+
+val releaseVersion = providers.gradleProperty("releaseVersion")
+tasks.register("checkReleaseVersion") {
+    group = "verification"
+    description = "Checks the required -PreleaseVersion against the project and README versions."
+    dependsOn(checkReadmeVersion)
+    inputs.property("connectorVersion", connectorVersion)
+    inputs.property("releaseVersion", releaseVersion.orElse(""))
+
+    doLast {
+        val requestedVersion = releaseVersion.orNull
+        if (requestedVersion.isNullOrBlank()) {
+            throw GradleException("Missing -PreleaseVersion: expected $connectorVersion for $connectorArtifact.")
+        }
+        if (requestedVersion != connectorVersion) {
+            throw GradleException("Release version mismatch for $connectorArtifact: " +
+                    "expected $connectorVersion (project.version), found $requestedVersion (-PreleaseVersion).")
+        }
+    }
+}
+
 publishing {
     publications {
         create<MavenPublication>("mavenJava") {
@@ -102,7 +175,7 @@ publishing {
             }
             pom {
                 name.set("Flink YTsaurus Connector")
-                description.set("Flink YTsaurus Connector")
+                description.set("Apache Flink connector for reading and writing YTsaurus dynamic tables and queues.")
                 url.set("https://github.com/ytsaurus/ytsaurus-flyt/tree/main/flink-connector-ytsaurus")
                 licenses {
                     license {
