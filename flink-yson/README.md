@@ -14,7 +14,7 @@ Maven
 <dependency>
     <groupId>tech.ytsaurus.flyt.formats.yson</groupId>
     <artifactId>flink-yson</artifactId>
-    <version>1.1.0</version>
+    <version>1.1.1</version>
     <classifier>all</classifier>
 </dependency>
 ```
@@ -22,7 +22,7 @@ Maven
 Gradle
 
 ```kotlin
-implementation("tech.ytsaurus.flyt.formats.yson:flink-yson:1.1.0:all")
+implementation("tech.ytsaurus.flyt.formats.yson:flink-yson:1.1.1:all")
 ```
 
 ## Building from Source
