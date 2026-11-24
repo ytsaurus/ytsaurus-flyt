@@ -10,6 +10,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.apache.flink.api.common.serialization.SerializationSchema;
 import org.apache.flink.api.connector.sink2.SinkWriter;
@@ -50,7 +51,7 @@ class YtQueueSinkWriter implements SinkWriter<RowData> {
 
     private YTsaurusClient client;
     private YtBufferedTransactionWriter writer;
-    private boolean closed;
+    private final AtomicBoolean closed = new AtomicBoolean();
     private IOException failure;
 
     @SuppressWarnings("checkstyle:ParameterNumber")
@@ -155,7 +156,7 @@ class YtQueueSinkWriter implements SinkWriter<RowData> {
     @Override
     public void write(RowData value, Context context) throws IOException {
         checkFailure();
-        if (closed) {
+        if (closed.get()) {
             throw new IllegalStateException("Queue sink is closed");
         }
         if (value == null || value.getRowKind() != RowKind.INSERT) {
@@ -197,7 +198,7 @@ class YtQueueSinkWriter implements SinkWriter<RowData> {
     @Override
     public void flush(boolean endOfInput) throws IOException {
         checkFailure();
-        if (!closed && writer.isBusy()) {
+        if (!closed.get() && writer.isBusy()) {
             try {
                 writer.flush();
             } catch (Exception e) {
@@ -245,10 +246,9 @@ class YtQueueSinkWriter implements SinkWriter<RowData> {
 
     @Override
     public void close() throws Exception {
-        if (closed) {
+        if (!closed.compareAndSet(false, true)) {
             return;
         }
-        closed = true;
         List<Exception> errors = new ArrayList<>();
         if (writer != null) {
             try {
