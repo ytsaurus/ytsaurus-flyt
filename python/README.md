@@ -80,7 +80,7 @@ Conceptually, application mode is a standalone Flink cluster on Kubernetes in ap
 | Command | Description |
 |---------|-------------|
 | `flyt run <script>` | Build wheel, upload runtime, submit [Vanilla](https://ytsaurus.tech/docs/en/user-guide/data-processing/operations/vanilla) job |
-| `flyt install` | Upload SquashFS runtime for the active profile |
+| `flyt install` | Upload SquashFS runtime for the active profile and publish the [SQL job manifest](#sql-job-manifest) |
 | `flyt validate` | Check profile, tools (`mksquashfs`, `unzip`), optional connectivity |
 | `flyt build-layer` | Build local `.squashfs`; `--upload` to push to Cypress |
 | `flyt jobshell` | Interactive shell into a running job (needs `tornado`) |
@@ -105,7 +105,8 @@ With `--wheel` only, pass the script path as it appears inside the unpacked whee
 
 `flyt run script.sql` runs a Flink SQL script: flyt ships the bundled runner
 ([`sql_runner.py`](src/ytsaurus_flyt/sql_runner.py)) and the script as files of the operation, with no service wheel,
-and submits it like any PyFlink job. Arguments after the script go to the runner: `--row-limit N`.
+and submits it like any PyFlink job. The runner is uploaded once per version next to the unsquashfs helper
+(`squashfs_tools_cache_prefix`); the script is a temporary file. Arguments after the script go to the runner: `--row-limit N`.
 Statements are split on `;` outside quotes and comments and executed on a `TableEnvironment`:
 
 | Statement | Handling |
@@ -123,6 +124,26 @@ Statements are split on `;` outside quotes and comments and executed on a `Table
 Progress is reported on stderr as `FLYT_SQL {json}` lines (`query_result`, `job_submitted`, `statement_failed` with the error, ...).
 The runner needs `sqlparse` in the job's Python: flyt adds it to the layers it builds, a pre-built layer must include it.
 See [examples/simple_sql](examples/simple_sql).
+
+#### SQL job manifest
+
+`flyt install` also writes a Cypress document `<squashfs_layer_cache_prefix>/manifest`, so that a launcher that does
+not run flyt can submit the same job:
+
+```yaml
+version: 1
+flyt_version: "0.3.0"
+sql:
+  script_file_name: script.sql
+  spec:
+    minicluster: {...}   # Vanilla operation spec
+    application: {...}
+```
+
+Each spec is what `flyt run script.sql` submits in that mode for the profile at the time of `flyt install`: the runtime
+layer, the runner, the JARs, the Flink configuration and the resources. The launcher adds what belongs to a run:
+the script as a file named `script_file_name` in every task's `file_paths`, the pool and `secure_vault`
+(`YT_USER`, `YT_TOKEN`). Run `flyt install` again after changing the profile or upgrading flyt.
 
 ## JARs
 

@@ -479,8 +479,11 @@ def test_run_sql_script_launches_the_bundled_runner(monkeypatch, tmp_path: Path)
 
     monkeypatch.setattr("ytsaurus_flyt.__main__.launch_vanilla_job", fake_launch)
     monkeypatch.setattr("ytsaurus_flyt.__main__.make_yt_client", lambda _p: object())
-    job_files = ["//tmp/s/sql_runner.py", "//tmp/s/script.sql"]
-    monkeypatch.setattr("ytsaurus_flyt.__main__.upload_sql_job", lambda _c, _path: contextlib.nullcontext(job_files))
+    job_files = ["//tools/sql_runner/abc/sql_runner.py", "//tmp/s/script.sql"]
+    monkeypatch.setattr("ytsaurus_flyt.__main__.ensure_sql_runner_remote", lambda _c, _cfg: job_files[0])
+    monkeypatch.setattr(
+        "ytsaurus_flyt.__main__.upload_sql_script", lambda _c, _path: contextlib.nullcontext(job_files[1])
+    )
 
     args = ["run", "-d", "--mode", "application", str(sql), "--row-limit", "5"]
     result = CliRunner().invoke(cli, args, catch_exceptions=False)

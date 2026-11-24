@@ -8,6 +8,7 @@ from typing import Any, Dict, Optional
 
 from yt.wrapper import YtClient
 from yt.wrapper.run_operation_commands import run_operation
+from yt.wrapper.spec_builders import VanillaSpecBuilder
 
 from ytsaurus_flyt.config import FlytConfig, require_squashfs_runtime_config
 from ytsaurus_flyt.credentials import get_secure_credentials
@@ -45,6 +46,71 @@ def _make_operation_params(config: FlytConfig, pool: str, cluster: FlinkCluster)
         file_paths=list(config.extra_file_paths),
         layer_paths=[],
         pool=pool,
+    )
+
+
+def build_job_spec(
+    config: FlytConfig,
+    yt_client: YtClient,
+    job_command: str,
+    pool: Optional[str],
+    cluster: FlinkCluster,
+    secure_vault: Dict[str, str],
+    *,
+    wheel_remote_path: Optional[str] = None,
+    force_rebuild_layer: bool = False,
+    profile_name: Optional[str] = None,
+) -> VanillaSpecBuilder:
+    """The operation spec of a job: its files (runtime layer, Flink lib JARs, the wheel if any) and its tasks."""
+    operation_params = _make_operation_params(config, pool, cluster)
+
+    logger.info("Resolving Flink lib JARs...")
+    flink_jars = resolve_flink_lib_jars(yt_client, config)
+    all_flink_lib_jar_yt_paths = flink_jars.yt_paths
+
+    if config.pre_built_layer_paths:
+        logger.info("Using pre-built layer paths: %s", config.pre_built_layer_paths)
+        operation_params.layer_paths = list(config.pre_built_layer_paths)
+        operation_params.file_paths.extend(all_flink_lib_jar_yt_paths)
+    else:
+        rv = (config.runtime_python_version or "").strip()
+        logger.info("SquashFS layer targets Python %s", rv)
+        jar_yt_for_squashfs, jar_yt_for_files = partition_flink_lib_jars_for_delivery(
+            config,
+            all_flink_lib_jar_yt_paths,
+            extra_runtime_basenames=flink_jars.extra_runtime_basenames,
+        )
+        if jar_yt_for_files:
+            logger.info(
+                "Flink lib JARs attached as file_paths (not in SquashFS): %s",
+                sorted(os.path.basename(p.rstrip("/")) for p in jar_yt_for_files),
+            )
+        squashfs_remote = ensure_runtime_layer(
+            yt_client,
+            config,
+            jar_yt_for_squashfs,
+            force_rebuild=force_rebuild_layer,
+        )
+        if config.squashfs_layer_delivery == "sandbox_unpack":
+            operation_params.file_paths.append(squashfs_remote)
+            operation_params.file_paths.append(ensure_unsquashfs_tool_remote(yt_client, config))
+        else:
+            operation_params.layer_paths = [squashfs_remote]
+        operation_params.file_paths.extend(jar_yt_for_files)
+
+    if wheel_remote_path:
+        operation_params.file_paths.append(wheel_remote_path)
+    operation_params.file_paths = dedupe_file_paths_by_basename(operation_params.file_paths)
+
+    return build_vanilla_operation_spec(
+        title=operation_title_for_profile(job_command, profile_name),
+        job_command=job_command,
+        config=config,
+        operation_params=operation_params,
+        secure_vault=secure_vault,
+        yt_client=yt_client,
+        use_squashfs_sandbox_unpack=config.squashfs_layer_delivery == "sandbox_unpack",
+        cluster=cluster,
     )
 
 
@@ -108,55 +174,16 @@ def launch_vanilla_job(
                     cache_prefix=cache_prefix,
                 )
             )
-        operation_params = _make_operation_params(config, pool, cluster)
-
-        logger.info("Resolving Flink lib JARs...")
-        flink_jars = resolve_flink_lib_jars(yt_client, config)
-        all_flink_lib_jar_yt_paths = flink_jars.yt_paths
-
-        if config.pre_built_layer_paths:
-            logger.info("Using pre-built layer paths: %s", config.pre_built_layer_paths)
-            operation_params.layer_paths = list(config.pre_built_layer_paths)
-            operation_params.file_paths.extend(all_flink_lib_jar_yt_paths)
-        else:
-            rv = (config.runtime_python_version or "").strip()
-            logger.info("SquashFS layer targets Python %s", rv)
-            jar_yt_for_squashfs, jar_yt_for_files = partition_flink_lib_jars_for_delivery(
-                config,
-                all_flink_lib_jar_yt_paths,
-                extra_runtime_basenames=flink_jars.extra_runtime_basenames,
-            )
-            if jar_yt_for_files:
-                logger.info(
-                    "Flink lib JARs attached as file_paths (not in SquashFS): %s",
-                    sorted(os.path.basename(p.rstrip("/")) for p in jar_yt_for_files),
-                )
-            squashfs_remote = ensure_runtime_layer(
-                yt_client,
-                config,
-                jar_yt_for_squashfs,
-                force_rebuild=force_rebuild_layer,
-            )
-            if config.squashfs_layer_delivery == "sandbox_unpack":
-                operation_params.file_paths.append(squashfs_remote)
-                operation_params.file_paths.append(ensure_unsquashfs_tool_remote(yt_client, config))
-            else:
-                operation_params.layer_paths = [squashfs_remote]
-            operation_params.file_paths.extend(jar_yt_for_files)
-
-        if wheel_remote_path:
-            operation_params.file_paths.append(wheel_remote_path)
-        operation_params.file_paths = dedupe_file_paths_by_basename(operation_params.file_paths)
-
-        spec = build_vanilla_operation_spec(
-            title=operation_title_for_profile(job_command, profile_name),
-            job_command=job_command,
-            config=config,
-            operation_params=operation_params,
-            secure_vault=secure_vault,
-            yt_client=yt_client,
-            use_squashfs_sandbox_unpack=config.squashfs_layer_delivery == "sandbox_unpack",
-            cluster=cluster,
+        spec = build_job_spec(
+            config,
+            yt_client,
+            job_command,
+            pool,
+            cluster,
+            secure_vault,
+            wheel_remote_path=wheel_remote_path,
+            force_rebuild_layer=force_rebuild_layer,
+            profile_name=profile_name,
         )
 
         logger.info("Starting YT Vanilla operation...")
