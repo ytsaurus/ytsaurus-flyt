@@ -1,6 +1,7 @@
 package tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.reader;
 
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
 import javax.annotation.Nullable;
@@ -56,7 +57,7 @@ public final class DirectYtQueuePuller implements YtQueuePuller {
             AutoCloseable ownedClient) {
         this.client = Objects.requireNonNull(client, "client");
         this.queuePath = YPath.simple(Objects.requireNonNull(queuePath, "queuePath"));
-        this.consumerPath = consumerPath == null ? null : YPath.simple(consumerPath);
+        this.consumerPath = Optional.ofNullable(consumerPath).map(YPath::simple).orElse(null);
         this.ownedClient = ownedClient;
     }
 
