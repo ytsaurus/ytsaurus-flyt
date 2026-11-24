@@ -6,6 +6,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -38,6 +39,7 @@ import tech.ytsaurus.client.request.ModifyRowsRequest;
 import tech.ytsaurus.client.request.StartTransaction;
 import tech.ytsaurus.core.tables.ColumnValueType;
 import tech.ytsaurus.core.tables.TableSchema;
+import tech.ytsaurus.ysontree.YTreeMapNode;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -123,18 +125,20 @@ class YtBufferedTransactionWriterTest {
     }
 
     @Test
-    void commitWaitsForEveryAsyncModificationInTheSameTransaction() throws Exception {
+    void modificationsPreserveBatchOrderAndCommitWaitsForTheLastAcknowledgement() throws Exception {
         CompletableFuture<Void> firstAck = new CompletableFuture<>();
         CompletableFuture<Void> secondAck = new CompletableFuture<>();
-        when(transaction.modifyRows(any(ModifyRowsRequest.Builder.class))).thenReturn(firstAck, secondAck);
+        CompletableFuture<Void> thirdAck = new CompletableFuture<>();
+        when(transaction.modifyRows(any(ModifyRowsRequest.Builder.class))).thenReturn(firstAck, secondAck, thirdAck);
         YtBufferedTransactionWriter writer = newWriter(2, 10, noRetry(), () -> { }, () -> { });
-        for (Map<String, ?> row : List.of(row(1), row(2), row(3), row(4))) {
+        for (Map<String, ?> row : List.of(row(1), row(2), row(3), row(4), row(5), row(6))) {
             writer.write(() -> row);
         }
         writer.flushModifications();
 
         verify(client).startTransaction(any(StartTransaction.class));
-        verify(transaction, times(2)).modifyRows(any(ModifyRowsRequest.Builder.class));
+        assertThat(rowIds(requests(transaction))).containsExactly(1L, 2L);
+        verify(transaction).modifyRows(any(ModifyRowsRequest.Builder.class));
         assertThat(writer.getCommittedRowCount()).isZero();
         assertThat(writer.isBusy()).isTrue();
 
@@ -149,22 +153,133 @@ class YtBufferedTransactionWriterTest {
             assertThat(entered.await(1, TimeUnit.SECONDS)).isTrue();
             assertThrows(TimeoutException.class, () -> committing.get(100, TimeUnit.MILLISECONDS));
             firstAck.complete(null);
+            assertThat(requests(transaction)).extracting(request -> rowIds(List.of(request)))
+                    .containsExactly(List.of(1L, 2L), List.of(3L, 4L));
+            verify(transaction, times(2)).modifyRows(any(ModifyRowsRequest.Builder.class));
             assertThrows(TimeoutException.class, () -> committing.get(100, TimeUnit.MILLISECONDS));
             verify(transaction, never()).commit();
 
             secondAck.complete(null);
+            assertThat(requests(transaction)).extracting(request -> rowIds(List.of(request)))
+                    .containsExactly(List.of(1L, 2L), List.of(3L, 4L), List.of(5L, 6L));
+            verify(transaction, times(3)).modifyRows(any(ModifyRowsRequest.Builder.class));
+            assertThrows(TimeoutException.class, () -> committing.get(100, TimeUnit.MILLISECONDS));
+            verify(transaction, never()).commit();
+
+            thirdAck.complete(null);
             committing.get(1, TimeUnit.SECONDS);
         } finally {
             firstAck.complete(null);
             secondAck.complete(null);
+            thirdAck.complete(null);
             executor.shutdownNow();
         }
 
-        assertThat(rowIds(requests(transaction))).containsExactly(1L, 2L, 3L, 4L);
-        assertThat(writer.getCommittedRowCount()).isEqualTo(4);
+        assertThat(rowIds(requests(transaction))).containsExactly(1L, 2L, 3L, 4L, 5L, 6L);
+        assertThat(writer.getCommittedRowCount()).isEqualTo(6);
         assertThat(writer.getFailedRowCount()).isZero();
         assertThat(writer.isBusy()).isFalse();
         verify(transaction).commit();
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {1, 2})
+    void failedModificationStopsLaterBatchesAndPreventsCommit(int failedBatch) {
+        List<CompletableFuture<Void>> acknowledgements = List.of(
+                new CompletableFuture<>(), new CompletableFuture<>(), new CompletableFuture<>());
+        when(transaction.modifyRows(any(ModifyRowsRequest.Builder.class))).thenReturn(
+                acknowledgements.get(0), acknowledgements.get(1), acknowledgements.get(2));
+        YtBufferedTransactionWriter writer = newWriter(2, 10, noRetry(), () -> { }, () -> { });
+        for (Map<String, ?> row : List.of(row(1), row(2), row(3), row(4), row(5), row(6))) {
+            writer.write(() -> row);
+        }
+        writer.flushModifications();
+        for (int batch = 0; batch < failedBatch - 1; batch++) {
+            acknowledgements.get(batch).complete(null);
+        }
+        IOException failure = new IOException("modification failed");
+
+        acknowledgements.get(failedBatch - 1).completeExceptionally(failure);
+
+        assertThat(assertThrows(Exception.class, writer::commit))
+                .hasRootCauseInstanceOf(IOException.class).hasRootCauseMessage(failure.getMessage());
+        assertThat(assertThrows(Exception.class, writer::flush))
+                .hasRootCauseInstanceOf(IOException.class).hasRootCauseMessage(failure.getMessage());
+        verify(transaction, times(failedBatch)).modifyRows(any(ModifyRowsRequest.Builder.class));
+        verify(transaction, never()).commit();
+        verify(client).startTransaction(any(StartTransaction.class));
+        assertThat(rowIds(requests(transaction)))
+                .containsExactlyElementsOf(failedBatch == 1 ? List.of(1L, 2L) : List.of(1L, 2L, 3L, 4L));
+        assertThat(writer.getCommittedRowCount()).isZero();
+        assertThat(writer.isBusy()).isTrue();
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void lateAcknowledgementDoesNotSendQueuedBatchesAfterCloseOrTerminalFailure(boolean close) {
+        CompletableFuture<Void> firstAck = new CompletableFuture<>();
+        when(transaction.modifyRows(any(ModifyRowsRequest.Builder.class))).thenReturn(firstAck);
+        YtBufferedTransactionWriter writer = newWriter(2, 10, noRetry(), () -> { }, () -> { });
+        for (Map<String, ?> row : List.of(row(1), row(2), row(3), row(4), row(5), row(6))) {
+            writer.write(() -> row);
+        }
+        writer.flushModifications();
+        verify(transaction).modifyRows(any(ModifyRowsRequest.Builder.class));
+        IOException terminalFailure = new IOException("sink already failed");
+
+        if (close) {
+            writer.closeAsyncTasks();
+        } else {
+            writer.recordError(terminalFailure);
+        }
+        firstAck.complete(null);
+
+        Exception failure = assertThrows(Exception.class, writer::commit);
+        assertThat(failure).hasRootCauseInstanceOf(close ? CancellationException.class : IOException.class);
+        if (!close) {
+            assertThat(failure).hasRootCauseMessage(terminalFailure.getMessage());
+        }
+        verify(transaction).modifyRows(any(ModifyRowsRequest.Builder.class));
+        verify(transaction, never()).commit();
+        assertThat(rowIds(requests(transaction))).containsExactly(1L, 2L);
+        assertThat(writer.getCommittedRowCount()).isZero();
+        assertThat(writer.isBusy()).isTrue();
+    }
+
+    @Test
+    void nextTransactionStartsItsOwnModificationSequence() {
+        ApiServiceTransaction nextTransaction = newTransaction();
+        when(client.startTransaction(any(StartTransaction.class))).thenReturn(
+                CompletableFuture.completedFuture(transaction), CompletableFuture.completedFuture(nextTransaction));
+        CompletableFuture<Void> firstAck = new CompletableFuture<>();
+        CompletableFuture<Void> secondAck = new CompletableFuture<>();
+        when(nextTransaction.modifyRows(any(ModifyRowsRequest.Builder.class))).thenReturn(firstAck, secondAck);
+        YtBufferedTransactionWriter writer = newWriter(2, 10, noRetry(), () -> { }, () -> { });
+        writer.write(() -> row(1));
+        writer.write(() -> row(2));
+        writer.flush();
+
+        for (Map<String, ?> row : List.of(row(3), row(4), row(5), row(6))) {
+            writer.write(() -> row);
+        }
+        writer.flushModifications();
+
+        assertThat(rowIds(requests(transaction))).containsExactly(1L, 2L);
+        verify(transaction).commit();
+        assertThat(rowIds(requests(nextTransaction))).containsExactly(3L, 4L);
+        verify(nextTransaction).modifyRows(any(ModifyRowsRequest.Builder.class));
+        verify(nextTransaction, never()).commit();
+        firstAck.complete(null);
+        assertThat(requests(nextTransaction)).extracting(request -> rowIds(List.of(request)))
+                .containsExactly(List.of(3L, 4L), List.of(5L, 6L));
+        secondAck.complete(null);
+        writer.commit();
+
+        verify(client, times(2)).startTransaction(any(StartTransaction.class));
+        verify(transaction).modifyRows(any(ModifyRowsRequest.Builder.class));
+        verify(nextTransaction).commit();
+        assertThat(writer.getCommittedRowCount()).isEqualTo(6);
+        assertThat(writer.isBusy()).isFalse();
     }
 
     @Test
@@ -436,19 +551,21 @@ class YtBufferedTransactionWriterTest {
             }
 
             RuntimeException propagated = assertThrows(RuntimeException.class, writer::flush);
-            assertThat(propagated.getCause()).isSameAs(failure);
+            assertThat(propagated).hasRootCauseInstanceOf(IllegalStateException.class)
+                    .hasRootCauseMessage(failure.getMessage());
             for (int tick = 0; tick < 2; tick++) {
                 setTimerTimestamps(writer, 0);
                 commitCallback.run();
                 RuntimeException repeated = assertThrows(RuntimeException.class, writer::flush);
-                assertThat(repeated.getCause()).isSameAs(failure);
+                assertThat(repeated).hasRootCauseInstanceOf(IllegalStateException.class)
+                        .hasRootCauseMessage(failure.getMessage());
             }
             writer.closeAsyncTasks();
         }
     }
 
     @Test
-    void scheduledFlusherPreservesFirstFailureWhenNextFlushFails() throws Exception {
+    void scheduledFlusherPreservesFirstFailureAndDoesNotSendFurtherModifications() throws Exception {
         ScheduledExecutorService committer = mock(ScheduledExecutorService.class);
         ScheduledExecutorService flusher = mock(ScheduledExecutorService.class);
         IllegalStateException firstFailure = new IllegalStateException("first flush failed");
@@ -465,13 +582,16 @@ class YtBufferedTransactionWriterTest {
 
             flushCallback.run();
             RuntimeException propagated = assertThrows(RuntimeException.class, writer::flush);
-            assertThat(propagated.getCause()).isSameAs(firstFailure);
+            assertThat(propagated).hasRootCauseInstanceOf(IllegalStateException.class)
+                    .hasRootCauseMessage(firstFailure.getMessage());
             setTimerTimestamps(writer, 0);
             flushCallback.run();
 
             RuntimeException repeated = assertThrows(RuntimeException.class, writer::flush);
-            assertThat(repeated.getCause()).isSameAs(firstFailure);
-            verify(transaction, times(2)).modifyRows(any(ModifyRowsRequest.Builder.class));
+            assertThat(repeated).hasRootCauseInstanceOf(IllegalStateException.class)
+                    .hasRootCauseMessage(firstFailure.getMessage());
+            verify(transaction).modifyRows(any(ModifyRowsRequest.Builder.class));
+            verify(transaction, never()).commit();
             writer.closeAsyncTasks();
         }
     }
@@ -585,7 +705,12 @@ class YtBufferedTransactionWriterTest {
             assertThat(request.getPath()).isEqualTo(PATH);
             assertThat(request.getSchema()).isEqualTo(SCHEMA);
             request.convertValues(DefaultSerializationResolver.getInstance());
-            return request.getRows().stream().map(row -> row.toYTreeMap(request.getSchema(), false).getLong("id"));
+            return request.getRows().stream().map(row -> {
+                YTreeMapNode node = row.toYTreeMap(request.getSchema(), false);
+                long id = node.getLong("id");
+                assertThat(node.getString("payload")).isEqualTo("row-" + id);
+                return id;
+            });
         }).collect(Collectors.toList());
     }
 
