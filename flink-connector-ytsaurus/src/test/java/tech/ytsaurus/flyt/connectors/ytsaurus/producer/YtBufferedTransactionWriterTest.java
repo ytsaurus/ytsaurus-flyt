@@ -283,6 +283,77 @@ class YtBufferedTransactionWriterTest {
     }
 
     @Test
+    void zeroPeriodsCreateNoExecutorsAndAllowManualFlush() throws Exception {
+        YtBufferedTransactionWriter writer = newWriter(Duration.ZERO, Duration.ZERO);
+
+        try (MockedStatic<Executors> executors = mockStatic(Executors.class)) {
+            writer.open();
+            executors.verify(Executors::newSingleThreadScheduledExecutor, never());
+            writer.write(() -> row(1));
+            verify(client, never()).startTransaction(any(StartTransaction.class));
+
+            writer.flush();
+
+            assertThat(rowIds(requests(transaction))).containsExactly(1L);
+            assertThat(writer.getCommittedRowCount()).isEqualTo(1);
+            assertThat(writer.isBusy()).isFalse();
+            verify(transaction).commit();
+            writer.closeAsyncTasks();
+        }
+    }
+
+    @Test
+    void zeroCommitPeriodRunsOnlyModificationFlusher() throws Exception {
+        ScheduledExecutorService flusher = mock(ScheduledExecutorService.class);
+        YtBufferedTransactionWriter writer = newWriter(Duration.ZERO, FLUSH_PERIOD);
+
+        try (MockedStatic<Executors> executors = mockStatic(Executors.class)) {
+            executors.when(Executors::newSingleThreadScheduledExecutor).thenReturn(flusher);
+            writer.open();
+            executors.verify(Executors::newSingleThreadScheduledExecutor);
+            Runnable flushCallback = scheduledCallback(flusher, FLUSH_PERIOD);
+            writer.write(() -> row(1));
+            setTimerTimestamps(writer, 0);
+
+            flushCallback.run();
+
+            assertThat(rowIds(requests(transaction))).containsExactly(1L);
+            verify(transaction, never()).commit();
+            writer.flush();
+            verify(transaction).commit();
+            writer.closeAsyncTasks();
+            verify(flusher).shutdownNow();
+        }
+    }
+
+    @Test
+    void zeroFlushPeriodRunsOnlyTransactionCommitter() throws Exception {
+        ScheduledExecutorService committer = mock(ScheduledExecutorService.class);
+        YtBufferedTransactionWriter writer = newWriter(COMMIT_PERIOD, Duration.ZERO);
+
+        try (MockedStatic<Executors> executors = mockStatic(Executors.class)) {
+            executors.when(Executors::newSingleThreadScheduledExecutor).thenReturn(committer);
+            writer.open();
+            executors.verify(Executors::newSingleThreadScheduledExecutor);
+            Runnable commitCallback = scheduledCallback(committer, COMMIT_PERIOD);
+            writer.write(() -> row(1));
+            setTimerTimestamps(writer, 0);
+            commitCallback.run();
+            verify(client, never()).startTransaction(any(StartTransaction.class));
+
+            writer.flushModifications();
+            commitCallback.run();
+
+            assertThat(rowIds(requests(transaction))).containsExactly(1L);
+            assertThat(writer.getCommittedRowCount()).isEqualTo(1);
+            assertThat(writer.isBusy()).isFalse();
+            verify(transaction).commit();
+            writer.closeAsyncTasks();
+            verify(committer).shutdownNow();
+        }
+    }
+
+    @Test
     void scheduledCallbacksFlushAndCommitWhenDueAndStopPromptly() throws Exception {
         ScheduledExecutorService committer = mock(ScheduledExecutorService.class);
         ScheduledExecutorService flusher = mock(ScheduledExecutorService.class);
@@ -426,6 +497,23 @@ class YtBufferedTransactionWriterTest {
             verify(committer, never()).shutdown();
             verify(flusher, never()).shutdown();
         }
+    }
+
+    private YtBufferedTransactionWriter newWriter(Duration commitPeriod, Duration flushPeriod) {
+        return YtBufferedTransactionWriter.builder()
+                .client(client)
+                .path(PATH)
+                .schema(SCHEMA)
+                .rowsInModificationLimit(2)
+                .rowsInTransactionLimit(10)
+                .transactionTimeout(TRANSACTION_TIMEOUT)
+                .commitTransactionPeriod(commitPeriod)
+                .flushModificationPeriod(flushPeriod)
+                .atomicity(Atomicity.Full)
+                .retryStrategy(noRetry())
+                .onCommitSuccess(() -> { })
+                .onTransactionCommitted(() -> { })
+                .build();
     }
 
     private YtBufferedTransactionWriter newWriter(int modificationLimit, int transactionLimit,

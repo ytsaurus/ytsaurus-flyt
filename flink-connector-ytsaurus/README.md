@@ -17,6 +17,7 @@ This project contains the Apache Flink Connector for working with [YTsaurus Sort
 - [Lookup Operations](#lookup-operations)
 - [Examples](#examples)
 - [Queue Source (Direct Mode)](#queue-source-direct-mode)
+- [Queue Sink](#queue-sink)
 
 ## Overview
 
@@ -51,7 +52,7 @@ Maven
 <dependency>
     <groupId>tech.ytsaurus.flyt.connectors.ytsaurus</groupId>
     <artifactId>flink-connector-ytsaurus</artifactId>
-    <version>1.12.3</version>
+    <version>1.13.0</version>
     <classifier>all</classifier>
 </dependency>
 ```
@@ -59,7 +60,7 @@ Maven
 Gradle
 
 ```kotlin
-implementation("tech.ytsaurus.flyt.connectors.ytsaurus:flink-connector-ytsaurus:1.12.3:all")
+implementation("tech.ytsaurus.flyt.connectors.ytsaurus:flink-connector-ytsaurus:1.13.0:all")
 ```
 
 ## Building from Source
@@ -80,6 +81,18 @@ cd ytsaurus-flyt
 # To see the assembled artifact
 ls flink-connector-ytsaurus/build/libs
 ```
+
+### Queue Sink Integration Tests
+
+Run against a local YTsaurus cluster with authentication disabled and reachable HTTP/RPC proxies:
+
+```bash
+YT_QUEUE_TEST_PROXY=localhost:18000 ./gradlew :flink-connector-ytsaurus:test \
+  --tests '*YtQueueSinkIntegrationTest' --rerun-tasks
+```
+
+The tests run bounded Flink jobs for ROW/YSON and COLUMN/JSON and check checkpoint/close behavior against YTsaurus.
+They create and remove their own queues under `//tmp`. Without `YT_QUEUE_TEST_PROXY`, these tests are skipped.
 
 ## Quick Start Guide
 
@@ -706,7 +719,7 @@ CREATE TABLE multi_cluster_table (
 
 ## Queue Source (Direct Mode)
 
-The `ytsaurus-queue` connector continuously reads an ordered dynamic table without a registered YTsaurus consumer. Offsets are owned by Flink source state and restored from checkpoints. It is a source-only connector: sink, lookup, metadata columns, and multi-cluster modes are not supported.
+The `ytsaurus-queue` connector continuously reads an ordered dynamic table without a registered YTsaurus consumer. Offsets are owned by Flink source state and restored from checkpoints. It also supports an insert-only [queue sink](#queue-sink). Lookup, metadata columns, and multi-cluster modes are not supported.
 
 The table schema comes from the Flink DDL. In the default `ROW` read mode queue rows are YSON maps, so this source supports only the insert-only `format = 'yson'` decoder; see [Read modes](#read-modes) for reading a payload out of a single column instead. There is no YSON table schema option. Install the [Flink YSON format](../flink-yson/README.md) alongside the connector.
 
@@ -832,6 +845,132 @@ Metadata columns are not supported in either mode, so `$timestamp`, `$cumulative
 | `yson.fail-on-missing-field` | Boolean | `false` | Fail when a declared field is absent in a queue row |
 | `yson.ignore-parse-errors` | Boolean | `false` | Set invalid fields to null and skip rows that cannot be parsed |
 | `yson.timestamp-format.standard` | String | `SQL` | Timestamp representation: `SQL` or `ISO-8601` |
+
+## Queue Sink
+
+The `ytsaurus-queue` sink appends records to an existing, mounted ordered dynamic table.
+It checks the target schema when the task starts and does not create, mount, or alter the queue.
+Only inserts are supported; updates, deletes, and primary key constraints are not supported.
+Install the [Flink YSON format](../flink-yson/README.md) alongside the connector for `ROW` mode.
+
+```sql
+-- The YTsaurus queue must already have id:int64 and message:string columns.
+CREATE TABLE queue_output (
+    id BIGINT,
+    message STRING
+) WITH (
+    'connector' = 'ytsaurus-queue',
+    'proxy' = '<proxy>',
+    'path' = '//tmp/events_queue',
+    'credentials-source' = 'env',
+    'format' = 'yson',
+    'rows-in-modification-limit' = '1000',
+    'rows-in-transaction-limit' = '99000',
+    'flush-modification-period' = '1 s',
+    'commit-transaction-period' = '1 s'
+);
+
+INSERT INTO queue_output VALUES (1, 'hello'), (2, 'world');
+```
+
+`ROW` is the default write mode. The Flink fields map to columns in the queue, and
+`format = 'yson'` is required. Unknown columns and system columns in the Flink schema
+are rejected. Use `sink.partition-index` to select a tablet instead of declaring
+`$tablet_index` as a physical column.
+
+The existing YSON encoder cannot preserve decimal values or fractional seconds in
+`TIME`. The sink rejects these types, including nested fields, instead of writing
+truncated values. This validation also applies to YSON payloads in `COLUMN` mode.
+
+For `DECIMAL`, use `COLUMN` mode with a format such as JSON. For `TIME`, use `TIME(0)`
+if whole seconds are sufficient, or represent the value as `STRING` with the required
+precision. Flink JSON 1.20.1 also drops fractional seconds from `TIME` values.
+
+`COLUMN` writes the configured format's serialized bytes into `sink.value-column`,
+which defaults to `value`. This column must have the YTsaurus `string` type. The Flink
+schema describes the message inside the column. For example, with a queue containing
+a `payload:string` column and the Flink JSON format installed:
+
+```sql
+CREATE TABLE queue_messages (
+    id BIGINT,
+    message STRING
+) WITH (
+    'connector' = 'ytsaurus-queue',
+    'proxy' = '<proxy>',
+    'path' = '//tmp/messages_queue',
+    'credentials-source' = 'env',
+    'format' = 'json',
+    'sink.write-mode' = 'COLUMN',
+    'sink.value-column' = 'payload'
+);
+
+INSERT INTO queue_messages VALUES (1, 'hello');
+```
+
+Payloads are uncompressed. To read them back, configure the source with
+`scan.read-mode = 'COLUMN'`, `scan.value-column = 'payload'`, and the same format.
+Read and write mode options are independent.
+
+For YSON payloads, the reader needs `flink-yson` 1.1.1 or newer to accept the
+encoder's trailing semicolon.
+
+### Delivery and buffering
+
+Rows are sent in modifications within tablet transactions using the
+[dynamic table API](https://ytsaurus.tech/docs/en/user-guide/dynamic-tables/queues#writing-data).
+The shared writer uses `rows-in-modification-limit` for the size of each modification
+and `rows-in-transaction-limit` as the commit threshold. It checks these thresholds
+before buffering the next row. A transaction can exceed its threshold because
+modifications are sent as a whole. Checkpoints and the end of bounded input flush
+and commit all pending rows. Background modification flushing and
+transaction commits use `flush-modification-period` and `commit-transaction-period`,
+respectively. For low-volume streams, buffered rows must be flushed into the
+transaction before a subsequent commit makes them visible. Enable Flink checkpointing for
+**at-least-once** recovery. Rows committed after the last completed checkpoint can be
+written again after a restart; the sink does not provide producer-session deduplication
+or exactly-once delivery. With the default `retry-strategy = 'EXPONENTIAL'`, a failed
+commit is retried up to five times with delays from 10 seconds to 2 minutes. Each retry
+replays the uncommitted rows in a new transaction. If the previous commit succeeded but
+its response was lost, this replay can produce duplicates. `NO_RETRY` disables these
+commit retries. Errors before commit or after retries are exhausted fail the task
+instead of discarding rows.
+
+Without `sink.partition-index`, YTsaurus chooses a mounted tablet. With it, every row
+from this sink is written to that partition. Multiple sink subtasks can append
+concurrently; there is no global ordering guarantee. Even with one subtask and a fixed
+partition, asynchronous modification batches within a transaction can be appended in
+a different order. Keep the queue schema and tablet layout unchanged while the job is running.
+
+The writer retains buffered and uncommitted rows in memory. Both row limits must
+be positive, and their sum must not exceed `100000`. These limits count rows, so
+large messages still require appropriately sized memory.
+Setting either period to `0 ms` disables its corresponding background task; setting
+both to zero disables all periodic flushing and commits. Row-count, checkpoint,
+and bounded input flushing remain active. Closing the sink stops its background
+tasks without a final flush.
+
+The sink exposes `sumCommittedRows`, `sumFailedRows`, and `lastCommitTimestamp`
+gauges. Failed rows count failed commit attempts; a failed request before commit
+does not increase this gauge.
+
+### Queue Sink Options
+
+`proxy`, `path`, `credentials-source`, and `format` are required, as for the source.
+Credentials are resolved on the task at runtime.
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `sink.write-mode` | Enum | `ROW` | `ROW` writes columns using YSON; `COLUMN` stores a serialized message |
+| `sink.value-column` | String | `value` | Payload column for `COLUMN` mode |
+| `rows-in-modification-limit` | Integer | `1000` | Maximum rows per modification |
+| `rows-in-transaction-limit` | Integer | `99000` | Commit threshold for rows sent to the current transaction |
+| `flush-modification-period` | Duration | `1 s` | Period for sending buffered rows to the transaction; `0 ms` disables this background task |
+| `commit-transaction-period` | Duration | `10 s` | Transaction commit period; `0 ms` disables periodic commits |
+| `transaction-timeout` | Duration | `5 min` | Maximum wait for pending modifications before commit; at least `1 s`. Does not override RPC timeouts |
+| `retry-strategy` | Enum | `EXPONENTIAL` | Commit retry strategy: `EXPONENTIAL` or `NO_RETRY`; retries replay rows in a new transaction and may produce duplicates |
+| `sink.partition-index` | Integer | - | Fixed zero-based partition index; otherwise YTsaurus selects the tablet |
+| `sink.parallelism` | Integer | - | Optional positive Flink sink parallelism |
 
 ## Contributing
 

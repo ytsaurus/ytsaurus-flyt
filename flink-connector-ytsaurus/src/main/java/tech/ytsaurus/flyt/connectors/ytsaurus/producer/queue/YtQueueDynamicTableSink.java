@@ -1,0 +1,77 @@
+package tech.ytsaurus.flyt.connectors.ytsaurus.producer.queue;
+
+import javax.annotation.Nullable;
+
+import lombok.Builder;
+import org.apache.flink.api.common.serialization.SerializationSchema;
+import org.apache.flink.table.connector.ChangelogMode;
+import org.apache.flink.table.connector.format.EncodingFormat;
+import org.apache.flink.table.connector.sink.DynamicTableSink;
+import org.apache.flink.table.connector.sink.SinkV2Provider;
+import org.apache.flink.table.data.RowData;
+import org.apache.flink.table.types.DataType;
+import org.apache.flink.table.types.logical.RowType;
+import org.apache.flink.util.concurrent.RetryStrategy;
+import org.apache.flink.util.function.SerializableSupplier;
+
+import tech.ytsaurus.flyt.connectors.ytsaurus.common.credentials.CredentialsProvider;
+
+@Builder
+public class YtQueueDynamicTableSink implements DynamicTableSink {
+    private final String proxy;
+    private final String queuePath;
+    private final CredentialsProvider credentialsProvider;
+    private final EncodingFormat<SerializationSchema<RowData>> encodingFormat;
+    private final DataType physicalRowDataType;
+    private final YtQueueWriteMode writeMode;
+    private final String valueColumn;
+    private final YtQueueWriterOptions writerOptions;
+    private final SerializableSupplier<RetryStrategy> retryStrategy;
+    @Nullable
+    private final Integer parallelism;
+    private final boolean useTls;
+
+    @Override
+    public ChangelogMode getChangelogMode(ChangelogMode requestedMode) {
+        return ChangelogMode.insertOnly();
+    }
+
+    @Override
+    public SinkRuntimeProvider getSinkRuntimeProvider(Context context) {
+        SerializationSchema<RowData> serializer = encodingFormat.createRuntimeEncoder(context, physicalRowDataType);
+        YtQueueSink sink = new YtQueueSink(
+                proxy,
+                queuePath,
+                credentialsProvider,
+                serializer,
+                (RowType) physicalRowDataType.getLogicalType(),
+                writeMode,
+                valueColumn,
+                writerOptions,
+                useTls,
+                retryStrategy);
+        return SinkV2Provider.of(sink, parallelism);
+    }
+
+    @Override
+    public DynamicTableSink copy() {
+        return YtQueueDynamicTableSink.builder()
+                .proxy(proxy)
+                .queuePath(queuePath)
+                .credentialsProvider(credentialsProvider)
+                .encodingFormat(encodingFormat)
+                .physicalRowDataType(physicalRowDataType)
+                .writeMode(writeMode)
+                .valueColumn(valueColumn)
+                .writerOptions(writerOptions)
+                .retryStrategy(retryStrategy)
+                .parallelism(parallelism)
+                .useTls(useTls)
+                .build();
+    }
+
+    @Override
+    public String asSummaryString() {
+        return "YTsaurus Queue Sink";
+    }
+}

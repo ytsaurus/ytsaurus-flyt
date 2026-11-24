@@ -7,16 +7,23 @@ import java.util.Set;
 import javax.annotation.Nullable;
 
 import org.apache.flink.api.common.serialization.DeserializationSchema;
+import org.apache.flink.api.common.serialization.SerializationSchema;
 import org.apache.flink.configuration.ConfigOption;
 import org.apache.flink.configuration.ReadableConfig;
 import org.apache.flink.table.api.ValidationException;
 import org.apache.flink.table.connector.ChangelogMode;
 import org.apache.flink.table.connector.format.DecodingFormat;
+import org.apache.flink.table.connector.format.EncodingFormat;
+import org.apache.flink.table.connector.sink.DynamicTableSink;
 import org.apache.flink.table.connector.source.DynamicTableSource;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.factories.DeserializationFormatFactory;
+import org.apache.flink.table.factories.DynamicTableSinkFactory;
 import org.apache.flink.table.factories.DynamicTableSourceFactory;
 import org.apache.flink.table.factories.FactoryUtil;
+import org.apache.flink.table.factories.SerializationFormatFactory;
+import org.apache.flink.table.types.logical.LogicalType;
+import org.apache.flink.table.types.logical.TimeType;
 
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.credentials.CredentialsProvider;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.config.YtQueueColumnModeOptions;
@@ -24,11 +31,20 @@ import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.config.YtQueueReadM
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.config.YtQueueStartupMode;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.YtQueueReaderOptions;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.table.YtQueueDynamicTableSource;
+import tech.ytsaurus.flyt.connectors.ytsaurus.producer.queue.YtQueueDynamicTableSink;
+import tech.ytsaurus.flyt.connectors.ytsaurus.producer.queue.YtQueueWriteMode;
+import tech.ytsaurus.flyt.connectors.ytsaurus.producer.queue.YtQueueWriterOptions;
 import tech.ytsaurus.flyt.connectors.ytsaurus.utils.YtConfigUtils;
 
+import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.COMMIT_TRANSACTION_PERIOD;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.CREDENTIALS_SOURCE;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.FLUSH_MODIFICATION_PERIOD;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.PATH;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.PROXY;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.RETRY_STRATEGY;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.ROWS_IN_MODIFICATION_LIMIT;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.ROWS_IN_TRANSACTION_LIMIT;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.TRANSACTION_TIMEOUT;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.USE_TLS;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.YT_TOKEN_OPTION;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.YT_USERNAME_OPTION;
@@ -41,15 +57,88 @@ import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOpti
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.PARTITION_DISCOVERY_INTERVAL;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.POLL_BACKOFF;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.READ_MODE;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.SINK_PARTITION_INDEX;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.SINK_VALUE_COLUMN;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.SPECIFIC_OFFSETS;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.STARTUP_MODE;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.TRIMMED_OFFSET_POLICY;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.VALUE_COLUMN;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.WRITE_MODE;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.table.YtQueueColumnValueDeserializer.DEFAULT_VALUE_COLUMN;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.producer.YtWriterOptions.DEFAULT_COMMIT_TRANSACTION_PERIOD;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.producer.YtWriterOptions.DEFAULT_FLUSH_MODIFICATION_PERIOD;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.producer.YtWriterOptions.DEFAULT_ROWS_IN_MODIFICATION_LIMIT;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.producer.YtWriterOptions.DEFAULT_ROWS_IN_TRANSACTION_LIMIT;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.producer.YtWriterOptions.DEFAULT_TRANSACTION_TIMEOUT;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.utils.RetryUtils.getRetryStrategy;
 
-public class YTsaurusQueueDynamicTableFactory implements DynamicTableSourceFactory {
+public class YTsaurusQueueDynamicTableFactory implements DynamicTableSourceFactory, DynamicTableSinkFactory {
     public static final String IDENTIFIER = "ytsaurus-queue";
     static final String SUPPORTED_FORMAT = "yson";
+    private static final Set<ConfigOption<?>> REQUIRED_OPTIONS =
+            Set.of(PROXY, PATH, CREDENTIALS_SOURCE, FactoryUtil.FORMAT);
+    private static final Set<ConfigOption<?>> OPTIONAL_OPTIONS = Set.of(
+            YT_USERNAME_OPTION,
+            YT_TOKEN_OPTION,
+            USE_TLS,
+            STARTUP_MODE,
+            SPECIFIC_OFFSETS,
+            TRIMMED_OFFSET_POLICY,
+            MAX_ROW_COUNT,
+            MAX_DATA_WEIGHT,
+            POLL_BACKOFF,
+            ASYNC_WORKER_COUNT,
+            ASYNC_BUFFER_CAPACITY,
+            PARTITION_DISCOVERY_INTERVAL,
+            READ_MODE,
+            VALUE_COLUMN,
+            CODEC_COLUMN,
+            IGNORE_DECOMPRESSION_ERRORS,
+            WRITE_MODE,
+            SINK_VALUE_COLUMN,
+            ROWS_IN_MODIFICATION_LIMIT,
+            ROWS_IN_TRANSACTION_LIMIT,
+            FLUSH_MODIFICATION_PERIOD,
+            COMMIT_TRANSACTION_PERIOD,
+            TRANSACTION_TIMEOUT,
+            RETRY_STRATEGY,
+            SINK_PARTITION_INDEX,
+            FactoryUtil.SINK_PARALLELISM,
+            FactoryUtil.SOURCE_PARALLELISM);
+
+    @Override
+    public DynamicTableSink createDynamicTableSink(Context context) {
+        FactoryUtil.TableFactoryHelper helper = FactoryUtil.createTableFactoryHelper(this, context);
+        ReadableConfig options = helper.getOptions();
+        validateSinkFormatIdentifier(options);
+        EncodingFormat<SerializationSchema<RowData>> encodingFormat =
+                helper.discoverEncodingFormat(SerializationFormatFactory.class, FactoryUtil.FORMAT);
+        helper.validate();
+        validateRequiredOptions(options);
+        validateCredentialsOptions(options);
+        if (!ChangelogMode.insertOnly().equals(encodingFormat.getChangelogMode())) {
+            throw new ValidationException("The encoder for 'ytsaurus-queue' must be insert-only");
+        }
+        if (context.getCatalogTable().getResolvedSchema().getPrimaryKey().isPresent()) {
+            throw new ValidationException("The 'ytsaurus-queue' sink does not support PRIMARY KEY constraints");
+        }
+        if (SUPPORTED_FORMAT.equals(options.get(FactoryUtil.FORMAT))) {
+            validateYsonSinkType(context.getPhysicalRowDataType().getLogicalType());
+        }
+        return YtQueueDynamicTableSink.builder()
+                .proxy(options.get(PROXY))
+                .queuePath(options.get(PATH))
+                .credentialsProvider(getAndValidateCredentialsProvider(options))
+                .encodingFormat(encodingFormat)
+                .physicalRowDataType(context.getPhysicalRowDataType())
+                .writeMode(options.get(WRITE_MODE))
+                .valueColumn(options.getOptional(SINK_VALUE_COLUMN).orElse(DEFAULT_VALUE_COLUMN))
+                .writerOptions(createWriterOptions(options))
+                .retryStrategy(getRetryStrategy(options))
+                .parallelism(options.getOptional(FactoryUtil.SINK_PARALLELISM).orElse(null))
+                .useTls(options.get(USE_TLS))
+                .build();
+    }
 
     @Override
     public DynamicTableSource createDynamicTableSource(Context context) {
@@ -93,29 +182,69 @@ public class YTsaurusQueueDynamicTableFactory implements DynamicTableSourceFacto
 
     @Override
     public Set<ConfigOption<?>> requiredOptions() {
-        return Set.of(PROXY, PATH, CREDENTIALS_SOURCE, FactoryUtil.FORMAT);
+        return REQUIRED_OPTIONS;
     }
 
     @Override
     public Set<ConfigOption<?>> optionalOptions() {
-        return Set.of(
-                YT_USERNAME_OPTION,
-                YT_TOKEN_OPTION,
-                USE_TLS,
-                STARTUP_MODE,
-                SPECIFIC_OFFSETS,
-                TRIMMED_OFFSET_POLICY,
-                MAX_ROW_COUNT,
-                MAX_DATA_WEIGHT,
-                POLL_BACKOFF,
-                ASYNC_WORKER_COUNT,
-                ASYNC_BUFFER_CAPACITY,
-                PARTITION_DISCOVERY_INTERVAL,
-                READ_MODE,
-                VALUE_COLUMN,
-                CODEC_COLUMN,
-                IGNORE_DECOMPRESSION_ERRORS,
-                FactoryUtil.SOURCE_PARALLELISM);
+        return OPTIONAL_OPTIONS;
+    }
+
+    static void validateSinkFormatIdentifier(ReadableConfig options) {
+        if (options.get(WRITE_MODE) == YtQueueWriteMode.ROW &&
+                !SUPPORTED_FORMAT.equals(options.get(FactoryUtil.FORMAT))) {
+            throw new ValidationException(
+                    "The 'ytsaurus-queue' sink supports only 'format' = 'yson' for " +
+                            "'sink.write-mode' = 'ROW'; use 'COLUMN' to write a serialized payload");
+        }
+    }
+
+    private static void validateYsonSinkType(LogicalType type) {
+        switch (type.getTypeRoot()) {
+            case DECIMAL:
+                throw new ValidationException(
+                        "The YSON encoder cannot write DECIMAL values without loss; " +
+                                "use 'sink.write-mode' = 'COLUMN' with a format such as 'json'");
+            case TIME_WITHOUT_TIME_ZONE:
+                if (((TimeType) type).getPrecision() > 0) {
+                    throw new ValidationException(
+                            "The YSON encoder cannot preserve fractional seconds in TIME values; " +
+                                    "use TIME(0) if whole seconds are sufficient, " +
+                                    "or represent the value as STRING with the required precision");
+                }
+                break;
+            default:
+                break;
+        }
+        type.getChildren().forEach(YTsaurusQueueDynamicTableFactory::validateYsonSinkType);
+    }
+
+    static YtQueueWriterOptions createWriterOptions(ReadableConfig options) {
+        options.getOptional(FactoryUtil.SINK_PARALLELISM).ifPresent(parallelism -> {
+            if (parallelism <= 0) {
+                throw new ValidationException("'sink.parallelism' must be greater than zero");
+            }
+        });
+        options.getOptional(SINK_VALUE_COLUMN).ifPresent(column -> {
+            if (options.get(WRITE_MODE) != YtQueueWriteMode.COLUMN) {
+                throw new ValidationException("'sink.value-column' requires 'sink.write-mode' = 'COLUMN'");
+            }
+            validateNonBlank(column, SINK_VALUE_COLUMN.key());
+            if (column.startsWith("$")) {
+                throw new ValidationException("'sink.value-column' must not be a system column");
+            }
+        });
+        try {
+            return new YtQueueWriterOptions(
+                    options.getOptional(ROWS_IN_MODIFICATION_LIMIT).orElse(DEFAULT_ROWS_IN_MODIFICATION_LIMIT),
+                    options.getOptional(ROWS_IN_TRANSACTION_LIMIT).orElse(DEFAULT_ROWS_IN_TRANSACTION_LIMIT),
+                    options.getOptional(FLUSH_MODIFICATION_PERIOD).orElse(DEFAULT_FLUSH_MODIFICATION_PERIOD),
+                    options.getOptional(COMMIT_TRANSACTION_PERIOD).orElse(DEFAULT_COMMIT_TRANSACTION_PERIOD),
+                    options.getOptional(TRANSACTION_TIMEOUT).orElse(DEFAULT_TRANSACTION_TIMEOUT),
+                    options.getOptional(SINK_PARTITION_INDEX).orElse(null));
+        } catch (IllegalArgumentException e) {
+            throw new ValidationException("Invalid queue writer options", e);
+        }
     }
 
     static void validateRequiredOptions(ReadableConfig options) {
