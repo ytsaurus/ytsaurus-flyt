@@ -71,6 +71,9 @@ def test_manifest_holds_the_spec_of_each_cluster_mode(monkeypatch) -> None:
     path, manifest = yt.set.call_args[0]
     assert path == "//home/flyt/layers/manifest"
     assert manifest["version"] == 1 and manifest["sql"]["script_file_name"] == "script.sql"
+    assert manifest["flink_conf"]["environment_variable"] == "FLYT_FLINK_CONF"
+    assert manifest["flink_conf"]["options"] == {"flyt.taskmanager.replicas": "3"}
+    assert manifest["sql"]["resources"]["application"]["taskmanager"]["job_count"] == ["flyt.taskmanager.replicas"]
     specs = manifest["sql"]["spec"]
     assert set(specs) == {"minicluster", "application"}
     assert set(specs["minicluster"]["tasks"]) == {"flink_minicluster"}
@@ -79,8 +82,9 @@ def test_manifest_holds_the_spec_of_each_cluster_mode(monkeypatch) -> None:
         # what belongs to a run is left to the launcher
         assert "secure_vault" not in spec and "started_by" not in spec and "pool" not in spec
         for task in spec["tasks"].values():
-            runner, layer = task["file_paths"][0], task["layer_paths"]
+            (runner, conf_tool), layer = task["file_paths"], task["layer_paths"]
             assert runner.startswith("//home/flyt/tools/sql_runner/") and runner.endswith("/sql_runner.py")
+            assert conf_tool.startswith("//home/flyt/tools/flink_conf/") and conf_tool.endswith("/flyt_flink_conf.zip")
             assert layer == ["//home/flyt/layers/runtime-abc.squashfs"]
     for task in (specs["minicluster"]["tasks"]["flink_minicluster"], specs["application"]["tasks"]["jobmanager"]):
         assert "set -- ../sql_runner.py ../script.sql\n" in task["command"]

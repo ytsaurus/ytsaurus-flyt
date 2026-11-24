@@ -121,14 +121,20 @@ def application_flink_config(
 
 @dataclass(frozen=True)
 class ApplicationCluster:
-    """An application cluster ready for the spec: its YT resources and the ``config.yaml`` of every job."""
+    """An application cluster ready for the spec: its YT resources and the ``config.yaml`` of every job, with the
+    user's Flink options they come from."""
 
     resources: ApplicationResources
     flink_config: Dict[str, str]
+    flink_options: Dict[str, str]
 
 
 def application_cluster(config: FlytConfig, user: Optional[Mapping[str, str]] = None) -> ApplicationCluster:
     """Resolve the application cluster from the profile and the user's Flink options."""
     user = user or {}
     resources = resolve_application_resources(user)
-    return ApplicationCluster(resources=resources, flink_config=application_flink_config(config, resources, user))
+    return ApplicationCluster(
+        resources=resources,
+        flink_config=application_flink_config(config, resources, user),
+        flink_options=dict(user),
+    )

@@ -91,6 +91,9 @@ FLYT_NETWORK_OPTIONS: Mapping[str, str] = {
     "taskmanager.rpc.port": "0",
     "taskmanager.data.port": "0",
 }
+# A launcher that submits a ready spec (the manifest of ``flyt install``) passes the Flink options of a run as a
+# JSON object in this environment variable of every task; the job renders its config.yaml again with them.
+FLINK_CONF_ENV = "FLYT_FLINK_CONF"
 # flyt's platform JVM flags. Flink (and the PyFlink gateway of a MiniCluster) puts env.java.opts.*
 # after them and the JVM takes the last occurrence of a flag, so the user overrides any of them there.
 JVM_DEFAULT_OPTS_KEYS = (
