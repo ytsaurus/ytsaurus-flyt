@@ -20,6 +20,7 @@ You can read [post about YTsaurus](https://medium.com/p/42e7f5fa5fc6) or check v
 The project that aims to integrate Apache Flink and YTsaurus.
 
 * [Apache Flink connectors](https://github.com/ytsaurus/ytsaurus-flyt/tree/main/flink-connector-ytsaurus) for working with YTsaurus [dynamic tables](https://ytsaurus.tech/docs/en/user-guide/dynamic-tables/overview)
+* [Static table sink](flink-connector-ytsaurus/STATIC_TABLE_SINK.md) for checkpointed at-least-once append from SQL and Java
 * [Apache Flink formatters](https://github.com/ytsaurus/ytsaurus-flyt/tree/main/flink-yson) for working with [YSON](https://ytsaurus.tech/docs/en/user-guide/storage/yson) format
 * [Python launcher / CLI](https://github.com/ytsaurus/ytsaurus-flyt/tree/main/python) for launching PyFlink jobs inside [Vanilla](https://ytsaurus.tech/docs/en/user-guide/data-processing/operations/vanilla) operations
 * tools that simplify the integration YTsaurus and Apache Flink
