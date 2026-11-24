@@ -19,17 +19,15 @@ jobs:
           java-version: '11'
           distribution: 'temurin'
 
+      - name: Validate release version
+        run: ./gradlew :flink-connector-ytsaurus:checkReleaseVersion -PreleaseVersion="${GITHUB_REF_NAME#flink-connector-ytsaurus/}"
+
       - name: Execute Gradle build
         run: ./gradlew shadowJar
 
-      - name: Parse tag
-        id: tag
-        run: |
-          echo "RELEASE_VERSION=$(echo ${GITHUB_REF#refs/*/flink-connector-ytsaurus/})" >> $GITHUB_OUTPUT
-
       - name: Publish
         run: |
-          ./gradlew flink-connector-ytsaurus:publish -PossrhUsername=${{ secrets.OSSRH_USERNAME }} -PossrhPassword=${{ secrets.OSSRH_PASSWORD }} -Pversion=${{ steps.tag.outputs.RELEASE_VERSION }} -PsigningPassword=${{ secrets.GPG_PASSWORD }} -PsigningKey="${{ secrets.GPG_PRIVATE_KEY }}"
+          ./gradlew flink-connector-ytsaurus:publish -PossrhUsername=${{ secrets.OSSRH_USERNAME }} -PossrhPassword=${{ secrets.OSSRH_PASSWORD }} -PsigningPassword=${{ secrets.GPG_PASSWORD }} -PsigningKey="${{ secrets.GPG_PRIVATE_KEY }}"
 
       - name: Upload to Central Publisher Portal
         env:
