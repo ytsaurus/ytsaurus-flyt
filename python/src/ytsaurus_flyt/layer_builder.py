@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 LAYER_SCHEMA_VERSION = "1"
 
 # Needed by flyt's own job code (the SQL runner); a profile entry for the same package wins.
-SYSTEM_RUNTIME_PACKAGES = ("sqlparse>=0.4.4", "ytsaurus-client>=0.13")
+SYSTEM_RUNTIME_PACKAGES = ("sqlparse>=0.4.4",)
 
 _PYFLINK_HOME_PY = (
     "import os, pyflink\nfrom pathlib import Path\nprint(Path(os.path.dirname(os.path.abspath(pyflink.__file__))))"

@@ -58,7 +58,7 @@ flink_config_override:
 ```
 
 `runtime_python_version` must match the Python ABI of `python_bin` on exec nodes.
-The layer also gets the packages flyt's own job code needs (`sqlparse`, `ytsaurus-client`); a profile entry for the same package wins.
+The layer also gets the packages flyt's own job code needs (`sqlparse`); a profile entry for the same package wins.
 
 Default `squashfs_layer_delivery` is `layer_paths`. For Kind local dev, use `sandbox_unpack` (see [examples/kind/README.md](examples/kind/README.md)).
 
@@ -103,9 +103,9 @@ With `--wheel` only, pass the script path as it appears inside the unpacked whee
 
 ### Flink SQL scripts
 
-`flyt run script.sql` runs a Flink SQL script: flyt packages the bundled runner
-([`sql_runner.py`](src/ytsaurus_flyt/sql_runner.py)) as the service wheel, ships the script as a separate file of the
-operation and submits it like any PyFlink job. Arguments after the script go to the runner: `--result-table PATH`, `--row-limit N`.
+`flyt run script.sql` runs a Flink SQL script: flyt ships the bundled runner
+([`sql_runner.py`](src/ytsaurus_flyt/sql_runner.py)) and the script as files of the operation, with no service wheel,
+and submits it like any PyFlink job. Arguments after the script go to the runner: `--row-limit N`.
 Statements are split on `;` outside quotes and comments and executed on a `TableEnvironment`:
 
 | Statement | Handling |
@@ -114,15 +114,15 @@ Statements are split on `;` outside quotes and comments and executed on a `Table
 | Later `SET` | `TableConfig` option |
 | DDL, `USE`, `LOAD`, `ADD JAR` | Executed immediately |
 | `SHOW`, `DESCRIBE`, `EXPLAIN` | Printed to the job log |
-| `SELECT` / `WITH` / `VALUES` | Collected on the driver (`--row-limit`, default 1000) and written to `--result-table` (replaced; second SELECT gets `_2`), or echoed to the job log |
+| `SELECT` / `WITH` / `VALUES` | Collected on the driver (`--row-limit`, default 1000) and echoed to the job log |
 | `INSERT INTO` | Batched into one statement set and submitted as a single job after the script |
 | `EXECUTE STATEMENT SET BEGIN ... END`, `CREATE TABLE ... AS SELECT`, other statements that submit a job | Submitted as its own job |
 
 `execution.runtime-mode` comes from a leading `SET` or from the job's Flink configuration
 (`-D execution.runtime-mode=batch`); the default is streaming. The runner waits for the jobs it submitted.
 Progress is reported on stderr as `FLYT_SQL {json}` lines (`query_result`, `job_submitted`, `statement_failed` with the error, ...).
-The runner needs `sqlparse` (and `ytsaurus-client` for `--result-table`) in the job's Python: flyt adds both to the
-layers it builds, a pre-built layer must include them. See [examples/simple_sql](examples/simple_sql).
+The runner needs `sqlparse` in the job's Python: flyt adds it to the layers it builds, a pre-built layer must include it.
+See [examples/simple_sql](examples/simple_sql).
 
 ## JARs
 

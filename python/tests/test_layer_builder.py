@@ -49,5 +49,5 @@ def test_layer_python_packages_adds_system_packages():
 
 
 def test_layer_python_packages_profile_pin_wins():
-    c = FlytConfig(runtime_python_packages=["apache-flink==1.20.1", "Ytsaurus_Client==0.13.20"])
-    assert layer_python_packages(c) == ["apache-flink==1.20.1", "Ytsaurus_Client==0.13.20", "sqlparse>=0.4.4"]
+    c = FlytConfig(runtime_python_packages=["apache-flink==1.20.1", "SQLParse==0.5.5"])
+    assert layer_python_packages(c) == ["apache-flink==1.20.1", "SQLParse==0.5.5"]

@@ -1,7 +1,5 @@
 """Pure helpers of the bundled SQL runner (no PyFlink needed)."""
 
-import datetime as dt
-import decimal
 import json
 
 import pytest
@@ -44,21 +42,21 @@ def test_split_statements_keeps_statement_set_whole() -> None:
 @pytest.mark.parametrize(
     ("stmt", "kind"),
     [
-        ("SET 'a' = 'b'", r.KIND_SET),
-        ("reset 'a'", r.KIND_SET),
-        ("ADD JAR '/x.jar'", r.KIND_DDL),
-        ("INSERT INTO t SELECT 1", r.KIND_INSERT),
-        ("EXECUTE STATEMENT SET BEGIN\nINSERT INTO t SELECT 1;\nEND", r.KIND_DDL),
-        ("SELECT 1", r.KIND_QUERY),
-        ("WITH c AS (SELECT 1) SELECT * FROM c", r.KIND_QUERY),
-        ("(SELECT 1) UNION ALL (SELECT 2)", r.KIND_QUERY),
-        ("SHOW TABLES", r.KIND_SHOW),
-        ("EXPLAIN SELECT 1", r.KIND_SHOW),
-        ("CREATE TABLE t (a INT) WITH ('connector' = 'print')", r.KIND_DDL),
-        ("USE CATALOG c", r.KIND_DDL),
+        ("SET 'a' = 'b'", r.StatementKind.SET),
+        ("reset 'a'", r.StatementKind.SET),
+        ("ADD JAR '/x.jar'", r.StatementKind.DDL),
+        ("INSERT INTO t SELECT 1", r.StatementKind.INSERT),
+        ("EXECUTE STATEMENT SET BEGIN\nINSERT INTO t SELECT 1;\nEND", r.StatementKind.DDL),
+        ("SELECT 1", r.StatementKind.QUERY),
+        ("WITH c AS (SELECT 1) SELECT * FROM c", r.StatementKind.QUERY),
+        ("(SELECT 1) UNION ALL (SELECT 2)", r.StatementKind.QUERY),
+        ("SHOW TABLES", r.StatementKind.SHOW),
+        ("EXPLAIN SELECT 1", r.StatementKind.SHOW),
+        ("CREATE TABLE t (a INT) WITH ('connector' = 'print')", r.StatementKind.DDL),
+        ("USE CATALOG c", r.StatementKind.DDL),
     ],
 )
-def test_classify(stmt: str, kind: str) -> None:
+def test_classify(stmt: str, kind: r.StatementKind) -> None:
     assert r.classify(stmt) == kind
 
 
@@ -83,30 +81,7 @@ def test_leading_settings_and_mode() -> None:
     assert r.resolve_mode({}) == "streaming"
 
 
-def test_yt_type_for_uses_class_names() -> None:
-    class BigIntType: ...
-
-    class ArrayType: ...
-
-    class TimestampType: ...
-
-    assert r.yt_type_for(BigIntType()) == "int64"
-    assert r.yt_type_for(ArrayType()) == "any"
-    assert r.yt_type_for(TimestampType()) == "utf8"
-
-
-def test_to_yt_value_conversions() -> None:
-    class Row:
-        _values = [1, "a"]
-
-    assert r.to_yt_value(decimal.Decimal("1.50")) == "1.50"
-    assert r.to_yt_value(dt.datetime(2026, 1, 2, 3, 4, 5)) == "2026-01-02T03:04:05"
-    assert r.to_yt_value(Row()) == [1, "a"]
-    assert r.to_yt_value({"k": (1, None)}) == {"k": [1, None]}
-    assert r.to_yt_value(b"raw") == b"raw"
-
-
-def test_runner_batches_inserts_and_collects_queries(monkeypatch) -> None:
+def test_runner_batches_inserts_and_collects_queries(capsys) -> None:
     class FakeResult:
         def __init__(self, rows, job_client=None):
             self._rows = rows
@@ -178,11 +153,8 @@ def test_runner_batches_inserts_and_collects_queries(monkeypatch) -> None:
         def get_config(self):
             return self.config
 
-    written = {}
-    monkeypatch.setattr(r, "write_result_table", lambda path, proxy, cols, rows: written.update(path=path, rows=rows))
-
     env = FakeEnv()
-    runner = r.SqlScriptRunner(env, result_table="//tmp/res", yt_proxy="p", row_limit=2)
+    runner = r.SqlScriptRunner(env, row_limit=2)
     runner.run(
         [
             "CREATE TABLE t (n BIGINT) WITH ('connector' = 'datagen')",
@@ -198,7 +170,10 @@ def test_runner_batches_inserts_and_collects_queries(monkeypatch) -> None:
     assert env.statement_set.sql == ["INSERT INTO a SELECT n FROM t", "INSERT INTO b SELECT n FROM t"]
     # CREATE TABLE AS submits a job right away; the batched INSERTs follow at the end of the script.
     assert [getattr(j, "job_client", j) for j in runner.job_results] == ["client", "job"]
-    assert written == {"path": "//tmp/res", "rows": [[1], [2]]}
+    # the query is cut at --row-limit and echoed to the job log
+    err = capsys.readouterr().err
+    assert '"event": "query_result", "row_count": 2, "truncated": true, "columns": ["n"]' in err
+    assert err.endswith("n\n1\n2\n")
 
 
 def test_statement_failed_reports_the_java_cause_chain(capsys) -> None:
@@ -219,7 +194,7 @@ def test_statement_failed_reports_the_java_cause_chain(capsys) -> None:
         def execute_sql(self, s):
             raise Py4JError("long java stack trace")
 
-    runner = r.SqlScriptRunner(Env(), result_table=None, yt_proxy=None, row_limit=1)
+    runner = r.SqlScriptRunner(Env(), row_limit=1)
     with pytest.raises(Py4JError):
         runner.run(["DROP TABLE x"])
     event = json.loads(capsys.readouterr().err.split("FLYT_SQL ", 1)[1])

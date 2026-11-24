@@ -1,21 +1,12 @@
-"""Packaging of SQL scripts into a flyt service project."""
+"""Shipping of the SQL runner and the script as files of the operation."""
 
 from pathlib import Path
 
 from ytsaurus_flyt import sql_runner
-from ytsaurus_flyt.sql_job import SQL_JOB_PACKAGE, build_sql_job_project, upload_sql_script
+from ytsaurus_flyt.sql_job import upload_sql_job
 
 
-def test_build_sql_job_project_holds_only_the_runner(tmp_path: Path) -> None:
-    project = Path(build_sql_job_project(str(tmp_path / "proj")))
-
-    pkg = project / SQL_JOB_PACKAGE
-    assert SQL_JOB_PACKAGE in (project / "pyproject.toml").read_text(encoding="utf-8")
-    assert sorted(p.name for p in pkg.iterdir()) == ["__init__.py", "run.py"]
-    assert (pkg / "run.py").read_text(encoding="utf-8") == Path(sql_runner.__file__).read_text(encoding="utf-8")
-
-
-def test_upload_sql_script_is_a_temporary_operation_file(tmp_path: Path) -> None:
+def test_upload_sql_job_ships_temporary_operation_files(tmp_path: Path) -> None:
     sql = tmp_path / "q.sql"
     sql.write_text("SELECT 1;", encoding="utf-8")
 
@@ -33,8 +24,9 @@ def test_upload_sql_script_is_a_temporary_operation_file(tmp_path: Path) -> None
             self.removed.append(path)
 
     yt = FakeYt()
-    with upload_sql_script(yt, str(sql)) as remote:
-        assert remote.endswith("/script.sql")
-        assert yt.files == {remote: b"SELECT 1;"}
+    with upload_sql_job(yt, str(sql)) as (runner, script):
+        tmp_dir = runner.rsplit("/", 1)[0]
+        assert (runner, script) == (f"{tmp_dir}/sql_runner.py", f"{tmp_dir}/script.sql")
+        assert yt.files == {runner: Path(sql_runner.__file__).read_bytes(), script: b"SELECT 1;"}
         assert yt.removed == []
-    assert yt.removed == [remote.rsplit("/", 1)[0]]
+    assert yt.removed == [tmp_dir]

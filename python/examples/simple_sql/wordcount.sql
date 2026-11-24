@@ -19,8 +19,7 @@ CREATE TABLE word_counts_sink (
     'connector' = 'print'
 );
 
--- A query: rows are collected on the driver and written to --result-table
--- (or echoed to stderr when no table is given).
+-- A query: rows are collected on the driver and echoed to the job log.
 SELECT word, COUNT(*) AS cnt FROM words_source GROUP BY word ORDER BY cnt DESC LIMIT 10;
 
 -- INSERTs are batched into one statement set and submitted as a single job.

@@ -476,24 +476,21 @@ def test_run_sql_script_launches_the_bundled_runner(monkeypatch, tmp_path: Path)
 
     def fake_launch(**kwargs):  # type: ignore[no-untyped-def]
         captured.update(kwargs)
-        captured["project_files"] = sorted(p.name for p in Path(kwargs["source_dir"]).rglob("*") if p.is_file())
 
     monkeypatch.setattr("ytsaurus_flyt.__main__.launch_vanilla_job", fake_launch)
     monkeypatch.setattr("ytsaurus_flyt.__main__.make_yt_client", lambda _p: object())
-    monkeypatch.setattr("ytsaurus_flyt.__main__.proxy_url_from_client", lambda _c: "http://cluster.example:80")
-    monkeypatch.setattr(
-        "ytsaurus_flyt.__main__.upload_sql_script", lambda _c, _path: contextlib.nullcontext("//tmp/s/script.sql")
-    )
+    job_files = ["//tmp/s/sql_runner.py", "//tmp/s/script.sql"]
+    monkeypatch.setattr("ytsaurus_flyt.__main__.upload_sql_job", lambda _c, _path: contextlib.nullcontext(job_files))
 
-    args = ["run", "-d", "--mode", "application", str(sql), "--result-table", "//tmp/r"]
+    args = ["run", "-d", "--mode", "application", str(sql), "--row-limit", "5"]
     result = CliRunner().invoke(cli, args, catch_exceptions=False)
     assert result.exit_code == 0, result.output
-    assert captured["job_command"] == (
-        "flyt_sql_job/run.py ../script.sql --result-table //tmp/r --yt-proxy http://cluster.example:80"
-    )
+    assert captured["job_command"] == "../sql_runner.py ../script.sql --row-limit 5"
     assert captured["config"].is_application_cluster
-    assert captured["config"].extra_file_paths == ["//tmp/s/script.sql"]
-    assert captured["project_files"] == ["__init__.py", "pyproject.toml", "run.py"]
+    # no service wheel: the runner and the script are files of the operation
+    assert captured["config"].extra_file_paths == job_files
+    assert captured["config"].service_name == "flyt_sql_job"
+    assert captured["wheel_path"] is None and captured["source_dir"] is None
 
     result = CliRunner().invoke(cli, ["run", "--wheel", "w.whl", str(sql)])
     assert result.exit_code != 0 and "do not apply to a .sql script" in result.output
