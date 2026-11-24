@@ -11,9 +11,11 @@ import org.apache.flink.configuration.ConfigOptions;
 import org.apache.flink.configuration.ReadableConfig;
 
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.ComplexYtPath;
+import tech.ytsaurus.flyt.connectors.ytsaurus.utils.YtClusterUtils;
 import tech.ytsaurus.flyt.connectors.ytsaurus.utils.YtConfigUtils;
 
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.CLUSTER_PICK_STRATEGY;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.USE_TLS;
 
 public abstract class SimpleClusterPickStrategy implements ClusterPickStrategy {
     protected static final String PERIOD_OPTION_NAME = "period";
@@ -24,6 +26,7 @@ public abstract class SimpleClusterPickStrategy implements ClusterPickStrategy {
     protected boolean open;
     protected ReadableConfig options;
     protected Duration period;
+    protected boolean useTls;
 
     public SimpleClusterPickStrategy(String name) {
         this.name = name;
@@ -34,6 +37,13 @@ public abstract class SimpleClusterPickStrategy implements ClusterPickStrategy {
         this.options = options;
         this.open = true;
         this.period = mandatory(makeOption(PERIOD_OPTION_NAME).durationType().defaultValue(DEFAULT_PERIOD));
+        this.useTls = options.get(USE_TLS);
+    }
+
+    @Override
+    public boolean isAvailable(String cluster) {
+        checkOpen();
+        return YtClusterUtils.isAvailable(cluster, useTls);
     }
 
     @Override

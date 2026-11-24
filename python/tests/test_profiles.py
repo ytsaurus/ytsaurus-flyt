@@ -52,10 +52,7 @@ def test_profile_dict_to_flyt_config():
 
 
 def test_resolve_connection_from_profile():
-    pr, pl, pst = resolve_connection_from_profile({"proxy": "http://x", "pool": "p", "preset": "small"})
-    assert pr == "http://x"
-    assert pl == "p"
-    assert pst == "small"
+    assert resolve_connection_from_profile({"proxy": "http://x", "pool": "p"}) == ("http://x", "p")
 
 
 def test_resolve_effective_profile_name_env(monkeypatch, tmp_path: Path):

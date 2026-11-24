@@ -3,6 +3,9 @@ package tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.reader;
 import java.util.function.Supplier;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import tech.ytsaurus.client.YTsaurusClient;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -15,10 +18,12 @@ import static org.mockito.Mockito.verifyNoInteractions;
 class DirectYtQueuePullerFactoryTest {
     private static final String QUEUE_PATH = "//home/test/queue";
 
-    @Test
-    void getCreatesDistinctNonOwningPullers() throws Exception {
+    @ParameterizedTest
+    @NullSource
+    @ValueSource(strings = "//home/test/consumer")
+    void getCreatesDistinctNonOwningPullers(String consumerPath) throws Exception {
         YTsaurusClient client = mock(YTsaurusClient.class);
-        DirectYtQueuePullerFactory factory = new DirectYtQueuePullerFactory(client, QUEUE_PATH);
+        DirectYtQueuePullerFactory factory = new DirectYtQueuePullerFactory(client, QUEUE_PATH, consumerPath);
 
         YtQueuePuller first = factory.get();
         YtQueuePuller second = factory.get();
@@ -30,6 +35,8 @@ class DirectYtQueuePullerFactoryTest {
         first.close();
         second.close();
         verifyNoInteractions(client);
+        factory.close();
+        verify(client).close();
     }
 
     @Test

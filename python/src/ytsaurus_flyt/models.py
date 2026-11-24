@@ -2,8 +2,9 @@
 
 import re
 from dataclasses import dataclass, field
-from enum import Enum
 from typing import Any, Dict, List, Optional, Union
+
+MIB = 1024 * 1024
 
 
 def parse_memory(memory: Union[str, int]) -> int:
@@ -33,65 +34,16 @@ def parse_memory(memory: Union[str, int]) -> int:
     return value * units[unit]
 
 
-@dataclass(frozen=True)
-class ClusterParams:
-    """Resource parameters for a Flink cluster running in a YT Vanilla operation."""
-
-    cpu: int
-    memory: str
-    max_heap_size: str
-    data_size_per_job: str
-    disk_request_space: str = "10G"
-    disk_request_medium_name: str = "default"
-    off_heap_size: Optional[str] = None
-
-    def data_size_per_job_bytes(self) -> int:
-        return parse_memory(self.data_size_per_job)
-
-    def max_heap_size_bytes(self) -> int:
-        return parse_memory(self.max_heap_size)
-
-    def off_heap_size_bytes(self) -> Optional[int]:
-        return parse_memory(self.off_heap_size) if self.off_heap_size else None
-
-    def disk_request_space_bytes(self) -> int:
-        return parse_memory(self.disk_request_space)
-
-    def memory_bytes(self) -> int:
-        return parse_memory(self.memory)
-
-
-class ClusterPreset(Enum):
-    """Pre-defined resource presets for Flink clusters."""
-
-    MICRO = ClusterParams(
-        cpu=2,
-        memory="4G",
-        max_heap_size="2324M",
-        data_size_per_job="500M",
-    )
-    SMALL = ClusterParams(
-        cpu=2,
-        memory="8G",
-        max_heap_size="4648M",
-        data_size_per_job="1G",
-    )
-    LARGE = ClusterParams(
-        cpu=4,
-        memory="16G",
-        max_heap_size="9296M",
-        data_size_per_job="2G",
-    )
-    XLARGE = ClusterParams(
-        cpu=8,
-        memory="32G",
-        max_heap_size="24G",
-        data_size_per_job="2G",
-    )
-
-    @property
-    def params(self) -> ClusterParams:
-        return self.value
+# Application-mode JobManager defaults: its load barely depends on the job (dispatcher, REST, blob
+# server, plan compilation). Its options are jobmanager.memory.process.size and flyt.jobmanager.cpu.cores.
+DEFAULT_JOBMANAGER_CPU = 2
+DEFAULT_JOBMANAGER_PROCESS_MEMORY = parse_memory("2560M")
+# The YT container is process.size, so Flink's jvm-overhead holds the JVM's native memory and every process
+# outside the JVM; measured ~360m on a TaskManager, ~240m on a JobManager.
+JVM_OVERHEAD_MIN = parse_memory("512M")
+# A TaskManager, or the MiniCluster job, the Flink configuration does not size.
+DEFAULT_TASKMANAGER_CPU = 2
+DEFAULT_TASKMANAGER_PROCESS_MEMORY = parse_memory("4G")
 
 
 @dataclass
@@ -104,11 +56,3 @@ class OperationParams:
     description: Optional[str] = None
     max_failed_job_count: Optional[int] = None
     acl: Optional[List[Dict[str, Any]]] = None
-
-
-@dataclass
-class JobmanagerParams:
-    """Parameters for the Flink JobManager task in a Vanilla operation."""
-
-    cpu: int = 2
-    memory: int = parse_memory("4G")

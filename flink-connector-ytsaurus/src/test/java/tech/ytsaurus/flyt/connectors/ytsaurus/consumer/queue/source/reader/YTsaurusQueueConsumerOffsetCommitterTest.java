@@ -99,21 +99,23 @@ class YTsaurusQueueConsumerOffsetCommitterTest {
     }
 
     @Test
-    void advancementFailureFailsCheckpointAndDoesNotCommitTransaction() {
+    void partialAdvancementFailureFailsTaskAndDoesNotCommitTransaction() {
         ApiServiceClient client = mock(ApiServiceClient.class);
         ApiServiceTransaction transaction = mock(ApiServiceTransaction.class);
         when(client.startTransaction(any(StartTransaction.class))).thenReturn(
                 CompletableFuture.completedFuture(transaction));
-        when(transaction.advanceConsumer(any(AdvanceConsumer.class))).thenReturn(
-                CompletableFuture.failedFuture(new IOException("advance failed")));
+        when(transaction.advanceConsumer(any(AdvanceConsumer.class)))
+                .thenReturn(CompletableFuture.completedFuture(null))
+                .thenReturn(CompletableFuture.failedFuture(new IOException("advance failed")));
         YTsaurusQueueConsumerOffsetCommitter committer = committer(client);
-        committer.snapshotState(1, List.of(split("queue-id", 0, 10)));
+        committer.snapshotState(1, List.of(split("queue-id", 0, 10), split("queue-id", 1, 20)));
 
         assertThatThrownBy(() -> committer.notifyCheckpointComplete(1))
                 .isInstanceOf(IOException.class)
                 .hasMessage("advance failed");
 
         verify(transaction, never()).commit();
+        verify(transaction, times(2)).advanceConsumer(any(AdvanceConsumer.class));
         verify(transaction).close();
     }
 

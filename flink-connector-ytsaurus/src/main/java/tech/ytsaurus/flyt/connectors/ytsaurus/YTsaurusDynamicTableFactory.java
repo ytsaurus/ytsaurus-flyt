@@ -1,7 +1,5 @@
 package tech.ytsaurus.flyt.connectors.ytsaurus;
 
-import java.time.Duration;
-import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -39,8 +37,6 @@ import org.apache.flink.table.functions.LookupFunction;
 import org.apache.flink.table.types.DataType;
 import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.RowType;
-import org.apache.flink.util.concurrent.ExponentialBackoffRetryStrategy;
-import org.apache.flink.util.concurrent.FixedRetryStrategy;
 import org.apache.flink.util.concurrent.RetryStrategy;
 import org.apache.flink.util.function.SerializableSupplier;
 import tech.ytsaurus.core.tables.TableSchema;
@@ -90,6 +86,7 @@ import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.P
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.PRIMARY_MEDIUM;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.PROXY;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.PROXY_ROLE;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.USE_TLS;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.RESHARD_LAST_PARTITIONS_COUNT;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.RESHARD_STRATEGY;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.RESHARD_TABLET_COUNT;
@@ -107,6 +104,7 @@ import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.Y
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.YT_TOKEN_OPTION;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.YT_USERNAME_OPTION;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtTableAttributes.CUSTOM_ATTRIBUTES_PREFIX;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.utils.RetryUtils.getRetryStrategy;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.utils.YtConfigUtils.getPathMap;
 import static tech.ytsaurus.flyt.locks.api.LockConfigOptions.LOCKS_OPTIONS_PREFIX;
 
@@ -173,6 +171,7 @@ public class YTsaurusDynamicTableFactory implements DynamicTableSinkFactory, Dyn
                 .eagerInitialization(options.get(EAGER_INITIALIZATION))
                 .reshardingConfig(reshardingConfig)
                 .ytWriterOptions(ytWriterOptions)
+                .useTls(options.get(USE_TLS))
                 .dataMetricsConfig(dataMetricsConfig)
                 .build();
     }
@@ -230,6 +229,7 @@ public class YTsaurusDynamicTableFactory implements DynamicTableSinkFactory, Dyn
                 .lookupMethod(options.get(LOOKUP_METHOD))
                 .retryStrategy(getRetryStrategy(options))
                 .options(options)
+                .useTls(options.get(USE_TLS))
                 .build();
     }
 
@@ -280,6 +280,7 @@ public class YTsaurusDynamicTableFactory implements DynamicTableSinkFactory, Dyn
                 ROWS_IN_TRANSACTION_LIMIT,
                 MOUNT_MODE,
                 PROXY_ROLE,
+                USE_TLS,
                 TRANSACTION_ATOMICITY,
                 YT_CUSTOM_ATTRIBUTES,
                 FactoryUtil.SINK_PARALLELISM,
@@ -482,23 +483,6 @@ public class YTsaurusDynamicTableFactory implements DynamicTableSinkFactory, Dyn
         return cacheBuilder;
     }
 
-    private SerializableSupplier<RetryStrategy> getRetryStrategy(ReadableConfig options) {
-        tech.ytsaurus.flyt.connectors.ytsaurus.common.RetryStrategy retryStrategy =
-                options.get(RETRY_STRATEGY);
-        switch (retryStrategy) {
-            case EXPONENTIAL:
-                return () -> new ExponentialBackoffRetryStrategy(
-                        5,
-                        Duration.of(10, ChronoUnit.SECONDS),
-                        Duration.of(2, ChronoUnit.MINUTES)
-                );
-            case NO_RETRY:
-                return () -> new FixedRetryStrategy(0, Duration.ZERO);
-            default:
-                throw new IllegalArgumentException("Unknown retry strategy type: " + retryStrategy);
-        }
-    }
-
     private ReshardingConfig getReshardingConfig(ReadableConfig options) {
         ReshardStrategy reshardStrategy = options.get(RESHARD_STRATEGY);
         if (reshardStrategy == ReshardStrategy.NONE) {
@@ -520,4 +504,3 @@ public class YTsaurusDynamicTableFactory implements DynamicTableSinkFactory, Dyn
                 .build();
     }
 }
-

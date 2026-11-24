@@ -16,7 +16,15 @@ import org.apache.flink.configuration.Configuration;
 import org.apache.flink.connector.testutils.source.reader.TestingReaderContext;
 import org.apache.flink.connector.testutils.source.reader.TestingReaderOutput;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+import tech.ytsaurus.client.ApiServiceClient;
+import tech.ytsaurus.client.ApiServiceTransaction;
+import tech.ytsaurus.client.request.AdvanceConsumer;
+import tech.ytsaurus.client.request.PullConsumer;
+import tech.ytsaurus.client.request.StartTransaction;
+import tech.ytsaurus.client.rows.QueueRowset;
 import tech.ytsaurus.client.rows.UnversionedRow;
+import tech.ytsaurus.client.rows.UnversionedRowset;
 import tech.ytsaurus.core.tables.TableSchema;
 
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.YtQueueRecordDeserializer;
@@ -27,9 +35,77 @@ import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.split.YtQueu
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.YtQueueTestFixtures.split;
 
 class YtQueueSourceReaderTest {
+    @Test
+    void consumerCommitsEmittedSnapshotAndRestoresItsOffsetEvenAfterLaterCommit() throws Exception {
+        ApiServiceClient client = mock(ApiServiceClient.class);
+        ApiServiceTransaction transaction = mock(ApiServiceTransaction.class);
+        when(client.startTransaction(any(StartTransaction.class)))
+                .thenReturn(CompletableFuture.completedFuture(transaction));
+        when(transaction.advanceConsumer(any(AdvanceConsumer.class)))
+                .thenReturn(CompletableFuture.completedFuture(null));
+        when(transaction.commit()).thenReturn(CompletableFuture.completedFuture(null));
+        when(client.pullConsumer(any()))
+                .thenReturn(CompletableFuture.completedFuture(new QueueRowset(
+                        new UnversionedRowset(queueSchema(), List.of(queueRow(), queueRow(), queueRow())), 1)))
+                .thenAnswer(ignored -> new CompletableFuture<QueueRowset>());
+        List<YtQueueSplit> checkpoint;
+        try (YtQueueSourceReader<String> reader = consumerReader(client)) {
+            reader.addSplits(List.of(split("queue-id", 0, 1)));
+            reader.isAvailable().get(2, TimeUnit.SECONDS);
+            TestingReaderOutput<String> output = new TestingReaderOutput<>();
+            reader.pollNext(output);
+            checkpoint = reader.snapshotState(1);
+            reader.pollNext(output);
+            reader.snapshotState(2);
+
+            reader.notifyCheckpointComplete(1);
+            reader.notifyCheckpointComplete(2);
+
+            ArgumentCaptor<AdvanceConsumer> advances = ArgumentCaptor.forClass(AdvanceConsumer.class);
+            verify(transaction, times(2)).advanceConsumer(advances.capture());
+            assertThat(advances.getAllValues()).extracting("newOffset").containsExactly(2L, 3L);
+            assertThat(checkpoint).extracting(YtQueueSplit::getNextOffset).containsExactly(2L);
+            assertThat(output.getEmittedRecords()).hasSize(2);
+        }
+
+        ApiServiceClient restoredClient = mock(ApiServiceClient.class);
+        when(restoredClient.pullConsumer(any()))
+                .thenReturn(CompletableFuture.completedFuture(new QueueRowset(
+                        new UnversionedRowset(queueSchema(), List.of(queueRow())), 2)))
+                .thenAnswer(ignored -> new CompletableFuture<QueueRowset>());
+        try (YtQueueSourceReader<String> restored = consumerReader(restoredClient)) {
+            restored.addSplits(checkpoint);
+            restored.isAvailable().get(2, TimeUnit.SECONDS);
+            TestingReaderOutput<String> output = new TestingReaderOutput<>();
+            restored.pollNext(output);
+
+            ArgumentCaptor<PullConsumer> pulls = ArgumentCaptor.forClass(PullConsumer.class);
+            verify(restoredClient, atLeastOnce()).pullConsumer(pulls.capture());
+            assertThat(pulls.getAllValues().get(0).getArgumentsLogString()).contains("offset: 2");
+            assertThat(output.getEmittedRecords()).containsExactly("record");
+            assertThat(restored.snapshotState(3)).extracting(YtQueueSplit::getNextOffset).containsExactly(3L);
+        }
+    }
+
+    private static YtQueueSourceReader<String> consumerReader(ApiServiceClient client) throws Exception {
+        return new YtQueueSourceReader<>(
+                () -> new DirectYtQueuePuller(client, "//home/test/queue", "//home/test/consumer"),
+                (row, schema) -> "record",
+                readerOptions(),
+                new Configuration(),
+                new TestingReaderContext(),
+                new YTsaurusQueueConsumerOffsetCommitter(client, "//home/test/consumer", "//home/test/queue"));
+    }
+
     @Test
     void snapshotAdvancesOnlyThroughEmittedPartOfFetchedBatch() throws Exception {
         TableSchema schema = queueSchema();

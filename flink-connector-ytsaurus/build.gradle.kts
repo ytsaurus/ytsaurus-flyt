@@ -17,6 +17,7 @@ dependencies {
     implementation(project(":locks-api"))
     implementation(project(":locks-noop"))
     api(project(":flink-connector-data-metrics"))
+    implementation("com.github.ben-manes.caffeine:caffeine:3.2.4")
     api("tech.ytsaurus:ytsaurus-client:1.2.12")
     implementation(project(":flink-yson-fast-adapter"))
     implementation("jakarta.annotation:jakarta.annotation-api:1.3.5")
@@ -43,6 +44,7 @@ dependencies {
     testImplementation("org.apache.flink:flink-table-common:1.20.1")
     testImplementation("org.apache.flink:flink-table-runtime:1.20.1")
     testImplementation("org.apache.flink:flink-shaded-guava:31.1-jre-17.0")
+    testRuntimeOnly("org.apache.flink:flink-json:1.20.1")
 
     testImplementation("org.slf4j:slf4j-log4j12:2.0.17")
     testImplementation("org.mockito:mockito-inline:5.1.1")

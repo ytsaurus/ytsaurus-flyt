@@ -4,7 +4,6 @@ proxy: "http://localhost:50005"
 yt_ui_base_url: "http://localhost:50004"
 
 pool: "default"
-preset: "micro"
 
 cypress_base_path: "//home/flyt/clusters/simple-wordcount"
 squashfs_layer_delivery: "sandbox_unpack"

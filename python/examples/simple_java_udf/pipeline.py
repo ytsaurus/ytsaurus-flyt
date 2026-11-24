@@ -15,9 +15,6 @@ def main():
     settings = EnvironmentSettings.new_instance().in_streaming_mode().build()
     t_env = StreamTableEnvironment.create(env, environment_settings=settings)
 
-    t_env.get_config().set("rest.port", "27050")
-    t_env.get_config().set("rest.bind-address", "0.0.0.0")
-
     t_env.execute_sql("""
         CREATE TABLE words_source (word STRING) WITH (
             'connector' = 'datagen',

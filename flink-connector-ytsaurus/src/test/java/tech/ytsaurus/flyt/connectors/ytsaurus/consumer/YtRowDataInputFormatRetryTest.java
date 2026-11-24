@@ -258,7 +258,8 @@ class YtRowDataInputFormatRetryTest {
                 new IdDeserializer(),
                 TypeInformation.of(RowData.class),
                 new StubCredentialsProvider(),
-                retryStrategy) {
+                retryStrategy,
+                false) {
             private static final long serialVersionUID = 1L;
 
             @Override

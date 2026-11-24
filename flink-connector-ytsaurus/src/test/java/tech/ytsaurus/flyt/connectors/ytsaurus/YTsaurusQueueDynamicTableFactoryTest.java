@@ -80,6 +80,15 @@ class YTsaurusQueueDynamicTableFactoryTest {
     }
 
     @Test
+    void createsSourceWithUseTls() {
+        Map<String, String> options = validSqlOptions();
+        assertThat(createSource(options)).extracting("useTls").isEqualTo(false);
+
+        options.put("use-tls", "true");
+        assertThat(createSource(options)).extracting("useTls").isEqualTo(true);
+    }
+
+    @Test
     void createsSourceWithLatestStartupMode() {
         Map<String, String> options = validSqlOptions();
         options.put("scan.startup.mode", "LATEST");
@@ -91,21 +100,22 @@ class YTsaurusQueueDynamicTableFactoryTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"ROW", "COLUMN"})
-    void passesConsumerPathToRuntimeAndCopiedSource(String readMode) {
+    @CsvSource({"ROW, false", "ROW, true", "COLUMN, false", "COLUMN, true"})
+    void passesConsumerPathAndTlsToRuntimeAndCopiedSource(String readMode, boolean useTls) {
         Map<String, String> options = validSqlOptions();
         options.put("consumer-path", "//home/test/consumer");
         options.put("scan.read-mode", readMode);
+        options.put("use-tls", Boolean.toString(useTls));
 
         DynamicTableSource source = createSource(options);
 
         for (DynamicTableSource current : List.of(source, source.copy())) {
-            assertThat(current).extracting("consumerPath")
-                    .isEqualTo("//home/test/consumer");
+            assertThat(current).extracting("consumerPath", "useTls")
+                    .containsExactly("//home/test/consumer", useTls);
             assertThat(runtimeProvider(current).createSource())
                     .isInstanceOf(YtQueueSource.class)
-                    .extracting("consumerPath")
-                    .isEqualTo("//home/test/consumer");
+                    .extracting("consumerPath", "useTls")
+                    .containsExactly("//home/test/consumer", useTls);
         }
     }
 
@@ -347,7 +357,7 @@ class YTsaurusQueueDynamicTableFactoryTest {
     @Test
     void rejectsBlankRequiredValuesAndNonPositiveParallelism() {
         Configuration options = new Configuration();
-        options.setString("proxy", "hahn");
+        options.setString("proxy", "localhost:9013");
         options.setString("path", " ");
         options.setString("credentials-source", "env");
 

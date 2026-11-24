@@ -31,7 +31,6 @@ import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.enumerator.i
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.enumerator.initializer.YtQueueOffsetInitializer;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.enumerator.metadata.YTsaurusQueueMetadataProvider;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.enumerator.metadata.YtQueueMetadataProvider;
-import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.reader.ConsumerYtQueuePullerFactory;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.reader.DirectYtQueuePullerFactory;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.reader.YTsaurusQueueConsumerOffsetCommitter;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.reader.YtQueueOffsetCommitter;
@@ -41,6 +40,7 @@ import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.split.YtQueu
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.split.YtQueueSplitSerializer;
 import tech.ytsaurus.flyt.connectors.ytsaurus.utils.YtUtils;
 
+import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.USE_TLS;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.ASYNC_BUFFER_CAPACITY;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.ASYNC_WORKER_COUNT;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.MAX_DATA_WEIGHT;
@@ -79,6 +79,8 @@ public final class YtQueueSource<T>
 
     private final long discoveryIntervalMillis;
 
+    private final boolean useTls;
+
     @SuppressWarnings("checkstyle:ParameterNumber")
     private YtQueueSource(
             String proxy,
@@ -91,7 +93,8 @@ public final class YtQueueSource<T>
             @Nullable List<Long> specificOffsets,
             YtQueueTrimmedOffsetPolicy trimmedOffsetPolicy,
             YtQueueReaderOptions readerOptions,
-            Duration discoveryInterval) {
+            Duration discoveryInterval,
+            boolean useTls) {
         this.proxy = requireNonBlank(proxy, "proxy");
         this.queuePath = requireNonBlank(queuePath, "queuePath");
         this.consumerPath = consumerPath == null
@@ -105,6 +108,7 @@ public final class YtQueueSource<T>
         this.trimmedOffsetPolicy = trimmedOffsetPolicy;
         this.readerOptions = Objects.requireNonNull(readerOptions, "readerOptions");
         this.discoveryIntervalMillis = requirePositiveMilliseconds(discoveryInterval, "discoveryInterval");
+        this.useTls = useTls;
         validateSpecificOffsets(startupMode, specificOffsets);
     }
 
@@ -143,16 +147,10 @@ public final class YtQueueSource<T>
         YtQueuePullerFactory pullerFactory = null;
         YtQueueOffsetCommitter offsetCommitter = null;
         try {
-            if (consumerPath == null) {
-                pullerFactory = new DirectYtQueuePullerFactory(client, queuePath);
-                offsetCommitter = YtQueueOffsetCommitter.noOp();
-            } else {
-                pullerFactory = new ConsumerYtQueuePullerFactory(client, consumerPath, queuePath);
-                offsetCommitter = new YTsaurusQueueConsumerOffsetCommitter(
-                        client,
-                        consumerPath,
-                        queuePath);
-            }
+            pullerFactory = new DirectYtQueuePullerFactory(client, queuePath, consumerPath);
+            offsetCommitter = consumerPath == null
+                    ? YtQueueOffsetCommitter.noOp()
+                    : new YTsaurusQueueConsumerOffsetCommitter(client, consumerPath, queuePath);
             return new YtQueueSourceReader<>(
                     pullerFactory,
                     recordDeserializer,
@@ -236,7 +234,7 @@ public final class YtQueueSource<T>
     }
 
     private YTsaurusClient createClient() {
-        return YtUtils.makeYtClient(proxy, credentialsProvider.getCredentials(proxy));
+        return YtUtils.makeYtClient(proxy, credentialsProvider.getCredentials(proxy), useTls);
     }
 
     private YtQueueOffsetInitializer createConsumerOffsetInitializer() {
@@ -322,6 +320,8 @@ public final class YtQueueSource<T>
         private YtQueueReaderOptions readerOptions;
 
         private Duration discoveryInterval = PARTITION_DISCOVERY_INTERVAL.defaultValue();
+
+        private boolean useTls = USE_TLS.defaultValue();
 
         public Builder<T> proxy(String proxy) {
             this.proxy = proxy;
@@ -414,6 +414,12 @@ public final class YtQueueSource<T>
             return this;
         }
 
+        /** Connect to YT proxies over HTTPS only. */
+        public Builder<T> useTls(boolean useTls) {
+            this.useTls = useTls;
+            return this;
+        }
+
         public YtQueueSource<T> build() {
             if (consumerPath != null && (startupModeConfigured || specificOffsets != null)) {
                 throw new IllegalArgumentException(
@@ -439,7 +445,8 @@ public final class YtQueueSource<T>
                     specificOffsets,
                     trimmedOffsetPolicy,
                     resolvedReaderOptions,
-                    discoveryInterval);
+                    discoveryInterval,
+                    useTls);
         }
     }
 }

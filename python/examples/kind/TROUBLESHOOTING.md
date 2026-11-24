@@ -165,6 +165,12 @@ pids_limit = 16384
 
 in `~/.config/containers/containers.conf`, then recreate the Kind node or cluster.
 
+Without recreating anything, raise the limit on the running Kind node (persisted in the container config, survives `podman machine` restarts):
+
+```bash
+podman update --pids-limit 16384 flyt-local-control-plane
+```
+
 ## When in doubt
 
 This blunt reset fixed most partial failures on this setup:

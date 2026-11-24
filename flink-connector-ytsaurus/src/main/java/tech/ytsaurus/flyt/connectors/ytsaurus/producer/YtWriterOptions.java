@@ -2,7 +2,6 @@ package tech.ytsaurus.flyt.connectors.ytsaurus.producer;
 
 import java.io.Serializable;
 import java.time.Duration;
-import java.time.temporal.ChronoUnit;
 
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
@@ -19,8 +18,14 @@ public class YtWriterOptions implements Serializable {
     private static final long serialVersionUID = 1L;
 
     public static final int ROWS_LIMIT = 100_000;
+    public static final int DEFAULT_ROWS_IN_MODIFICATION_LIMIT = 1_000;
+    public static final int DEFAULT_ROWS_IN_TRANSACTION_LIMIT = 99_000;
 
     public static final Atomicity DEFAULT_ATOMICITY = Atomicity.Full;
+
+    public static final Duration DEFAULT_FLUSH_MODIFICATION_PERIOD = Duration.ofSeconds(1);
+    public static final Duration DEFAULT_COMMIT_TRANSACTION_PERIOD = Duration.ofSeconds(10);
+    public static final Duration DEFAULT_TRANSACTION_TIMEOUT = Duration.ofMinutes(5);
 
     private Duration commitTransactionPeriod;
     private Duration flushModificationPeriod;
@@ -59,11 +64,11 @@ public class YtWriterOptions implements Serializable {
 
     @Slf4j
     public static class YtWriterOptionsBuilder {
-        private Duration commitTransactionPeriod = Duration.of(10, ChronoUnit.SECONDS);
-        private Duration flushModificationPeriod = Duration.of(1, ChronoUnit.SECONDS);
-        private Duration transactionTimeout = Duration.of(5, ChronoUnit.MINUTES);
-        private int rowsInTransactionLimit = 99_000;
-        private int rowsInModificationLimit = 1_000;
+        private Duration commitTransactionPeriod = DEFAULT_COMMIT_TRANSACTION_PERIOD;
+        private Duration flushModificationPeriod = DEFAULT_FLUSH_MODIFICATION_PERIOD;
+        private Duration transactionTimeout = DEFAULT_TRANSACTION_TIMEOUT;
+        private int rowsInTransactionLimit = DEFAULT_ROWS_IN_TRANSACTION_LIMIT;
+        private int rowsInModificationLimit = DEFAULT_ROWS_IN_MODIFICATION_LIMIT;
         private MountMode mountMode = MountMode.ALWAYS;
         private Atomicity atomicity = DEFAULT_ATOMICITY;
         private LocksConfig locksConfig = new LocksConfig("noop", new Configuration());

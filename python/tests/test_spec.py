@@ -1,16 +1,8 @@
 """Tests for Vanilla spec assembly and run-script selection."""
 
 from ytsaurus_flyt.config import FlytConfig
-from ytsaurus_flyt.models import ClusterPreset, JobmanagerParams, OperationParams
-from ytsaurus_flyt.spec import _build_run_script, build_vanilla_operation_spec
-
-
-def _jobmanager_from_preset() -> JobmanagerParams:
-    cp = ClusterPreset.MICRO.params
-    return JobmanagerParams(
-        cpu=cp.cpu,
-        memory=cp.memory_bytes(),
-    )
+from ytsaurus_flyt.models import OperationParams
+from ytsaurus_flyt.spec import MINICLUSTER_TASK, _build_run_script, build_vanilla_operation_spec, resolve_flink_cluster
 
 
 def test_build_run_script_squashfs_unpack_includes_unpack_fragment():
@@ -20,11 +12,12 @@ def test_build_run_script_squashfs_unpack_includes_unpack_fragment():
         cfg,
         "svc",
         use_squashfs_sandbox_unpack=True,
+        flink_config={},
     )
-    assert "00_unpack_runtime_squashfs.sh" in script
-    assert script.index("00_set_essentials.sh") < script.index("00_unpack_runtime_squashfs.sh")
-    assert "21_prepare_libs.sh" in script
-    assert script.index("01_prepare_squashfs.sh") < script.index("21_prepare_libs.sh")
+    assert "common/01_unpack_runtime_squashfs.sh" in script
+    assert script.index("common/00_set_essentials.sh") < script.index("common/01_unpack_runtime_squashfs.sh")
+    assert "common/03_prepare_libs.sh" in script
+    assert script.index("common/02_prepare_squashfs.sh") < script.index("common/03_prepare_libs.sh")
 
 
 def test_build_run_script_uses_set_for_job_args():
@@ -34,6 +27,7 @@ def test_build_run_script_uses_set_for_job_args():
         cfg,
         "svc",
         use_squashfs_sandbox_unpack=False,
+        flink_config={},
     )
     assert "set --" in script
     assert "pipeline.py" in script
@@ -46,11 +40,12 @@ def test_build_run_script_squashfs_layer_paths_skips_unpack():
         cfg,
         "svc",
         use_squashfs_sandbox_unpack=False,
+        flink_config={},
     )
-    assert "00_unpack_runtime_squashfs.sh" not in script
-    assert "01_prepare_squashfs.sh" in script
-    assert "21_prepare_libs.sh" in script
-    assert script.index("01_prepare_squashfs.sh") < script.index("21_prepare_libs.sh")
+    assert "common/01_unpack_runtime_squashfs.sh" not in script
+    assert "common/02_prepare_squashfs.sh" in script
+    assert "common/03_prepare_libs.sh" in script
+    assert script.index("common/02_prepare_squashfs.sh") < script.index("common/03_prepare_libs.sh")
 
 
 def test_build_vanilla_operation_spec_layer_paths_and_tmpfs():
@@ -60,18 +55,17 @@ def test_build_vanilla_operation_spec_layer_paths_and_tmpfs():
         layer_paths=["//home/layers/runtime.squashfs"],
         pool="pool",
     )
-    jm = _jobmanager_from_preset()
     builder = build_vanilla_operation_spec(
         title="x",
         job_command="p.py",
         config=config,
         operation_params=op,
-        jobmanager_params=jm,
+        cluster=resolve_flink_cluster(config),
         secure_vault={},
         use_squashfs_sandbox_unpack=False,
     )
     spec = builder.build()
-    task = spec["tasks"]["flink"]
+    task = spec["tasks"][MINICLUSTER_TASK]
     assert task["layer_paths"] == ["//home/layers/runtime.squashfs"]
     assert "//tmp/wheel.whl" in task["file_paths"]
     assert "tmpfs_path" in task
@@ -84,18 +78,17 @@ def test_build_vanilla_operation_spec_sandbox_unpack_no_layer_paths_in_task():
         layer_paths=[],
         pool="pool",
     )
-    jm = _jobmanager_from_preset()
     builder = build_vanilla_operation_spec(
         title="x",
         job_command="p.py",
         config=config,
         operation_params=op,
-        jobmanager_params=jm,
+        cluster=resolve_flink_cluster(config),
         secure_vault={},
         use_squashfs_sandbox_unpack=True,
     )
     spec = builder.build()
-    task = spec["tasks"]["flink"]
+    task = spec["tasks"][MINICLUSTER_TASK]
     assert "layer_paths" not in task
     assert task["file_paths"] == ["//layer.squashfs", "//tool", "//wheel.whl"]
 
@@ -103,54 +96,38 @@ def test_build_vanilla_operation_spec_sandbox_unpack_no_layer_paths_in_task():
 def test_build_vanilla_operation_spec_environment_no_hardcoded_flink_paths():
     config = FlytConfig(service_name="t", java_home="/jdk", python_bin="/py")
     op = OperationParams(file_paths=[], pool="pool")
-    jm = _jobmanager_from_preset()
     builder = build_vanilla_operation_spec(
         title="x",
         job_command="p.py",
         config=config,
         operation_params=op,
-        jobmanager_params=jm,
+        cluster=resolve_flink_cluster(config),
         secure_vault={},
     )
     spec = builder.build()
-    env = spec["tasks"]["flink"]["environment"]
+    env = spec["tasks"][MINICLUSTER_TASK]["environment"]
     assert env["JAVA_HOME"] == "/jdk"
     assert "FLINK_HOME" not in env
     assert "FLINK_LIB_DIR" not in env
     assert env["YT_ALLOW_HTTP_REQUESTS_TO_YT_FROM_JOB"] == "1"
 
 
-def test_build_vanilla_operation_spec_java_opts_heap_only():
+def test_build_vanilla_operation_spec_java_opts_in_config_yaml():
     config = FlytConfig(service_name="t", java_home="/jdk", python_bin="/py")
     op = OperationParams(file_paths=[], pool="pool")
-    jm = _jobmanager_from_preset()
     builder = build_vanilla_operation_spec(
         title="x",
         job_command="p.py",
         config=config,
         operation_params=op,
-        jobmanager_params=jm,
         secure_vault={},
-        max_heap_size_str="14G",
+        cluster=resolve_flink_cluster(config),
     )
-    env = builder.build()["tasks"]["flink"]["environment"]
-    # MICRO preset -> cpu=2, so ActiveProcessorCount is pinned to 2.
-    assert env["FLINK_ENV_JAVA_OPTS"] == "-Xmx14G -XX:ActiveProcessorCount=2"
-
-
-def test_build_vanilla_operation_spec_java_opts_with_off_heap():
-    config = FlytConfig(service_name="t", java_home="/jdk", python_bin="/py")
-    op = OperationParams(file_paths=[], pool="pool")
-    jm = _jobmanager_from_preset()
-    builder = build_vanilla_operation_spec(
-        title="x",
-        job_command="p.py",
-        config=config,
-        operation_params=op,
-        jobmanager_params=jm,
-        secure_vault={},
-        max_heap_size_str="14G",
-        off_heap_size_str="8G",
+    task = builder.build()["tasks"][MINICLUSTER_TASK]
+    # The gateway ignores config.yaml's env.java.* when FLINK_ENV_JAVA_OPTS is set.
+    assert "FLINK_ENV_JAVA_OPTS" not in task["environment"]
+    # flyt's default cpu=2 pins ActiveProcessorCount to 2.
+    assert (
+        "env.java.default-opts.all: -XX:ActiveProcessorCount=2 -XX:+ExitOnOutOfMemoryError "
+        "-Djava.net.preferIPv6Addresses=true" in task["command"]
     )
-    env = builder.build()["tasks"]["flink"]["environment"]
-    assert env["FLINK_ENV_JAVA_OPTS"] == ("-Xmx14G -XX:MaxDirectMemorySize=8G -XX:ActiveProcessorCount=2")
