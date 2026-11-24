@@ -50,8 +50,7 @@ class YtQueueSinkWriter implements SinkWriter<RowData> {
 
     private YTsaurusClient client;
     private YtBufferedTransactionWriter writer;
-    private final Object lock = new Object();
-    private volatile boolean closed;
+    private boolean closed;
     private IOException failure;
 
     @SuppressWarnings("checkstyle:ParameterNumber")
@@ -155,20 +154,18 @@ class YtQueueSinkWriter implements SinkWriter<RowData> {
 
     @Override
     public void write(RowData value, Context context) throws IOException {
-        synchronized (lock) {
-            checkFailure();
-            if (closed) {
-                throw new IllegalStateException("Queue sink is closed");
-            }
-            if (value == null || value.getRowKind() != RowKind.INSERT) {
-                throw new IllegalArgumentException("The 'ytsaurus-queue' sink accepts only INSERT rows");
-            }
-            Map<String, ?> row = serialize(value);
-            try {
-                writer.write(() -> row);
-            } catch (Exception e) {
-                throw recordFailure(e);
-            }
+        checkFailure();
+        if (closed) {
+            throw new IllegalStateException("Queue sink is closed");
+        }
+        if (value == null || value.getRowKind() != RowKind.INSERT) {
+            throw new IllegalArgumentException("The 'ytsaurus-queue' sink accepts only INSERT rows");
+        }
+        Map<String, ?> row = serialize(value);
+        try {
+            writer.write(() -> row);
+        } catch (Exception e) {
+            throw recordFailure(e);
         }
     }
 
@@ -199,14 +196,12 @@ class YtQueueSinkWriter implements SinkWriter<RowData> {
 
     @Override
     public void flush(boolean endOfInput) throws IOException {
-        synchronized (lock) {
-            checkFailure();
-            if (!closed && writer.isBusy()) {
-                try {
-                    writer.flush();
-                } catch (Exception e) {
-                    throw recordFailure(e);
-                }
+        checkFailure();
+        if (!closed && writer.isBusy()) {
+            try {
+                writer.flush();
+            } catch (Exception e) {
+                throw recordFailure(e);
             }
         }
     }
@@ -249,41 +244,39 @@ class YtQueueSinkWriter implements SinkWriter<RowData> {
     }
 
     @Override
-    public synchronized void close() throws Exception {
+    public void close() throws Exception {
         if (closed) {
             return;
         }
         closed = true;
-        synchronized (lock) {
-            List<Exception> errors = new ArrayList<>();
-            if (writer != null) {
-                try {
-                    writer.closeAsyncTasks();
-                } catch (Exception e) {
-                    errors.add(e);
-                }
-            }
+        List<Exception> errors = new ArrayList<>();
+        if (writer != null) {
             try {
-                if (client != null) {
-                    YTsaurusClient currentClient = client;
-                    client = null;
-                    currentClient.close();
-                }
+                writer.closeAsyncTasks();
             } catch (Exception e) {
                 errors.add(e);
-            } finally {
-                if (writer != null) {
-                    writer.clearMetrics();
-                    writer = null;
-                }
             }
-            if (!errors.isEmpty()) {
-                Exception first = errors.get(0);
-                for (int i = 1; i < errors.size(); i++) {
-                    first.addSuppressed(errors.get(i));
-                }
-                throw first;
+        }
+        try {
+            if (client != null) {
+                YTsaurusClient currentClient = client;
+                client = null;
+                currentClient.close();
             }
+        } catch (Exception e) {
+            errors.add(e);
+        } finally {
+            if (writer != null) {
+                writer.clearMetrics();
+                writer = null;
+            }
+        }
+        if (!errors.isEmpty()) {
+            Exception first = errors.get(0);
+            for (int i = 1; i < errors.size(); i++) {
+                first.addSuppressed(errors.get(i));
+            }
+            throw first;
         }
     }
 }
