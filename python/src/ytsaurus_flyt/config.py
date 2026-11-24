@@ -99,7 +99,8 @@ class FlytConfig:
     """Additional YT file paths to include in the operation (configs, etc.)."""
 
     runtime_python_packages: List[str] = field(default_factory=list)
-    """Package specs for the SquashFS layer build only (e.g. ``apache-flink==1.20.1``)."""
+    """Package specs for the SquashFS layer build only (e.g. ``apache-flink==1.20.1``); flyt adds its own
+    system packages (``layer_builder.SYSTEM_RUNTIME_PACKAGES``) unless listed here."""
 
     runtime_python_version: str = ""
     """Python ABI for the SquashFS layer (e.g. ``3.10``); required when ``runtime_python_packages`` is set.

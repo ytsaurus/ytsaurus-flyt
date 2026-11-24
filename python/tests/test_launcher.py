@@ -73,6 +73,34 @@ def test_launch_passes_the_cluster_and_the_client_to_the_spec(monkeypatch):
     assert captured["yt_client"] is client
 
 
+def test_launch_without_a_service_wheel_uses_only_operation_files(monkeypatch):
+    from ytsaurus_flyt import launcher as launcher_module
+
+    captured = {}
+
+    def fake_build(**kwargs):
+        captured.update(kwargs)
+        raise RuntimeError("stop here")
+
+    def no_upload(*a, **k):
+        raise AssertionError("no wheel to upload")
+
+    monkeypatch.setattr(launcher_module, "proxy_url_from_client", lambda _c: "http://proxy")
+    monkeypatch.setattr(launcher_module, "require_squashfs_runtime_config", lambda _c: None)
+    monkeypatch.setattr(launcher_module, "get_secure_credentials", lambda *a, **k: {})
+    monkeypatch.setattr(launcher_module, "upload_service_wheel", no_upload)
+    monkeypatch.setattr(
+        launcher_module, "resolve_flink_lib_jars", lambda *a, **k: MagicMock(yt_paths=[], extra_runtime_basenames=[])
+    )
+    monkeypatch.setattr(launcher_module, "partition_flink_lib_jars_for_delivery", lambda *a, **k: ([], []))
+    monkeypatch.setattr(launcher_module, "ensure_runtime_layer", lambda *a, **k: "//home/l.squashfs")
+    monkeypatch.setattr(launcher_module, "build_vanilla_operation_spec", fake_build)
+    cfg = FlytConfig(service_name="svc", extra_file_paths=["//tmp/s/job.py"])
+    with pytest.raises(RuntimeError, match="stop here"):
+        launch_vanilla_job(cfg, MagicMock(), "../job.py", "pool")
+    assert captured["operation_params"].file_paths == ["//tmp/s/job.py"]
+
+
 def test_launch_reports_an_invalid_flink_configuration_before_building(monkeypatch):
     from ytsaurus_flyt import launcher as launcher_module
 

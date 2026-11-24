@@ -45,6 +45,7 @@ from ytsaurus_flyt.profiles import (
     save_profile_dict,
     write_active_profile_name,
 )
+from ytsaurus_flyt.sql_job import SQL_JOB_COMMAND, SQL_JOB_SERVICE_NAME, upload_sql_job
 from ytsaurus_flyt.validate_config import validate_flyt_config
 from ytsaurus_flyt.wheel_utils import build_wheel
 from ytsaurus_flyt.yt_client import env_yt_token, make_yt_client
@@ -431,7 +432,7 @@ def run(
     force_rebuild_layer: bool,
     headless: bool,
 ) -> None:
-    """Launch a PyFlink job. Uses the active profile and auto wheel build."""
+    """Launch a PyFlink job, or a Flink SQL script (*.sql). Uses the active profile and auto wheel build."""
     _setup_logging()
     _echo_profile_line(ctx)
     job_command = shlex.join(list(job_argv))
@@ -455,10 +456,23 @@ def run(
         except ValueError as e:
             raise click.ClickException(str(e)) from e
     proxy_f, pool_f = _resolve_connection(profile_data, proxy, pool)
+    yt_client = make_yt_client(proxy_f)
 
     with contextlib.ExitStack() as stack:
         project_root: Optional[str] = None
-        if not wheel_path and not source_dir:
+        if job_argv[0].endswith(".sql"):
+            if wheel_path or source_dir:
+                raise click.UsageError("--wheel and --source-dir do not apply to a .sql script")
+            # The bundled SQL runner becomes the job, shipped with the script as files of the operation;
+            # the arguments after the script are the runner's own.
+            job_files = stack.enter_context(upload_sql_job(yt_client, job_argv[0]))
+            cfg = dataclasses.replace(
+                cfg,
+                extra_file_paths=[*cfg.extra_file_paths, *job_files],
+                service_name=cfg.service_name or SQL_JOB_SERVICE_NAME,
+            )
+            job_command = shlex.join([*SQL_JOB_COMMAND, *job_argv[1:]])
+        elif not wheel_path and not source_dir:
             proj = find_pyproject_for_job(job_command)
             if proj:
                 logging.getLogger(__name__).info("Building wheel from %s", proj)
@@ -488,7 +502,7 @@ def run(
             try:
                 launch_vanilla_job(
                     config=cfg,
-                    yt_client=make_yt_client(proxy_f),
+                    yt_client=yt_client,
                     job_command=job_command,
                     pool=pool_f,
                     wheel_path=wheel_path,

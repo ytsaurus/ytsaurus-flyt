@@ -1,5 +1,6 @@
 """CLI behaviour (jobshell, profile banner)."""
 
+import contextlib
 from pathlib import Path
 
 import pytest
@@ -464,3 +465,32 @@ def test_run_rejects_a_dynamic_option_without_a_value(monkeypatch, tmp_path: Pat
     result = CliRunner().invoke(cli, ["run", "-D", "pipeline.name", "--wheel", "svc.whl", "x.py"])
     assert result.exit_code != 0
     assert "expected KEY=VALUE" in result.output
+
+
+def test_run_sql_script_launches_the_bundled_runner(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("FLYT_CONFIG_DIR", str(tmp_path))
+    _write_profile(tmp_path, "p1")
+    sql = tmp_path / "q.sql"
+    sql.write_text("SELECT 1;", encoding="utf-8")
+    captured: dict = {}
+
+    def fake_launch(**kwargs):  # type: ignore[no-untyped-def]
+        captured.update(kwargs)
+
+    monkeypatch.setattr("ytsaurus_flyt.__main__.launch_vanilla_job", fake_launch)
+    monkeypatch.setattr("ytsaurus_flyt.__main__.make_yt_client", lambda _p: object())
+    job_files = ["//tmp/s/sql_runner.py", "//tmp/s/script.sql"]
+    monkeypatch.setattr("ytsaurus_flyt.__main__.upload_sql_job", lambda _c, _path: contextlib.nullcontext(job_files))
+
+    args = ["run", "-d", "--mode", "application", str(sql), "--row-limit", "5"]
+    result = CliRunner().invoke(cli, args, catch_exceptions=False)
+    assert result.exit_code == 0, result.output
+    assert captured["job_command"] == "../sql_runner.py ../script.sql --row-limit 5"
+    assert captured["config"].is_application_cluster
+    # no service wheel: the runner and the script are files of the operation
+    assert captured["config"].extra_file_paths == job_files
+    assert captured["config"].service_name == "flyt_sql_job"
+    assert captured["wheel_path"] is None and captured["source_dir"] is None
+
+    result = CliRunner().invoke(cli, ["run", "--wheel", "w.whl", str(sql)])
+    assert result.exit_code != 0 and "do not apply to a .sql script" in result.output

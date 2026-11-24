@@ -95,17 +95,19 @@ def launch_vanilla_job(
         else:
             logger.info("Building and uploading service wheel (may take 1-2 min)...")
     else:
-        raise ValueError("Either wheel_path or source_dir must be provided to launch_vanilla_job")
+        logger.info("No service wheel: the job runs from the operation's files")
 
     with ExitStack() as stack:
-        wheel_remote_path = stack.enter_context(
-            upload_service_wheel(
-                yt_client=yt_client,
-                wheel_path=wheel_path,
-                source_dir=source_dir,
-                cache_prefix=cache_prefix,
+        wheel_remote_path = None
+        if wheel_path or source_dir:
+            wheel_remote_path = stack.enter_context(
+                upload_service_wheel(
+                    yt_client=yt_client,
+                    wheel_path=wheel_path,
+                    source_dir=source_dir,
+                    cache_prefix=cache_prefix,
+                )
             )
-        )
         operation_params = _make_operation_params(config, pool, cluster)
 
         logger.info("Resolving Flink lib JARs...")
@@ -142,7 +144,8 @@ def launch_vanilla_job(
                 operation_params.layer_paths = [squashfs_remote]
             operation_params.file_paths.extend(jar_yt_for_files)
 
-        operation_params.file_paths.append(wheel_remote_path)
+        if wheel_remote_path:
+            operation_params.file_paths.append(wheel_remote_path)
         operation_params.file_paths = dedupe_file_paths_by_basename(operation_params.file_paths)
 
         spec = build_vanilla_operation_spec(

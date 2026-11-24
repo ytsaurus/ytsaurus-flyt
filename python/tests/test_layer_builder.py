@@ -1,7 +1,7 @@
 """Tests for SquashFS layer hashing and helpers."""
 
 from ytsaurus_flyt.config import FlytConfig
-from ytsaurus_flyt.layer_builder import compute_layer_hash
+from ytsaurus_flyt.layer_builder import SYSTEM_RUNTIME_PACKAGES, compute_layer_hash, layer_python_packages
 
 
 def test_compute_layer_hash_stable():
@@ -41,3 +41,13 @@ def test_compute_layer_hash_changes_when_config_changes():
         squashfs_compression="gzip",
     )
     assert compute_layer_hash(c1, []) != compute_layer_hash(c2, [])
+
+
+def test_layer_python_packages_adds_system_packages():
+    c = FlytConfig(runtime_python_packages=["apache-flink==1.20.1"])
+    assert layer_python_packages(c) == ["apache-flink==1.20.1", *SYSTEM_RUNTIME_PACKAGES]
+
+
+def test_layer_python_packages_profile_pin_wins():
+    c = FlytConfig(runtime_python_packages=["apache-flink==1.20.1", "SQLParse==0.5.5"])
+    assert layer_python_packages(c) == ["apache-flink==1.20.1", "SQLParse==0.5.5"]
