@@ -73,10 +73,13 @@ class YTsaurusQueueDynamicTableFactoryTest {
         DynamicTableSource source = createSource(options);
 
         assertThat(source).isInstanceOf(YtQueueDynamicTableSource.class);
-        assertThat(source).extracting("specificOffsets")
-                .isEqualTo(List.of(10L, 20L, 30L));
-        assertThat(source).extracting("trimmedOffsetPolicy")
-                .isEqualTo(YtQueueTrimmedOffsetPolicy.SKIP);
+        for (DynamicTableSource current : List.of(source, source.copy())) {
+            assertThat(runtimeProvider(current).createSource())
+                    .extracting("startupMode", "specificOffsets", "trimmedOffsetPolicy",
+                            "readerOptions.workerCount", "readerOptions.bufferCapacity")
+                    .containsExactly(YtQueueStartupMode.SPECIFIC, List.of(10L, 20L, 30L),
+                            YtQueueTrimmedOffsetPolicy.SKIP, 2, 4);
+        }
     }
 
     @Test
@@ -95,8 +98,10 @@ class YTsaurusQueueDynamicTableFactoryTest {
 
         DynamicTableSource source = createSource(options);
 
-        assertThat(source).extracting("startupMode")
-                .isEqualTo(YtQueueStartupMode.LATEST);
+        for (DynamicTableSource current : List.of(source, source.copy())) {
+            assertThat(runtimeProvider(current).createSource()).extracting("startupMode")
+                    .isEqualTo(YtQueueStartupMode.LATEST);
+        }
     }
 
     @ParameterizedTest

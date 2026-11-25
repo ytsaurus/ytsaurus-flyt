@@ -36,9 +36,9 @@ public final class YTsaurusQueueConsumerOffsetCommitter implements YtQueueOffset
             ApiServiceClient client,
             String consumerPath,
             String queuePath) {
-        this.client = Objects.requireNonNull(client, "client");
-        this.consumerPath = YPath.simple(Objects.requireNonNull(consumerPath, "consumerPath"));
-        this.queuePath = YPath.simple(Objects.requireNonNull(queuePath, "queuePath"));
+        this.client = Objects.requireNonNull(client, "YT client must not be null");
+        this.consumerPath = YPath.simple(Objects.requireNonNull(consumerPath, "Consumer path must not be null"));
+        this.queuePath = YPath.simple(Objects.requireNonNull(queuePath, "Queue path must not be null"));
         log.info(
                 "Opened YT queue consumer offset committer for consumer {} and queue {}",
                 this.consumerPath,
@@ -48,11 +48,12 @@ public final class YTsaurusQueueConsumerOffsetCommitter implements YtQueueOffset
     @Override
     public synchronized void snapshotState(long checkpointId, List<YtQueueSplit> splits) {
         ensureOpen();
-        Objects.requireNonNull(splits, "splits");
+        Objects.requireNonNull(splits, "Checkpoint splits must not be null");
         List<YtQueueSplit> snapshot = new ArrayList<>(splits.size());
         Set<Integer> partitions = new HashSet<>();
         for (YtQueueSplit split : splits) {
-            YtQueueSplit nonNullSplit = Objects.requireNonNull(split, "splits contains null");
+            YtQueueSplit nonNullSplit = Objects.requireNonNull(
+                    split, "Checkpoint splits must not contain null elements");
             if (!partitions.add(nonNullSplit.getPartitionIndex())) {
                 throw new IllegalArgumentException(
                         "Duplicate YT queue partition in checkpoint: " +
@@ -70,7 +71,6 @@ public final class YTsaurusQueueConsumerOffsetCommitter implements YtQueueOffset
 
     @Override
     public synchronized void notifyCheckpointComplete(long checkpointId) throws Exception {
-        ensureOpen();
         List<YtQueueSplit> offsets = pendingCheckpoints.get(checkpointId);
         if (offsets == null) {
             log.debug("No pending YT queue consumer offsets for completed checkpoint {}", checkpointId);
@@ -98,7 +98,6 @@ public final class YTsaurusQueueConsumerOffsetCommitter implements YtQueueOffset
 
     @Override
     public synchronized void notifyCheckpointAborted(long checkpointId) {
-        ensureOpen();
         if (pendingCheckpoints.remove(checkpointId) != null) {
             log.debug("Discarded YT queue consumer offsets for aborted checkpoint {}", checkpointId);
         }
@@ -126,7 +125,7 @@ public final class YTsaurusQueueConsumerOffsetCommitter implements YtQueueOffset
                         .build();
                 requests.add(Objects.requireNonNull(
                         transaction.advanceConsumer(request),
-                        "transaction returned null future"));
+                        "YT transaction returned a null future for advancing consumer offsets"));
             }
             await(CompletableFuture.allOf(requests.toArray(new CompletableFuture<?>[0])));
             await(transaction.commit());
@@ -141,7 +140,7 @@ public final class YTsaurusQueueConsumerOffsetCommitter implements YtQueueOffset
 
     private static <T> T await(CompletableFuture<T> future) throws Exception {
         try {
-            return Objects.requireNonNull(future, "future").get();
+            return Objects.requireNonNull(future, "YT transaction RPC returned a null future").get();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw e;

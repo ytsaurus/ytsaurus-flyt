@@ -37,7 +37,7 @@ public final class YtQueueColumnModeOptions implements Serializable {
     }
 
     private static String requireNonBlank(String value, String fieldName) {
-        Objects.requireNonNull(value, fieldName);
+        Objects.requireNonNull(value, fieldName + " must not be null");
         if (value.isBlank()) {
             throw new IllegalArgumentException(fieldName + " must not be blank");
         }

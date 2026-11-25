@@ -17,8 +17,10 @@ import tech.ytsaurus.client.request.LookupRowsRequest;
 import tech.ytsaurus.client.request.PullConsumer;
 import tech.ytsaurus.client.rows.UnversionedRow;
 import tech.ytsaurus.client.rows.UnversionedRowset;
+import tech.ytsaurus.client.rows.UnversionedValue;
 import tech.ytsaurus.core.tables.ColumnSchema;
 import tech.ytsaurus.core.tables.ColumnValueType;
+import tech.ytsaurus.core.tables.TableSchema;
 import tech.ytsaurus.ysontree.YTree;
 import tech.ytsaurus.ysontree.YTreeMapNode;
 
@@ -79,7 +81,10 @@ class YTsaurusQueueConsumerOffsetInitializerTest {
     @Test
     void missingConsumerRowStartsAtZeroWithoutShiftingOtherPartitions() {
         YTsaurusClient client = clientWithClusterName();
-        UnversionedRowset rows = rowset(null, offsetRow(23L));
+        UnversionedRowset rows = new UnversionedRowset(
+                TableSchema.builder().addValue("offset", ColumnValueType.UINT64).build(),
+                Arrays.asList(null, new UnversionedRow(List.of(
+                        new UnversionedValue(0, ColumnValueType.UINT64, false, 23L)))));
         when(client.lookupRows(any(LookupRowsRequest.class))).thenReturn(
                 CompletableFuture.completedFuture(rows));
         YTsaurusQueueConsumerOffsetInitializer initializer = initializer(client);

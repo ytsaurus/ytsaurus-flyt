@@ -42,7 +42,7 @@ class DirectYtQueuePullerTest {
         when(client.pullConsumer(any()))
                 .thenReturn(pending)
                 .thenReturn(CompletableFuture.completedFuture(rowset(schema(), 42, List.of(row))));
-        DirectYtQueuePuller puller = new DirectYtQueuePuller(client, QUEUE_PATH, "//home/test/consumer");
+        DirectYtQueuePuller puller = new DirectYtQueuePuller(client, QUEUE_PATH, "//home/test/consumer", null);
 
         puller.pull(request(3, 42));
         puller.wakeUp();
@@ -197,7 +197,7 @@ class DirectYtQueuePullerTest {
         } else {
             when(client.pullConsumer(any())).thenReturn(rpcFuture);
         }
-        DirectYtQueuePuller puller = new DirectYtQueuePuller(client, QUEUE_PATH, consumerPath);
+        DirectYtQueuePuller puller = new DirectYtQueuePuller(client, QUEUE_PATH, consumerPath, client);
 
         puller.pull(request(0, 0));
         puller.close();

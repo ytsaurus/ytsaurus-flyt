@@ -19,10 +19,16 @@ import tech.ytsaurus.ysontree.YTreeMapNode;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.enumerator.metadata.YtQueueMetadata;
 
 public final class YTsaurusQueueConsumerOffsetInitializer implements YtQueueOffsetInitializer {
+    private static final String QUEUE_CLUSTER_COLUMN = "queue_cluster";
+    private static final String QUEUE_PATH_COLUMN = "queue_path";
+    private static final String PARTITION_INDEX_COLUMN = "partition_index";
+    private static final String OFFSET_COLUMN = "offset";
+    private static final YPath CLUSTER_NAME_PATH = YPath.simple("//sys/@cluster_name");
+
     private static final TableSchema KEY_SCHEMA = TableSchema.builder()
-            .addKey("queue_cluster", ColumnValueType.STRING)
-            .addKey("queue_path", ColumnValueType.STRING)
-            .addKey("partition_index", ColumnValueType.UINT64)
+            .addKey(QUEUE_CLUSTER_COLUMN, ColumnValueType.STRING)
+            .addKey(QUEUE_PATH_COLUMN, ColumnValueType.STRING)
+            .addKey(PARTITION_INDEX_COLUMN, ColumnValueType.UINT64)
             .build()
             .toLookup();
 
@@ -33,23 +39,23 @@ public final class YTsaurusQueueConsumerOffsetInitializer implements YtQueueOffs
     private final YPath queuePath;
 
     @Nullable
-    private String queueCluster;
+    private String queueClusterName;
 
     public YTsaurusQueueConsumerOffsetInitializer(
             YTsaurusClient client,
             String consumerPath,
             String queuePath) {
-        this.client = Objects.requireNonNull(client, "client");
-        this.consumerPath = YPath.simple(Objects.requireNonNull(consumerPath, "consumerPath"));
-        this.queuePath = YPath.simple(Objects.requireNonNull(queuePath, "queuePath"));
+        this.client = Objects.requireNonNull(client, "YT client must not be null");
+        this.consumerPath = YPath.simple(Objects.requireNonNull(consumerPath, "Consumer path must not be null"));
+        this.queuePath = YPath.simple(Objects.requireNonNull(queuePath, "Queue path must not be null"));
     }
 
     @Override
     public Map<Integer, Long> getInitialOffsets(
             YtQueueMetadata metadata,
             List<Integer> partitionIndexes) {
-        Objects.requireNonNull(metadata, "metadata");
-        Objects.requireNonNull(partitionIndexes, "partitionIndexes");
+        Objects.requireNonNull(metadata, "Queue metadata must not be null");
+        Objects.requireNonNull(partitionIndexes, "Queue partition indexes must not be null");
         for (int partitionIndex : partitionIndexes) {
             if (partitionIndex < 0 || partitionIndex >= metadata.getPartitionCount()) {
                 throw new IllegalArgumentException(
@@ -60,9 +66,10 @@ public final class YTsaurusQueueConsumerOffsetInitializer implements YtQueueOffs
             return Map.of();
         }
 
-        if (queueCluster == null) {
-            queueCluster = client.getNode(GetNode.builder()
-                    .setPath(YPath.simple("//sys/@cluster_name"))
+        if (queueClusterName == null) {
+            // Consumer keys use the cluster name, which may differ from the proxy endpoint.
+            queueClusterName = client.getNode(GetNode.builder()
+                    .setPath(CLUSTER_NAME_PATH)
                     .build()).join().stringValue();
         }
 
@@ -70,10 +77,11 @@ public final class YTsaurusQueueConsumerOffsetInitializer implements YtQueueOffs
         LookupRowsRequest.Builder request = LookupRowsRequest.builder()
                 .setPath(consumerPath.toString())
                 .setSchema(KEY_SCHEMA)
-                .addLookupColumn("offset")
+                .addLookupColumn(OFFSET_COLUMN)
+                // Keep missing rows as null slots so results remain aligned with partitionIndexes.
                 .setKeepMissingRows(true);
         for (int partitionIndex : partitionIndexes) {
-            request.addFilter(queueCluster, queuePath.toString(), (long) partitionIndex);
+            request.addFilter(queueClusterName, queuePath.toString(), (long) partitionIndex);
         }
         List<YTreeMapNode> rows = client.lookupRows(request.build()).join().getYTreeRows();
         if (rows.size() != partitionIndexes.size()) {
@@ -85,7 +93,7 @@ public final class YTsaurusQueueConsumerOffsetInitializer implements YtQueueOffs
         Map<Integer, Long> offsets = new LinkedHashMap<>(partitionIndexes.size());
         for (int index = 0; index < partitionIndexes.size(); index++) {
             long offset = Optional.ofNullable(rows.get(index))
-                    .map(row -> row.getLong("offset"))
+                    .map(row -> row.getLong(OFFSET_COLUMN))
                     .orElse(0L);
             if (offset < 0) {
                 throw new IllegalStateException(

@@ -38,7 +38,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.YtQueueTestFixtures.split;
@@ -47,12 +46,11 @@ class YtQueueSourceReaderTest {
     @Test
     void consumerCommitsEmittedSnapshotAndRestoresItsOffsetEvenAfterLaterCommit() throws Exception {
         ApiServiceClient client = mock(ApiServiceClient.class);
-        ApiServiceTransaction transaction = mock(ApiServiceTransaction.class);
+        ApiServiceTransaction firstTransaction = successfulTransaction();
+        ApiServiceTransaction secondTransaction = successfulTransaction();
         when(client.startTransaction(any(StartTransaction.class)))
-                .thenReturn(CompletableFuture.completedFuture(transaction));
-        when(transaction.advanceConsumer(any(AdvanceConsumer.class)))
-                .thenReturn(CompletableFuture.completedFuture(null));
-        when(transaction.commit()).thenReturn(CompletableFuture.completedFuture(null));
+                .thenReturn(CompletableFuture.completedFuture(firstTransaction))
+                .thenReturn(CompletableFuture.completedFuture(secondTransaction));
         when(client.pullConsumer(any()))
                 .thenReturn(CompletableFuture.completedFuture(new QueueRowset(
                         new UnversionedRowset(queueSchema(), List.of(queueRow(), queueRow(), queueRow())), 1)))
@@ -71,7 +69,12 @@ class YtQueueSourceReaderTest {
             reader.notifyCheckpointComplete(2);
 
             ArgumentCaptor<AdvanceConsumer> advances = ArgumentCaptor.forClass(AdvanceConsumer.class);
-            verify(transaction, times(2)).advanceConsumer(advances.capture());
+            verify(firstTransaction).advanceConsumer(advances.capture());
+            verify(secondTransaction).advanceConsumer(advances.capture());
+            verify(firstTransaction).commit();
+            verify(firstTransaction).close();
+            verify(secondTransaction).commit();
+            verify(secondTransaction).close();
             assertThat(advances.getAllValues()).extracting("newOffset").containsExactly(2L, 3L);
             assertThat(checkpoint).extracting(YtQueueSplit::getNextOffset).containsExactly(2L);
             assertThat(output.getEmittedRecords()).hasSize(2);
@@ -98,12 +101,20 @@ class YtQueueSourceReaderTest {
 
     private static YtQueueSourceReader<String> consumerReader(ApiServiceClient client) throws Exception {
         return new YtQueueSourceReader<>(
-                () -> new DirectYtQueuePuller(client, "//home/test/queue", "//home/test/consumer"),
+                () -> new DirectYtQueuePuller(client, "//home/test/queue", "//home/test/consumer", null),
                 (row, schema) -> "record",
                 readerOptions(),
                 new Configuration(),
                 new TestingReaderContext(),
                 new YTsaurusQueueConsumerOffsetCommitter(client, "//home/test/consumer", "//home/test/queue"));
+    }
+
+    private static ApiServiceTransaction successfulTransaction() {
+        ApiServiceTransaction transaction = mock(ApiServiceTransaction.class);
+        when(transaction.advanceConsumer(any(AdvanceConsumer.class)))
+                .thenReturn(CompletableFuture.completedFuture(null));
+        when(transaction.commit()).thenReturn(CompletableFuture.completedFuture(null));
+        return transaction;
     }
 
     @Test

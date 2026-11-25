@@ -6,17 +6,34 @@ import java.util.List;
 
 import org.apache.flink.api.common.typeinfo.Types;
 import org.apache.flink.api.connector.source.Boundedness;
+import org.apache.flink.api.connector.source.SplitEnumerator;
+import org.apache.flink.api.connector.source.SplitEnumeratorContext;
 import org.apache.flink.util.InstantiationUtil;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.mockito.MockedStatic;
+import tech.ytsaurus.client.YTsaurusClient;
 
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.credentials.extractor.ManualCredentialsProvider;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.config.YtQueueStartupMode;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.config.YtQueueTrimmedOffsetPolicy;
+import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.enumerator.YtQueueEnumeratorState;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.enumerator.YtQueueEnumeratorStateSerializer;
+import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.split.YtQueueSplit;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.split.YtQueueSplitSerializer;
+import tech.ytsaurus.flyt.connectors.ytsaurus.utils.YtUtils;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.ASYNC_BUFFER_CAPACITY;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.ASYNC_WORKER_COUNT;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.MAX_DATA_WEIGHT;
@@ -128,6 +145,34 @@ class YtQueueSourceTest {
                 .isEqualTo("//home/test/consumer");
     }
 
+    @ParameterizedTest
+    @CsvSource({"//home/test/consumer, false", "bad-path, true"})
+    void closesEnumeratorClientsOnShutdownOrInitializationFailure(
+            String consumerPath,
+            boolean failInitialization) throws Exception {
+        YTsaurusClient metadataClient = mock(YTsaurusClient.class);
+        YTsaurusClient consumerClient = mock(YTsaurusClient.class);
+        YtQueueSource<String> source = sourceBuilder().consumerPath(consumerPath).build();
+        try (MockedStatic<YtUtils> ytUtils = mockStatic(YtUtils.class)) {
+            ytUtils.when(() -> YtUtils.makeYtClient(anyString(), any(), anyBoolean()))
+                    .thenReturn(metadataClient, consumerClient);
+            if (failInitialization) {
+                assertThatThrownBy(() -> source.createEnumerator(mock(SplitEnumeratorContext.class)))
+                        .isInstanceOf(IllegalArgumentException.class);
+            } else {
+                SplitEnumerator<YtQueueSplit, YtQueueEnumeratorState> enumerator =
+                        source.createEnumerator(mock(SplitEnumeratorContext.class));
+                enumerator.close();
+                enumerator.close();
+            }
+
+            ytUtils.verify(() -> YtUtils.makeYtClient(anyString(), any(), anyBoolean()), times(2));
+            verify(metadataClient).close();
+            verify(consumerClient).close();
+            verifyNoMoreInteractions(metadataClient, consumerClient);
+        }
+    }
+
     @Test
     void rejectsExplicitStartupOptionsWithConsumerPath() {
         assertThatThrownBy(() -> sourceBuilder()
@@ -172,7 +217,7 @@ class YtQueueSourceTest {
     void rejectsNullTrimmedOffsetPolicyInBuilder() {
         assertThatThrownBy(() -> sourceBuilder().trimmedOffsetPolicy(null))
                 .isInstanceOf(NullPointerException.class)
-                .hasMessage("trimmedOffsetPolicy");
+                .hasMessage("Trimmed offset policy must not be null");
     }
 
     @Test

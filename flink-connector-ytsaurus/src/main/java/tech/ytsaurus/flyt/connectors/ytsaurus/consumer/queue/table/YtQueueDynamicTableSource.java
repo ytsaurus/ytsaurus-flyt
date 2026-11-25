@@ -69,27 +69,27 @@ public class YtQueueDynamicTableSource implements ScanTableSource {
 
     @Override
     public ScanRuntimeProvider getScanRuntimeProvider(ScanContext context) {
+        YtQueueSource.Builder<RowData> builder = YtQueueSource.builder();
+        if (consumerPath != null) {
+            builder.consumerPath(consumerPath);
+        } else {
+            builder.startupMode(startupMode).specificOffsets(specificOffsets);
+        }
+
         DeserializationSchema<RowData> deserializer =
                 decodingFormat.createRuntimeDecoder(context, physicalRowDataType);
         TypeInformation<RowData> producedType = context.createTypeInformation(physicalRowDataType);
-
-        YtQueueSource.Builder<RowData> sourceBuilder = YtQueueSource.<RowData>builder()
+        YtQueueSource<RowData> source = builder
                 .proxy(proxy)
                 .queuePath(queuePath)
-                .consumerPath(consumerPath)
                 .credentialsProvider(credentialsProvider)
                 .recordDeserializer(createRecordDeserializer(deserializer))
                 .producedType(producedType)
                 .trimmedOffsetPolicy(trimmedOffsetPolicy)
                 .readerOptions(readerOptions)
                 .discoveryInterval(partitionDiscoveryInterval)
-                .useTls(useTls);
-        if (consumerPath == null) {
-            sourceBuilder
-                    .startupMode(startupMode)
-                    .specificOffsets(specificOffsets);
-        }
-        YtQueueSource<RowData> source = sourceBuilder.build();
+                .useTls(useTls)
+                .build();
         return SourceProvider.of(source, parallelism);
     }
 

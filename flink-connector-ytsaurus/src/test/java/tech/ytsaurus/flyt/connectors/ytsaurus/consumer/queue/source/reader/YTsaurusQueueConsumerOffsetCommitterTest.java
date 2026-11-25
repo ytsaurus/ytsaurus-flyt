@@ -70,6 +70,8 @@ class YTsaurusQueueConsumerOffsetCommitterTest {
 
         committer.notifyCheckpointComplete(2);
         committer.notifyCheckpointComplete(1);
+        committer.notifyCheckpointAborted(1);
+        committer.notifyCheckpointComplete(2);
 
         ArgumentCaptor<AdvanceConsumer> request = ArgumentCaptor.forClass(AdvanceConsumer.class);
         verify(transaction).advanceConsumer(request.capture());
@@ -157,14 +159,17 @@ class YTsaurusQueueConsumerOffsetCommitterTest {
     }
 
     @Test
-    void closeIsIdempotentAndRejectsFurtherCallbacks() {
+    void closeDiscardsSnapshotsAndIgnoresLateNotifications() throws Exception {
         ApiServiceClient client = mock(ApiServiceClient.class);
         YTsaurusQueueConsumerOffsetCommitter committer = committer(client);
+        committer.snapshotState(1, List.of(split("queue-id", 0, 10)));
 
         committer.close();
         committer.close();
+        committer.notifyCheckpointComplete(1);
+        committer.notifyCheckpointAborted(1);
 
-        assertThatThrownBy(() -> committer.snapshotState(1, List.of()))
+        assertThatThrownBy(() -> committer.snapshotState(2, List.of()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessage("Queue consumer offset committer is closed");
         verifyNoInteractions(client);

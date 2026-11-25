@@ -26,6 +26,7 @@ public final class DirectYtQueuePuller implements YtQueuePuller {
     @Nullable
     private final YPath consumerPath;
 
+    @Nullable
     private final AutoCloseable ownedClient;
 
     private final Object lifecycleMonitor = new Object();
@@ -42,28 +43,20 @@ public final class DirectYtQueuePuller implements YtQueuePuller {
         this(client, queuePath, null, null);
     }
 
-    public DirectYtQueuePuller(YTsaurusClient client, String queuePath, @Nullable String consumerPath) {
-        this(client, queuePath, consumerPath, client);
-    }
-
-    public DirectYtQueuePuller(ApiServiceClient client, String queuePath, @Nullable String consumerPath) {
-        this(client, queuePath, consumerPath, null);
-    }
-
-    private DirectYtQueuePuller(
+    DirectYtQueuePuller(
             ApiServiceClient client,
             String queuePath,
             @Nullable String consumerPath,
-            AutoCloseable ownedClient) {
-        this.client = Objects.requireNonNull(client, "client");
-        this.queuePath = YPath.simple(Objects.requireNonNull(queuePath, "queuePath"));
+            @Nullable AutoCloseable ownedClient) {
+        this.client = Objects.requireNonNull(client, "YT client must not be null");
+        this.queuePath = YPath.simple(Objects.requireNonNull(queuePath, "Queue path must not be null"));
         this.consumerPath = Optional.ofNullable(consumerPath).map(YPath::simple).orElse(null);
         this.ownedClient = ownedClient;
     }
 
     @Override
     public CompletableFuture<YtQueueBatch> pull(YtQueuePullRequest request) {
-        Objects.requireNonNull(request, "request");
+        Objects.requireNonNull(request, "Queue pull request must not be null");
         Operation operation = new Operation();
         CompletableFuture<QueueRowset> rpcFuture;
 
@@ -80,7 +73,7 @@ public final class DirectYtQueuePuller implements YtQueuePuller {
             try {
                 rpcFuture = Objects.requireNonNull(
                         pullRows(request),
-                        "client returned null future");
+                        "YT client returned a null future for a queue pull");
             } catch (RuntimeException e) {
                 rpcFuture = CompletableFuture.failedFuture(e);
             }

@@ -110,11 +110,11 @@ public final class YtQueueSourceReader<T>
         super(
                 splitReaderSupplier(pullerFactory, options, trimmedOffsetPolicy),
                 new YtQueueRecordEmitter<>(deserializer),
-                Objects.requireNonNull(configuration, "configuration"),
-                Objects.requireNonNull(context, "context")
+                Objects.requireNonNull(configuration, "Flink reader configuration must not be null"),
+                Objects.requireNonNull(context, "Source reader context must not be null")
         );
-        this.pullerFactory = Objects.requireNonNull(pullerFactory, "pullerFactory");
-        this.offsetCommitter = Objects.requireNonNull(offsetCommitter, "offsetCommitter");
+        this.pullerFactory = Objects.requireNonNull(pullerFactory, "Queue puller factory must not be null");
+        this.offsetCommitter = Objects.requireNonNull(offsetCommitter, "Queue offset committer must not be null");
         try {
             deserializer.open(context);
             log.info("Opened YT queue source reader");
@@ -210,8 +210,8 @@ public final class YtQueueSourceReader<T>
             Supplier<? extends YtQueuePuller> pullerSupplier,
             YtQueueReaderOptions options,
             YtQueueTrimmedOffsetPolicy trimmedOffsetPolicy) {
-        Objects.requireNonNull(pullerSupplier, "pullerSupplier");
-        Objects.requireNonNull(options, "options");
+        Objects.requireNonNull(pullerSupplier, "Queue puller supplier must not be null");
+        Objects.requireNonNull(options, "Queue reader options must not be null");
         return () -> new YtQueueSplitReader(pullerSupplier, options, trimmedOffsetPolicy);
     }
 

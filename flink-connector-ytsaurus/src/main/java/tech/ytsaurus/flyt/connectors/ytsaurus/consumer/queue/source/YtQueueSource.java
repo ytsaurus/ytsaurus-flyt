@@ -101,13 +101,13 @@ public final class YtQueueSource<T>
         this.consumerPath = Optional.ofNullable(consumerPath)
                 .map(path -> requireNonBlank(path, "consumerPath"))
                 .orElse(null);
-        this.credentialsProvider = Objects.requireNonNull(credentialsProvider, "credentialsProvider");
-        this.recordDeserializer = Objects.requireNonNull(recordDeserializer, "recordDeserializer");
-        this.producedType = Objects.requireNonNull(producedType, "producedType");
-        this.startupMode = Objects.requireNonNull(startupMode, "startupMode");
+        this.credentialsProvider = Objects.requireNonNull(credentialsProvider, "Credentials provider must not be null");
+        this.recordDeserializer = Objects.requireNonNull(recordDeserializer, "Record deserializer must not be null");
+        this.producedType = Objects.requireNonNull(producedType, "Produced type information must not be null");
+        this.startupMode = Objects.requireNonNull(startupMode, "Queue startup mode must not be null");
         this.specificOffsets = specificOffsets;
         this.trimmedOffsetPolicy = trimmedOffsetPolicy;
-        this.readerOptions = Objects.requireNonNull(readerOptions, "readerOptions");
+        this.readerOptions = Objects.requireNonNull(readerOptions, "Queue reader options must not be null");
         this.discoveryIntervalMillis = requirePositiveMilliseconds(discoveryInterval, "discoveryInterval");
         this.useTls = useTls;
         validateSpecificOffsets(startupMode, specificOffsets);
@@ -181,7 +181,9 @@ public final class YtQueueSource<T>
     public SplitEnumerator<YtQueueSplit, YtQueueEnumeratorState> restoreEnumerator(
             SplitEnumeratorContext<YtQueueSplit> enumContext,
             YtQueueEnumeratorState checkpoint) {
-        return createEnumerator(enumContext, Objects.requireNonNull(checkpoint, "checkpoint"));
+        return createEnumerator(
+                enumContext,
+                Objects.requireNonNull(checkpoint, "Enumerator checkpoint must not be null"));
     }
 
     @Override
@@ -243,7 +245,7 @@ public final class YtQueueSource<T>
         try {
             return new YTsaurusQueueConsumerOffsetInitializer(
                     client,
-                    Objects.requireNonNull(consumerPath),
+                    consumerPath,
                     queuePath);
         } catch (RuntimeException | Error failure) {
             closeAfterFailure(client, failure);
@@ -252,7 +254,7 @@ public final class YtQueueSource<T>
     }
 
     private static String requireNonBlank(String value, String fieldName) {
-        Objects.requireNonNull(value, fieldName);
+        Objects.requireNonNull(value, fieldName + " must not be null");
         if (value.isBlank()) {
             throw new IllegalArgumentException(fieldName + " must not be blank");
         }
@@ -260,7 +262,7 @@ public final class YtQueueSource<T>
     }
 
     private static long requirePositiveMilliseconds(Duration value, String fieldName) {
-        Objects.requireNonNull(value, fieldName);
+        Objects.requireNonNull(value, fieldName + " must not be null");
         long milliseconds;
         try {
             milliseconds = value.toMillis();
@@ -355,7 +357,7 @@ public final class YtQueueSource<T>
         }
 
         public Builder<T> startupMode(YtQueueStartupMode startupMode) {
-            this.startupMode = Objects.requireNonNull(startupMode, "startupMode");
+            this.startupMode = Objects.requireNonNull(startupMode, "Queue startup mode must not be null");
             this.startupModeConfigured = true;
             return this;
         }
@@ -366,7 +368,8 @@ public final class YtQueueSource<T>
         }
 
         public Builder<T> trimmedOffsetPolicy(YtQueueTrimmedOffsetPolicy trimmedOffsetPolicy) {
-            this.trimmedOffsetPolicy = Objects.requireNonNull(trimmedOffsetPolicy, "trimmedOffsetPolicy");
+            this.trimmedOffsetPolicy = Objects.requireNonNull(
+                    trimmedOffsetPolicy, "Trimmed offset policy must not be null");
             return this;
         }
 
@@ -401,7 +404,7 @@ public final class YtQueueSource<T>
         }
 
         public Builder<T> readerOptions(YtQueueReaderOptions readerOptions) {
-            this.readerOptions = Objects.requireNonNull(readerOptions, "readerOptions");
+            this.readerOptions = Objects.requireNonNull(readerOptions, "Queue reader options must not be null");
             this.maxRowCount = readerOptions.getMaxRows();
             this.maxDataWeightBytes = readerOptions.getMaxDataWeightBytes();
             this.pollBackoff = readerOptions.getEmptyPollBackoff();
