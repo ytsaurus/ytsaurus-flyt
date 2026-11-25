@@ -2,7 +2,6 @@ package tech.ytsaurus.flyt.connectors.ytsaurus;
 
 import java.time.Duration;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 
 import javax.annotation.Nullable;
@@ -154,7 +153,7 @@ public class YTsaurusQueueDynamicTableFactory implements DynamicTableSourceFacto
         helper.validate();
         validateChangelogMode(decodingFormat);
         validateRequiredOptions(options);
-        validateConsumerOptions(options, context.getCatalogTable().getOptions());
+        validateConsumerOptions(options);
         validateScanOptions(options);
         validateCredentialsOptions(options);
         CredentialsProvider credentialsProvider = getAndValidateCredentialsProvider(options);
@@ -266,14 +265,12 @@ public class YTsaurusQueueDynamicTableFactory implements DynamicTableSourceFacto
         });
     }
 
-    static void validateConsumerOptions(
-            ReadableConfig options,
-            Map<String, String> rawOptions) {
+    static void validateConsumerOptions(ReadableConfig options) {
         if (options.getOptional(CONSUMER_PATH).isEmpty()) {
             return;
         }
-        if (rawOptions.containsKey(STARTUP_MODE.key())
-                || rawOptions.containsKey(SPECIFIC_OFFSETS.key())) {
+        if (options.getOptional(STARTUP_MODE).isPresent()
+                || options.getOptional(SPECIFIC_OFFSETS).isPresent()) {
             throw new ValidationException(
                     "'scan.startup.mode' and 'scan.startup.specific-offsets' " +
                             "must not be configured with 'consumer-path'");

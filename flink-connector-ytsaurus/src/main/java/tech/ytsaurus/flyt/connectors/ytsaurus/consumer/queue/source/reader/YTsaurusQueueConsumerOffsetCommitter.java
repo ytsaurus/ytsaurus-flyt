@@ -61,7 +61,7 @@ public final class YTsaurusQueueConsumerOffsetCommitter implements YtQueueOffset
             snapshot.add(nonNullSplit);
         }
         snapshot.sort(Comparator.comparingInt(YtQueueSplit::getPartitionIndex));
-        pendingCheckpoints.put(checkpointId, List.copyOf(snapshot));
+        pendingCheckpoints.put(checkpointId, snapshot);
         log.debug(
                 "Saved {} YT queue consumer offsets for checkpoint {}",
                 snapshot.size(),
@@ -115,8 +115,7 @@ public final class YTsaurusQueueConsumerOffsetCommitter implements YtQueueOffset
     }
 
     private void commitOffsets(List<YtQueueSplit> offsets) throws Exception {
-        ApiServiceTransaction transaction = await(client.startTransaction(StartTransaction.tablet()));
-        try {
+        try (ApiServiceTransaction transaction = await(client.startTransaction(StartTransaction.tablet()))) {
             List<CompletableFuture<Void>> requests = new ArrayList<>(offsets.size());
             for (YtQueueSplit split : offsets) {
                 AdvanceConsumer request = AdvanceConsumer.builder()
@@ -131,8 +130,6 @@ public final class YTsaurusQueueConsumerOffsetCommitter implements YtQueueOffset
             }
             await(CompletableFuture.allOf(requests.toArray(new CompletableFuture<?>[0])));
             await(transaction.commit());
-        } finally {
-            transaction.close();
         }
     }
 

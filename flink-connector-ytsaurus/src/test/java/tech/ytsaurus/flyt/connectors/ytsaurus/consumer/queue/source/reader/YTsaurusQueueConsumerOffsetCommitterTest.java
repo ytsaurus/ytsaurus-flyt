@@ -1,6 +1,7 @@
 package tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.reader;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
@@ -18,6 +19,7 @@ import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.split.YtQueu
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -36,11 +38,12 @@ class YTsaurusQueueConsumerOffsetCommitterTest {
         ApiServiceClient client = mock(ApiServiceClient.class);
         ApiServiceTransaction transaction = successfulTransaction(client);
         YTsaurusQueueConsumerOffsetCommitter committer = committer(client);
-        List<YtQueueSplit> offsets = List.of(
+        List<YtQueueSplit> offsets = new ArrayList<>(List.of(
                 split("queue-id", 2, 23),
-                split("queue-id", 0, 17));
+                split("queue-id", 0, 17)));
 
         committer.snapshotState(11, offsets);
+        offsets.clear();
 
         verifyNoInteractions(client, transaction);
 
@@ -129,10 +132,14 @@ class YTsaurusQueueConsumerOffsetCommitterTest {
                 .thenReturn(CompletableFuture.completedFuture(retryTransaction));
         IOException failure = new IOException("commit failed");
         when(failedTransaction.commit()).thenReturn(CompletableFuture.failedFuture(failure));
+        RuntimeException closeFailure = new RuntimeException("close failed");
+        doThrow(closeFailure).when(failedTransaction).close();
         YTsaurusQueueConsumerOffsetCommitter committer = committer(client);
         committer.snapshotState(1, List.of(split("queue-id", 0, 10)));
 
-        assertThatThrownBy(() -> committer.notifyCheckpointComplete(1)).isSameAs(failure);
+        assertThatThrownBy(() -> committer.notifyCheckpointComplete(1))
+                .isSameAs(failure)
+                .hasSuppressedException(closeFailure);
         verify(failedTransaction).commit();
         verify(failedTransaction).close();
         verifyNoInteractions(retryTransaction);
