@@ -4,6 +4,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 
 import javax.annotation.Nullable;
 
@@ -83,8 +84,9 @@ public final class YTsaurusQueueConsumerOffsetInitializer implements YtQueueOffs
 
         Map<Integer, Long> offsets = new LinkedHashMap<>(partitionIndexes.size());
         for (int index = 0; index < partitionIndexes.size(); index++) {
-            YTreeMapNode row = rows.get(index);
-            long offset = row == null ? 0 : row.getLong("offset");
+            long offset = Optional.ofNullable(rows.get(index))
+                    .map(row -> row.getLong("offset"))
+                    .orElse(0L);
             if (offset < 0) {
                 throw new IllegalStateException(
                         "Consumer offset must be nonnegative for partition " + partitionIndexes.get(index));

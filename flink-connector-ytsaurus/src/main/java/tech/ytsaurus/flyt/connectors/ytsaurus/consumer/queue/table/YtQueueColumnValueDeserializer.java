@@ -1,6 +1,7 @@
 package tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.table;
 
 import java.util.Objects;
+import java.util.Optional;
 
 import javax.annotation.Nullable;
 
@@ -67,7 +68,9 @@ public class YtQueueColumnValueDeserializer<T> extends YtQueueDeserializationSch
             boolean ignoreDecompressionErrors) {
         super(deserializationSchema);
         this.valueColumn = requireNonBlank(valueColumn, "valueColumn");
-        this.codecColumn = codecColumn == null ? null : requireNonBlank(codecColumn, "codecColumn");
+        this.codecColumn = Optional.ofNullable(codecColumn)
+                .map(column -> requireNonBlank(column, "codecColumn"))
+                .orElse(null);
         this.ignoreDecompressionErrors = ignoreDecompressionErrors;
         if (this.valueColumn.equals(this.codecColumn)) {
             throw new IllegalArgumentException("valueColumn and codecColumn must be different");
@@ -86,7 +89,9 @@ public class YtQueueColumnValueDeserializer<T> extends YtQueueDeserializationSch
     public T deserialize(UnversionedRow row, TableSchema schema) throws Exception {
         if (!columnIndicesInitialized) {
             valueIndex = columnIndex(schema, valueColumn);
-            codecIndex = codecColumn == null ? -1 : columnIndex(schema, codecColumn);
+            codecIndex = Optional.ofNullable(codecColumn)
+                    .map(column -> columnIndex(schema, column))
+                    .orElse(-1);
             columnIndicesInitialized = true;
         }
 

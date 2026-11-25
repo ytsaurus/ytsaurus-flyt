@@ -4,6 +4,7 @@ import java.io.Serializable;
 import java.time.Duration;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 
 import javax.annotation.Nullable;
 
@@ -97,9 +98,9 @@ public final class YtQueueSource<T>
             boolean useTls) {
         this.proxy = requireNonBlank(proxy, "proxy");
         this.queuePath = requireNonBlank(queuePath, "queuePath");
-        this.consumerPath = consumerPath == null
-                ? null
-                : requireNonBlank(consumerPath, "consumerPath");
+        this.consumerPath = Optional.ofNullable(consumerPath)
+                .map(path -> requireNonBlank(path, "consumerPath"))
+                .orElse(null);
         this.credentialsProvider = Objects.requireNonNull(credentialsProvider, "credentialsProvider");
         this.recordDeserializer = Objects.requireNonNull(recordDeserializer, "recordDeserializer");
         this.producedType = Objects.requireNonNull(producedType, "producedType");
@@ -148,9 +149,9 @@ public final class YtQueueSource<T>
         YtQueueOffsetCommitter offsetCommitter = null;
         try {
             pullerFactory = new DirectYtQueuePullerFactory(client, queuePath, consumerPath);
-            offsetCommitter = consumerPath == null
-                    ? YtQueueOffsetCommitter.noOp()
-                    : new YTsaurusQueueConsumerOffsetCommitter(client, consumerPath, queuePath);
+            offsetCommitter = Optional.ofNullable(consumerPath)
+                    .<YtQueueOffsetCommitter>map(path -> new YTsaurusQueueConsumerOffsetCommitter(client, path, queuePath))
+                    .orElseGet(YtQueueOffsetCommitter::noOp);
             return new YtQueueSourceReader<>(
                     pullerFactory,
                     recordDeserializer,
