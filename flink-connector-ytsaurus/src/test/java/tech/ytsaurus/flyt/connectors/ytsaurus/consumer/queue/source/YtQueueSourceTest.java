@@ -13,7 +13,6 @@ import org.apache.flink.api.connector.source.SplitEnumeratorContext;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.connector.testutils.source.reader.TestingReaderContext;
 import org.apache.flink.metrics.Counter;
-import org.apache.flink.metrics.SimpleCounter;
 import org.apache.flink.metrics.groups.SourceReaderMetricGroup;
 import org.apache.flink.metrics.groups.UnregisteredMetricsGroup;
 import org.apache.flink.util.InstantiationUtil;
@@ -44,6 +43,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
@@ -188,14 +188,16 @@ class YtQueueSourceTest {
     @ParameterizedTest
     @NullSource
     @ValueSource(strings = "//home/test/consumer")
-    void registersCommitFailureMetricOnlyForConsumerReaders(String consumerPath) throws Exception {
+    void registersCommitMetricsOnlyForConsumerReaders(String consumerPath) throws Exception {
         YTsaurusClient client = mock(YTsaurusClient.class);
         when(client.pullQueue(any())).thenReturn(new CompletableFuture<>());
         when(client.pullConsumer(any())).thenReturn(new CompletableFuture<>());
         when(client.startTransaction(any(StartTransaction.class)))
                 .thenReturn(CompletableFuture.failedFuture(new IllegalStateException("YT unavailable")));
         SourceReaderMetricGroup metrics = spy(UnregisteredMetricsGroup.createSourceReaderMetricGroup());
-        Counter commitsFailed = new SimpleCounter();
+        Counter commitsSucceeded = mock(Counter.class);
+        Counter commitsFailed = mock(Counter.class);
+        when(metrics.counter("commitsSucceeded")).thenReturn(commitsSucceeded);
         when(metrics.counter("commitsFailed")).thenReturn(commitsFailed);
         YtQueueSource<String> source = sourceBuilder().consumerPath(consumerPath).build();
 
@@ -206,16 +208,20 @@ class YtQueueSourceTest {
                 reader.addSplits(List.of(split("queue-id", 0, 10)));
                 reader.snapshotState(1);
                 reader.notifyCheckpointComplete(1);
+                if (consumerPath != null) {
+                    verify(commitsFailed, timeout(2_000)).inc();
+                }
             }
 
             if (consumerPath == null) {
+                verify(metrics, never()).counter("commitsSucceeded");
                 verify(metrics, never()).counter("commitsFailed");
                 verify(client, never()).startTransaction(any(StartTransaction.class));
-                assertThat(commitsFailed.getCount()).isZero();
             } else {
+                verify(metrics).counter("commitsSucceeded");
                 verify(metrics).counter("commitsFailed");
-                assertThat(commitsFailed.getCount()).isEqualTo(1);
             }
+            verifyNoMoreInteractions(commitsSucceeded, commitsFailed);
             verify(client).close();
         }
     }

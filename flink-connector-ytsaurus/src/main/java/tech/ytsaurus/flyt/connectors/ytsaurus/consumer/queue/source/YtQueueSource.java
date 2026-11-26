@@ -41,6 +41,7 @@ import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.split.YtQueu
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.split.YtQueueSplitSerializer;
 import tech.ytsaurus.flyt.connectors.ytsaurus.utils.YtUtils;
 
+import static org.apache.flink.connector.base.source.reader.SourceReaderOptions.SOURCE_READER_CLOSE_TIMEOUT;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.USE_TLS;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.ASYNC_BUFFER_CAPACITY;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.ASYNC_WORKER_COUNT;
@@ -145,13 +146,17 @@ public final class YtQueueSource<T>
     @Override
     public SourceReader<T, YtQueueSplit> createReader(SourceReaderContext readerContext) throws Exception {
         YTsaurusClient client = createClient();
-        YtQueuePullerFactory pullerFactory = null;
+        YtQueuePullerFactory pullerFactory = new DirectYtQueuePullerFactory(client, queuePath, consumerPath);
         YtQueueOffsetCommitter offsetCommitter = null;
         try {
-            pullerFactory = new DirectYtQueuePullerFactory(client, queuePath, consumerPath);
             offsetCommitter = Optional.ofNullable(consumerPath)
                     .<YtQueueOffsetCommitter>map(path -> new YTsaurusQueueConsumerOffsetCommitter(
-                            client, path, queuePath, readerContext.metricGroup().counter("commitsFailed")))
+                            client,
+                            path,
+                            queuePath,
+                            readerContext.metricGroup().counter("commitsSucceeded"),
+                            readerContext.metricGroup().counter("commitsFailed"),
+                            readerContext.getConfiguration().get(SOURCE_READER_CLOSE_TIMEOUT)))
                     .orElseGet(YtQueueOffsetCommitter::noOp);
             return new YtQueueSourceReader<>(
                     pullerFactory,
@@ -163,11 +168,7 @@ public final class YtQueueSource<T>
                     offsetCommitter);
         } catch (Exception | Error failure) {
             closeAfterFailure(offsetCommitter, failure);
-            if (pullerFactory == null) {
-                closeAfterFailure(client, failure);
-            } else {
-                closeAfterFailure(pullerFactory, failure);
-            }
+            closeAfterFailure(pullerFactory, failure);
             throw failure;
         }
     }
