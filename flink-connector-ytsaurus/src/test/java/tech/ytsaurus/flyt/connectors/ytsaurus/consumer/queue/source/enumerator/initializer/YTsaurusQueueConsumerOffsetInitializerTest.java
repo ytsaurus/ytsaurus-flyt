@@ -47,7 +47,7 @@ class YTsaurusQueueConsumerOffsetInitializerTest {
     private static final String QUEUE_CLUSTER = "cluster-from-attribute";
 
     @Test
-    void readsStoredOffsetsWithoutTrimNormalizationAndCachesClusterName() {
+    void readsStoredOffsetsWithoutTrimNormalizationAndCachesClusterName() throws Exception {
         YTsaurusClient client = clientWithClusterName();
         UnversionedRowset firstRows = rowset(offsetRow(10L), offsetRow(23L));
         UnversionedRowset laterRows = rowset(offsetRow(17L));
@@ -74,7 +74,7 @@ class YTsaurusQueueConsumerOffsetInitializerTest {
         assertLookupRequest(requests.getAllValues().get(0), List.of(0L, 2L));
         assertLookupRequest(requests.getAllValues().get(1), List.of(1L));
         verify(client, never()).pullConsumer(any(PullConsumer.class));
-        verify(client).close();
+        verify(client, never()).close();
         verifyNoMoreInteractions(client);
     }
 

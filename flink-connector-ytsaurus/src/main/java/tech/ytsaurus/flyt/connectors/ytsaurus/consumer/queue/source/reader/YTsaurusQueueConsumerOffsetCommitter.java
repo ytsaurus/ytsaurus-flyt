@@ -12,6 +12,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 
 import lombok.extern.slf4j.Slf4j;
+import org.apache.flink.metrics.Counter;
 import tech.ytsaurus.client.ApiServiceClient;
 import tech.ytsaurus.client.ApiServiceTransaction;
 import tech.ytsaurus.client.request.AdvanceConsumer;
@@ -28,6 +29,8 @@ public final class YTsaurusQueueConsumerOffsetCommitter implements YtQueueOffset
 
     private final YPath queuePath;
 
+    private final Counter commitsFailed;
+
     private final NavigableMap<Long, List<YtQueueSplit>> pendingCheckpoints = new TreeMap<>();
 
     private boolean closed;
@@ -35,10 +38,12 @@ public final class YTsaurusQueueConsumerOffsetCommitter implements YtQueueOffset
     public YTsaurusQueueConsumerOffsetCommitter(
             ApiServiceClient client,
             String consumerPath,
-            String queuePath) {
+            String queuePath,
+            Counter commitsFailed) {
         this.client = Objects.requireNonNull(client, "YT client must not be null");
         this.consumerPath = YPath.simple(Objects.requireNonNull(consumerPath, "Consumer path must not be null"));
         this.queuePath = YPath.simple(Objects.requireNonNull(queuePath, "Queue path must not be null"));
+        this.commitsFailed = Objects.requireNonNull(commitsFailed, "Commit failure counter must not be null");
         log.info(
                 "Opened YT queue consumer offset committer for consumer {} and queue {}",
                 this.consumerPath,
@@ -85,15 +90,25 @@ public final class YTsaurusQueueConsumerOffsetCommitter implements YtQueueOffset
             if (!offsets.isEmpty()) {
                 commitOffsets(offsets);
             }
-        } catch (Exception | Error failure) {
-            log.error(
+            log.info("Committed YT queue consumer offsets for checkpoint {}", checkpointId);
+        } catch (InterruptedException failure) {
+            throw failure;
+        } catch (Exception failure) {
+            // A close error can be suppressed by the original RPC exception.
+            for (Throwable suppressed : failure.getSuppressed()) {
+                if (suppressed instanceof Error) {
+                    throw (Error) suppressed;
+                }
+            }
+            commitsFailed.inc();
+            log.warn(
                     "Failed to commit YT queue consumer offsets for checkpoint {}",
                     checkpointId,
                     failure);
-            throw failure;
+        } finally {
+            // A later completed checkpoint carries the current offsets; do not retain failed attempts.
+            pendingCheckpoints.headMap(checkpointId, true).clear();
         }
-        pendingCheckpoints.headMap(checkpointId, true).clear();
-        log.info("Committed YT queue consumer offsets for checkpoint {}", checkpointId);
     }
 
     @Override

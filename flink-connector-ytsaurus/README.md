@@ -755,7 +755,9 @@ In consumer mode, a fresh source and newly discovered partitions start from the 
 
 Flink checkpoint state remains authoritative after restore, including when it differs from the current consumer offsets. Reads use the consumer API with the explicit offset from Flink state. The existing trimmed offset policy applies both to fresh and restored offsets: `FAIL` rejects a gap, while `SKIP` continues from the first available row. Consumer mode supports a queue and consumer on the same cluster.
 
-Consumer offsets are advanced only after a Flink checkpoint completes. All offsets owned by one source reader are advanced in one YTsaurus tablet transaction. A commit failure fails the source so that Flink can restart it without losing data. If checkpointing is disabled or no checkpoint completes, the external consumer offsets do not advance. A consumer must be used exclusively by one Flink job; parallel subtasks of that job are supported.
+Consumer offsets are advanced only after a Flink checkpoint completes. All offsets owned by one source reader are advanced in one YTsaurus tablet transaction. Commit RPC failures are logged and increment the reader's `commitsFailed` counter without failing the source. A later completed checkpoint attempts to commit the latest offsets; failed attempts are not retained for retry, and shutdown does not guarantee a final commit.
+
+Flink recovery still uses checkpoint state, but stale consumer offsets can delay trimming for vital consumers and cause replay on a fresh start without Flink state. If checkpointing is disabled or no checkpoint completes, the external consumer offsets do not advance. A consumer must be used exclusively by one Flink job; parallel subtasks of that job are supported.
 
 ```sql
 CREATE TABLE queue_events (

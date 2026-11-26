@@ -150,7 +150,8 @@ public final class YtQueueSource<T>
         try {
             pullerFactory = new DirectYtQueuePullerFactory(client, queuePath, consumerPath);
             offsetCommitter = Optional.ofNullable(consumerPath)
-                    .<YtQueueOffsetCommitter>map(path -> new YTsaurusQueueConsumerOffsetCommitter(client, path, queuePath))
+                    .<YtQueueOffsetCommitter>map(path -> new YTsaurusQueueConsumerOffsetCommitter(
+                            client, path, queuePath, readerContext.metricGroup().counter("commitsFailed")))
                     .orElseGet(YtQueueOffsetCommitter::noOp);
             return new YtQueueSourceReader<>(
                     pullerFactory,
@@ -210,7 +211,8 @@ public final class YtQueueSource<T>
         try {
             metadataProvider = new YTsaurusQueueMetadataProvider(metadataClient, queuePath);
             if (consumerPath != null) {
-                offsetInitializer = createConsumerOffsetInitializer();
+                offsetInitializer = new YTsaurusQueueConsumerOffsetInitializer(
+                        metadataClient, consumerPath, queuePath);
             } else if (startupMode == YtQueueStartupMode.SPECIFIC) {
                 offsetInitializer = new SpecificYtQueueOffsetInitializer(specificOffsets);
             } else {
@@ -238,19 +240,6 @@ public final class YtQueueSource<T>
 
     private YTsaurusClient createClient() {
         return YtUtils.makeYtClient(proxy, credentialsProvider.getCredentials(proxy), useTls);
-    }
-
-    private YtQueueOffsetInitializer createConsumerOffsetInitializer() {
-        YTsaurusClient client = createClient();
-        try {
-            return new YTsaurusQueueConsumerOffsetInitializer(
-                    client,
-                    consumerPath,
-                    queuePath);
-        } catch (RuntimeException | Error failure) {
-            closeAfterFailure(client, failure);
-            throw failure;
-        }
     }
 
     private static String requireNonBlank(String value, String fieldName) {

@@ -8,7 +8,7 @@ import java.util.Optional;
 
 import javax.annotation.Nullable;
 
-import tech.ytsaurus.client.YTsaurusClient;
+import tech.ytsaurus.client.ApiServiceClient;
 import tech.ytsaurus.client.request.GetNode;
 import tech.ytsaurus.client.request.LookupRowsRequest;
 import tech.ytsaurus.core.cypress.YPath;
@@ -32,7 +32,7 @@ public final class YTsaurusQueueConsumerOffsetInitializer implements YtQueueOffs
             .build()
             .toLookup();
 
-    private final YTsaurusClient client;
+    private final ApiServiceClient client;
 
     private final YPath consumerPath;
 
@@ -41,8 +41,9 @@ public final class YTsaurusQueueConsumerOffsetInitializer implements YtQueueOffs
     @Nullable
     private String queueClusterName;
 
+    /** Uses a shared client whose lifecycle is managed by the caller. */
     public YTsaurusQueueConsumerOffsetInitializer(
-            YTsaurusClient client,
+            ApiServiceClient client,
             String consumerPath,
             String queuePath) {
         this.client = Objects.requireNonNull(client, "YT client must not be null");
@@ -102,10 +103,5 @@ public final class YTsaurusQueueConsumerOffsetInitializer implements YtQueueOffs
             offsets.put(partitionIndexes.get(index), offset);
         }
         return offsets;
-    }
-
-    @Override
-    public void close() {
-        client.close();
     }
 }

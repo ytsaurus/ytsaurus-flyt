@@ -15,7 +15,10 @@ import org.apache.flink.api.connector.source.SourceReaderContext;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.connector.testutils.source.reader.TestingReaderContext;
 import org.apache.flink.connector.testutils.source.reader.TestingReaderOutput;
+import org.apache.flink.metrics.SimpleCounter;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import tech.ytsaurus.client.ApiServiceClient;
 import tech.ytsaurus.client.ApiServiceTransaction;
@@ -43,11 +46,15 @@ import static org.mockito.Mockito.when;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.YtQueueTestFixtures.split;
 
 class YtQueueSourceReaderTest {
-    @Test
-    void consumerCommitsEmittedSnapshotAndRestoresItsOffsetEvenAfterLaterCommit() throws Exception {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void consumerRestoresEmittedSnapshotOffsetAfterLaterCommit(boolean failFirstCommit) throws Exception {
         ApiServiceClient client = mock(ApiServiceClient.class);
         ApiServiceTransaction firstTransaction = successfulTransaction();
         ApiServiceTransaction secondTransaction = successfulTransaction();
+        if (failFirstCommit) {
+            when(firstTransaction.commit()).thenReturn(CompletableFuture.failedFuture(new IOException("commit failed")));
+        }
         when(client.startTransaction(any(StartTransaction.class)))
                 .thenReturn(CompletableFuture.completedFuture(firstTransaction))
                 .thenReturn(CompletableFuture.completedFuture(secondTransaction));
@@ -62,10 +69,10 @@ class YtQueueSourceReaderTest {
             TestingReaderOutput<String> output = new TestingReaderOutput<>();
             reader.pollNext(output);
             checkpoint = reader.snapshotState(1);
+            reader.notifyCheckpointComplete(1);
             reader.pollNext(output);
             reader.snapshotState(2);
 
-            reader.notifyCheckpointComplete(1);
             reader.notifyCheckpointComplete(2);
 
             ArgumentCaptor<AdvanceConsumer> advances = ArgumentCaptor.forClass(AdvanceConsumer.class);
@@ -106,7 +113,8 @@ class YtQueueSourceReaderTest {
                 readerOptions(),
                 new Configuration(),
                 new TestingReaderContext(),
-                new YTsaurusQueueConsumerOffsetCommitter(client, "//home/test/consumer", "//home/test/queue"));
+                new YTsaurusQueueConsumerOffsetCommitter(
+                        client, "//home/test/consumer", "//home/test/queue", new SimpleCounter()));
     }
 
     private static ApiServiceTransaction successfulTransaction() {

@@ -5,7 +5,11 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
+import org.apache.flink.metrics.Counter;
+import org.apache.flink.metrics.SimpleCounter;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import tech.ytsaurus.client.ApiServiceClient;
 import tech.ytsaurus.client.ApiServiceTransaction;
@@ -32,6 +36,8 @@ class YTsaurusQueueConsumerOffsetCommitterTest {
     private static final String CONSUMER_PATH = "//home/test/consumer";
 
     private static final String QUEUE_PATH = "//home/test/queue";
+
+    private final Counter commitsFailed = new SimpleCounter();
 
     @Test
     void commitsSnapshotOffsetsOnlyAfterCheckpointCompletion() throws Exception {
@@ -104,7 +110,7 @@ class YTsaurusQueueConsumerOffsetCommitterTest {
     }
 
     @Test
-    void partialAdvancementFailureFailsTaskAndDoesNotCommitTransaction() {
+    void partialAdvancementFailureIsCountedWithoutCommittingTransaction() throws Exception {
         ApiServiceClient client = mock(ApiServiceClient.class);
         ApiServiceTransaction transaction = mock(ApiServiceTransaction.class);
         when(client.startTransaction(any(StartTransaction.class))).thenReturn(
@@ -115,47 +121,98 @@ class YTsaurusQueueConsumerOffsetCommitterTest {
         YTsaurusQueueConsumerOffsetCommitter committer = committer(client);
         committer.snapshotState(1, List.of(split("queue-id", 0, 10), split("queue-id", 1, 20)));
 
-        assertThatThrownBy(() -> committer.notifyCheckpointComplete(1))
-                .isInstanceOf(IOException.class)
-                .hasMessage("advance failed");
+        committer.notifyCheckpointComplete(1);
 
+        assertThat(commitsFailed.getCount()).isEqualTo(1);
         verify(transaction, never()).commit();
         verify(transaction, times(2)).advanceConsumer(any(AdvanceConsumer.class));
         verify(transaction).close();
     }
 
     @Test
-    void commitFailurePreservesSnapshotForRepeatedCheckpointCompletion() throws Exception {
+    void commitFailureDiscardsOlderSnapshotsAndPreservesLaterCheckpoint() throws Exception {
         ApiServiceClient client = mock(ApiServiceClient.class);
         ApiServiceTransaction failedTransaction = successfulTransaction(client);
-        ApiServiceTransaction retryTransaction = successfulTransaction(client);
+        ApiServiceTransaction laterTransaction = successfulTransaction(client);
         when(client.startTransaction(any(StartTransaction.class)))
                 .thenReturn(CompletableFuture.completedFuture(failedTransaction))
-                .thenReturn(CompletableFuture.completedFuture(retryTransaction));
+                .thenReturn(CompletableFuture.completedFuture(laterTransaction));
         IOException failure = new IOException("commit failed");
         when(failedTransaction.commit()).thenReturn(CompletableFuture.failedFuture(failure));
         RuntimeException closeFailure = new RuntimeException("close failed");
         doThrow(closeFailure).when(failedTransaction).close();
         YTsaurusQueueConsumerOffsetCommitter committer = committer(client);
         committer.snapshotState(1, List.of(split("queue-id", 0, 10)));
+        committer.snapshotState(2, List.of(split("queue-id", 0, 20)));
+        committer.snapshotState(3, List.of(split("queue-id", 0, 30)));
 
-        assertThatThrownBy(() -> committer.notifyCheckpointComplete(1))
-                .isSameAs(failure)
-                .hasSuppressedException(closeFailure);
+        committer.notifyCheckpointComplete(2);
+
+        assertThat(commitsFailed.getCount()).isEqualTo(1);
+        assertThat(failure).hasSuppressedException(closeFailure);
         verify(failedTransaction).commit();
         verify(failedTransaction).close();
-        verifyNoInteractions(retryTransaction);
 
         committer.notifyCheckpointComplete(1);
-        committer.notifyCheckpointComplete(1);
+        committer.notifyCheckpointComplete(2);
+        committer.notifyCheckpointAborted(2);
+        verifyNoInteractions(laterTransaction);
+
+        committer.notifyCheckpointComplete(3);
 
         ArgumentCaptor<AdvanceConsumer> advances = ArgumentCaptor.forClass(AdvanceConsumer.class);
         verify(failedTransaction).advanceConsumer(advances.capture());
-        verify(retryTransaction).advanceConsumer(advances.capture());
-        assertThat(advances.getAllValues()).allSatisfy(request -> assertAdvance(request, 0, 10));
+        verify(laterTransaction).advanceConsumer(advances.capture());
+        assertAdvance(advances.getAllValues().get(0), 0, 20);
+        assertAdvance(advances.getAllValues().get(1), 0, 30);
         verify(client, times(2)).startTransaction(any(StartTransaction.class));
-        verify(retryTransaction).commit();
-        verify(retryTransaction).close();
+        verify(laterTransaction).commit();
+        verify(laterTransaction).close();
+        assertThat(commitsFailed.getCount()).isEqualTo(1);
+    }
+
+    @Test
+    void propagatesInterruptionAndPreservesInterruptFlag() throws Exception {
+        ApiServiceClient client = mock(ApiServiceClient.class);
+        ApiServiceTransaction transaction = successfulTransaction(client);
+        when(transaction.commit()).thenReturn(new CompletableFuture<>());
+        YTsaurusQueueConsumerOffsetCommitter committer = committer(client);
+        committer.snapshotState(1, List.of(split("queue-id", 0, 10)));
+
+        Thread.currentThread().interrupt();
+        try {
+            assertThatThrownBy(() -> committer.notifyCheckpointComplete(1))
+                    .isInstanceOf(InterruptedException.class);
+            assertThat(Thread.currentThread().isInterrupted()).isTrue();
+        } finally {
+            Thread.interrupted();
+        }
+
+        verify(transaction).close();
+        assertThat(commitsFailed.getCount()).isZero();
+        committer.notifyCheckpointComplete(1);
+        verify(client).startTransaction(any(StartTransaction.class));
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void propagatesErrorsFromCommitOrClose(boolean failOnClose) {
+        ApiServiceClient client = mock(ApiServiceClient.class);
+        ApiServiceTransaction transaction = successfulTransaction(client);
+        AssertionError error = new AssertionError("transaction failed");
+        if (failOnClose) {
+            when(transaction.commit()).thenReturn(CompletableFuture.failedFuture(new IOException("commit failed")));
+            doThrow(error).when(transaction).close();
+        } else {
+            when(transaction.commit()).thenReturn(CompletableFuture.failedFuture(error));
+        }
+        YTsaurusQueueConsumerOffsetCommitter committer = committer(client);
+        committer.snapshotState(1, List.of(split("queue-id", 0, 10)));
+
+        assertThatThrownBy(() -> committer.notifyCheckpointComplete(1)).isSameAs(error);
+
+        verify(transaction).close();
+        assertThat(commitsFailed.getCount()).isZero();
     }
 
     @Test
@@ -185,11 +242,12 @@ class YTsaurusQueueConsumerOffsetCommitterTest {
         return transaction;
     }
 
-    private static YTsaurusQueueConsumerOffsetCommitter committer(ApiServiceClient client) {
+    private YTsaurusQueueConsumerOffsetCommitter committer(ApiServiceClient client) {
         return new YTsaurusQueueConsumerOffsetCommitter(
                 client,
                 CONSUMER_PATH,
-                QUEUE_PATH);
+                QUEUE_PATH,
+                commitsFailed);
     }
 
     private static void assertAdvance(

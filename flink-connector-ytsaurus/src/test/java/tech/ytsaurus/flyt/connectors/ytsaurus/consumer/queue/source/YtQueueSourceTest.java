@@ -3,17 +3,28 @@ package tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 
 import org.apache.flink.api.common.typeinfo.Types;
 import org.apache.flink.api.connector.source.Boundedness;
+import org.apache.flink.api.connector.source.SourceReader;
 import org.apache.flink.api.connector.source.SplitEnumerator;
 import org.apache.flink.api.connector.source.SplitEnumeratorContext;
+import org.apache.flink.configuration.Configuration;
+import org.apache.flink.connector.testutils.source.reader.TestingReaderContext;
+import org.apache.flink.metrics.Counter;
+import org.apache.flink.metrics.SimpleCounter;
+import org.apache.flink.metrics.groups.SourceReaderMetricGroup;
+import org.apache.flink.metrics.groups.UnregisteredMetricsGroup;
 import org.apache.flink.util.InstantiationUtil;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.NullSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.MockedStatic;
 import tech.ytsaurus.client.YTsaurusClient;
+import tech.ytsaurus.client.request.StartTransaction;
 
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.credentials.extractor.ManualCredentialsProvider;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.config.YtQueueStartupMode;
@@ -31,14 +42,17 @@ import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
-import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
+import static org.mockito.Mockito.when;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.ASYNC_BUFFER_CAPACITY;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.ASYNC_WORKER_COUNT;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.MAX_DATA_WEIGHT;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.MAX_ROW_COUNT;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.POLL_BACKOFF;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.YtQueueTestFixtures.split;
 
 class YtQueueSourceTest {
     @Test
@@ -147,15 +161,14 @@ class YtQueueSourceTest {
 
     @ParameterizedTest
     @CsvSource({"//home/test/consumer, false", "bad-path, true"})
-    void closesEnumeratorClientsOnShutdownOrInitializationFailure(
+    void closesSharedEnumeratorClientOnceOnShutdownOrInitializationFailure(
             String consumerPath,
             boolean failInitialization) throws Exception {
         YTsaurusClient metadataClient = mock(YTsaurusClient.class);
-        YTsaurusClient consumerClient = mock(YTsaurusClient.class);
         YtQueueSource<String> source = sourceBuilder().consumerPath(consumerPath).build();
         try (MockedStatic<YtUtils> ytUtils = mockStatic(YtUtils.class)) {
             ytUtils.when(() -> YtUtils.makeYtClient(anyString(), any(), anyBoolean()))
-                    .thenReturn(metadataClient, consumerClient);
+                    .thenReturn(metadataClient);
             if (failInitialization) {
                 assertThatThrownBy(() -> source.createEnumerator(mock(SplitEnumeratorContext.class)))
                         .isInstanceOf(IllegalArgumentException.class);
@@ -166,10 +179,44 @@ class YtQueueSourceTest {
                 enumerator.close();
             }
 
-            ytUtils.verify(() -> YtUtils.makeYtClient(anyString(), any(), anyBoolean()), times(2));
+            ytUtils.verify(() -> YtUtils.makeYtClient(anyString(), any(), anyBoolean()));
             verify(metadataClient).close();
-            verify(consumerClient).close();
-            verifyNoMoreInteractions(metadataClient, consumerClient);
+            verifyNoMoreInteractions(metadataClient);
+        }
+    }
+
+    @ParameterizedTest
+    @NullSource
+    @ValueSource(strings = "//home/test/consumer")
+    void registersCommitFailureMetricOnlyForConsumerReaders(String consumerPath) throws Exception {
+        YTsaurusClient client = mock(YTsaurusClient.class);
+        when(client.pullQueue(any())).thenReturn(new CompletableFuture<>());
+        when(client.pullConsumer(any())).thenReturn(new CompletableFuture<>());
+        when(client.startTransaction(any(StartTransaction.class)))
+                .thenReturn(CompletableFuture.failedFuture(new IllegalStateException("YT unavailable")));
+        SourceReaderMetricGroup metrics = spy(UnregisteredMetricsGroup.createSourceReaderMetricGroup());
+        Counter commitsFailed = new SimpleCounter();
+        when(metrics.counter("commitsFailed")).thenReturn(commitsFailed);
+        YtQueueSource<String> source = sourceBuilder().consumerPath(consumerPath).build();
+
+        try (MockedStatic<YtUtils> ytUtils = mockStatic(YtUtils.class)) {
+            ytUtils.when(() -> YtUtils.makeYtClient(anyString(), any(), anyBoolean())).thenReturn(client);
+            try (SourceReader<String, YtQueueSplit> reader = source.createReader(
+                    new TestingReaderContext(new Configuration(), metrics))) {
+                reader.addSplits(List.of(split("queue-id", 0, 10)));
+                reader.snapshotState(1);
+                reader.notifyCheckpointComplete(1);
+            }
+
+            if (consumerPath == null) {
+                verify(metrics, never()).counter("commitsFailed");
+                verify(client, never()).startTransaction(any(StartTransaction.class));
+                assertThat(commitsFailed.getCount()).isZero();
+            } else {
+                verify(metrics).counter("commitsFailed");
+                assertThat(commitsFailed.getCount()).isEqualTo(1);
+            }
+            verify(client).close();
         }
     }
 
