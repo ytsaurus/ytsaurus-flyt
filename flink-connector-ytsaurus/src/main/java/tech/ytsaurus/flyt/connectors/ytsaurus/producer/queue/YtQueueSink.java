@@ -58,13 +58,6 @@ public class YtQueueSink implements Sink<RowData> {
         return createWriter(context.asSerializationSchemaInitializationContext(), context.metricGroup());
     }
 
-    // Required by the Sink interface in Flink 1.20.
-    @Override
-    @SuppressWarnings("deprecation")
-    public SinkWriter<RowData> createWriter(InitContext context) throws IOException {
-        return createWriter(context.asSerializationSchemaInitializationContext(), context.metricGroup());
-    }
-
     private SinkWriter<RowData> createWriter(
             SerializationSchema.InitializationContext serializationContext, MetricGroup metrics) throws IOException {
         YtQueueSinkWriter writer = new YtQueueSinkWriter(
