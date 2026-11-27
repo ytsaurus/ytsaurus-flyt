@@ -35,11 +35,13 @@ def minicluster_flink_config(config: FlytConfig, size: WorkerSize, user: Mapping
 
 @dataclass(frozen=True)
 class MiniCluster:
-    """The MiniCluster YT job: its cpu, its container (``memory``) and its ``config.yaml``."""
+    """The MiniCluster YT job: its cpu, its container (``memory``) and its ``config.yaml``, with the user's Flink
+    options they come from."""
 
     cpu: int
     memory: int
     flink_config: Dict[str, str]
+    flink_options: Dict[str, str]
 
 
 def minicluster(config: FlytConfig, user: Optional[Mapping[str, str]] = None) -> MiniCluster:
@@ -51,4 +53,5 @@ def minicluster(config: FlytConfig, user: Optional[Mapping[str, str]] = None) ->
         cpu=size.cpu,
         memory=size.memory,
         flink_config=minicluster_flink_config(config, size, user),
+        flink_options=dict(user),
     )

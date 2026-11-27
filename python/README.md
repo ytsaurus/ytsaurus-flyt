@@ -138,12 +138,34 @@ sql:
   spec:
     minicluster: {...}   # Vanilla operation spec
     application: {...}
+  resources:             # the Flink options that size a task, the first one set wins
+    minicluster:
+      flink_minicluster:
+        cpu_limit: [flyt.taskmanager.cpu.cores, taskmanager.numberOfTaskSlots]
+        memory_limit: [taskmanager.memory.process.size]
+    application:
+      jobmanager: {cpu_limit: [flyt.jobmanager.cpu.cores], memory_limit: [jobmanager.memory.process.size]}
+      taskmanager: {cpu_limit: [...], memory_limit: [...], job_count: [flyt.taskmanager.replicas]}
+flink_conf:
+  environment_variable: FLYT_FLINK_CONF
+  options: {...}         # the profile's Flink options the specs are built from
 ```
 
 Each spec is what `flyt run script.sql` submits in that mode for the profile at the time of `flyt install`: the runtime
 layer, the runner, the JARs, the Flink configuration and the resources. The launcher adds what belongs to a run:
 the script as a file named `script_file_name` in every task's `file_paths`, the pool and `secure_vault`
 (`YT_USER`, `YT_TOKEN`). Run `flyt install` again after changing the profile or upgrading flyt.
+
+Flink options of a run go into the `FLYT_FLINK_CONF` environment variable of every task as a JSON object
+(`{"execution.runtime-mode": "batch", "flyt.taskmanager.replicas": 4}`). The job merges them over
+`flink_conf.options` and renders its `config.yaml` again, exactly as `flyt run` would for the merged options;
+an invalid configuration fails the job with the reason in its log. Leading `SET`s of the script still win.
+
+Options that size the cluster change the spec as well, and that is the launcher's part. For every field under
+`sql.resources` of the mode, take the first listed option that is set in the merged options and write it into
+`tasks/<task>/<field>` of the spec: an integer for `cpu_limit` and `job_count`, bytes for `memory_limit`
+(a number with a `k`, `m` or `g` suffix, binary units). A field with none of its options set keeps the spec's value.
+With more TaskManagers raise `max_failed_job_count` too: flyt allows 5 per TaskManager, 10 at least.
 
 ## JARs
 

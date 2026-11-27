@@ -6,5 +6,10 @@ rm -f "$FLINK_CONF_DIR/flink-conf.yaml"
 cat > "$FLINK_CONF_DIR/config.yaml" <<'FLYT_FLINK_CONF_EOF'
 {flink_conf_yaml}
 FLYT_FLINK_CONF_EOF
+# Flink options of this run from a launcher that submits a ready spec, a JSON object in the environment:
+# config.yaml is rendered again from them over the profile's, by flyt's modules from the operation's files.
+if [ -n "${{{flink_conf_env}:-}}" ]; then
+    "$PYTHON_BIN" "$ROOT_DIR/{flink_conf_tool}" "$FLINK_CONF_DIR/config.yaml" {flink_conf_env} {cluster_mode} "$PYTHON_BIN" {flink_options}
+fi
 echo "Flink configuration ($FLINK_CONF_DIR/config.yaml):" 1>&2
 cat "$FLINK_CONF_DIR/config.yaml" 1>&2

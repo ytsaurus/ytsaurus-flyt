@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import shlex
 from pathlib import Path
@@ -11,9 +12,16 @@ from yt.wrapper import YtClient
 from yt.wrapper.spec_builders import VanillaSpecBuilder
 
 from ytsaurus_flyt.application import ApplicationCluster, application_cluster
-from ytsaurus_flyt.config import FlytConfig
+from ytsaurus_flyt.config import ClusterMode, FlytConfig
 from ytsaurus_flyt.flink_conf import (
+    FLINK_CONF_ENV,
     FLINK_REST_PORT,
+    FLYT_JM_CPU_KEY,
+    FLYT_TM_CPU_KEY,
+    FLYT_TM_REPLICAS_KEY,
+    JM_PROCESS_SIZE_KEY,
+    TASK_SLOTS_KEY,
+    TM_PROCESS_SIZE_KEY,
     flink_config_warnings,
     render_flink_config_yaml,
     user_flink_config,
@@ -36,12 +44,30 @@ TASKMANAGER_TASK = "taskmanager"
 _RUN_SCRIPTS_DIR = Path(__file__).parent / "run_scripts"
 JOB_HELPER_FILENAME = "flyt_job_helper.py"
 _JOB_HELPER_PATH = _RUN_SCRIPTS_DIR / "application" / JOB_HELPER_FILENAME
+# flyt's configuration modules as an operation file: the job renders config.yaml with them from FLINK_CONF_ENV.
+FLINK_CONF_TOOL_FILENAME = "flyt_flink_conf.zip"
+FLINK_CONF_TOOL_MAIN_PATH = _RUN_SCRIPTS_DIR / "common" / "flink_conf_from_env.py"
 MINICLUSTER_RUNNER_FILENAME = "flyt_minicluster.py"
 _MINICLUSTER_RUNNER_PATH = _RUN_SCRIPTS_DIR / "minicluster" / MINICLUSTER_RUNNER_FILENAME
 
 # The Flink cluster of a run, its YT jobs with their config.yaml: an application cluster or a MiniCluster.
 FlinkCluster = Union[ApplicationCluster, MiniCluster]
 
+
+# The Flink options that size a task's YT jobs, per cluster mode: the first one set wins, flyt's default otherwise.
+TASK_RESOURCE_OPTIONS: Dict[str, Dict[str, Dict[str, List[str]]]] = {
+    ClusterMode.MINICLUSTER.value: {
+        MINICLUSTER_TASK: {"cpu_limit": [FLYT_TM_CPU_KEY, TASK_SLOTS_KEY], "memory_limit": [TM_PROCESS_SIZE_KEY]},
+    },
+    ClusterMode.APPLICATION.value: {
+        JOBMANAGER_TASK: {"cpu_limit": [FLYT_JM_CPU_KEY], "memory_limit": [JM_PROCESS_SIZE_KEY]},
+        TASKMANAGER_TASK: {
+            "cpu_limit": [FLYT_TM_CPU_KEY, TASK_SLOTS_KEY],
+            "memory_limit": [TM_PROCESS_SIZE_KEY],
+            "job_count": [FLYT_TM_REPLICAS_KEY],
+        },
+    },
+}
 
 # Failed YT jobs before the operation fails; every TaskManager fails on its own (OOM, discovery timeout).
 DEFAULT_MAX_FAILED_JOB_COUNT = 10
@@ -130,6 +156,7 @@ def _build_run_script(
     use_squashfs_sandbox_unpack: bool = False,
     role: Optional[str] = None,
     flink_config: Mapping[str, str],
+    flink_options: Optional[Mapping[str, str]] = None,
 ) -> str:
     result_script = ["#!/bin/bash", "set -e"]
     # Values are substituted into the templates, not re-formatted, so braces in them are safe.
@@ -139,6 +166,10 @@ def _build_run_script(
         "python_bin": config.python_bin,
         "rest_port": FLINK_REST_PORT,
         "flink_conf_yaml": render_flink_config_yaml(flink_config).rstrip("\n"),
+        "flink_conf_env": FLINK_CONF_ENV,
+        "flink_conf_tool": FLINK_CONF_TOOL_FILENAME,
+        "cluster_mode": (ClusterMode.MINICLUSTER if role is None else ClusterMode.APPLICATION).value,
+        "flink_options": shlex.quote(json.dumps(dict(flink_options or {}), sort_keys=True)),
     }
     if role is None:
         fmt.update(
@@ -262,6 +293,7 @@ def build_vanilla_operation_spec(
                 use_squashfs_sandbox_unpack=use_squashfs_sandbox_unpack,
                 role=JOBMANAGER_TASK,
                 flink_config=flink_config,
+                flink_options=cluster.flink_options,
             ),
             job_count=1,
             cpu=resources.jobmanager_cpu,
@@ -280,6 +312,7 @@ def build_vanilla_operation_spec(
                 use_squashfs_sandbox_unpack=use_squashfs_sandbox_unpack,
                 role=TASKMANAGER_TASK,
                 flink_config=flink_config,
+                flink_options=cluster.flink_options,
             ),
             job_count=resources.taskmanager_count,
             cpu=resources.taskmanager_size.cpu,
@@ -298,6 +331,7 @@ def build_vanilla_operation_spec(
                 service_name,
                 use_squashfs_sandbox_unpack=use_squashfs_sandbox_unpack,
                 flink_config=flink_config,
+                flink_options=cluster.flink_options,
             ),
             job_count=1,
             cpu=cluster.cpu,
