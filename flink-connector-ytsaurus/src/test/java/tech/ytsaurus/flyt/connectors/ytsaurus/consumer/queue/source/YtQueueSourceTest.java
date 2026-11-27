@@ -3,25 +3,56 @@ package tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 
 import org.apache.flink.api.common.typeinfo.Types;
 import org.apache.flink.api.connector.source.Boundedness;
+import org.apache.flink.api.connector.source.SourceReader;
+import org.apache.flink.api.connector.source.SplitEnumerator;
+import org.apache.flink.api.connector.source.SplitEnumeratorContext;
+import org.apache.flink.configuration.Configuration;
+import org.apache.flink.connector.testutils.source.reader.TestingReaderContext;
+import org.apache.flink.metrics.Counter;
+import org.apache.flink.metrics.groups.SourceReaderMetricGroup;
+import org.apache.flink.metrics.groups.UnregisteredMetricsGroup;
 import org.apache.flink.util.InstantiationUtil;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.NullSource;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.MockedStatic;
+import tech.ytsaurus.client.YTsaurusClient;
+import tech.ytsaurus.client.request.StartTransaction;
 
 import tech.ytsaurus.flyt.connectors.ytsaurus.common.credentials.extractor.ManualCredentialsProvider;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.config.YtQueueStartupMode;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.config.YtQueueTrimmedOffsetPolicy;
+import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.enumerator.YtQueueEnumeratorState;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.enumerator.YtQueueEnumeratorStateSerializer;
+import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.split.YtQueueSplit;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.split.YtQueueSplitSerializer;
+import tech.ytsaurus.flyt.connectors.ytsaurus.utils.YtUtils;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.timeout;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
+import static org.mockito.Mockito.when;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.ASYNC_BUFFER_CAPACITY;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.ASYNC_WORKER_COUNT;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.MAX_DATA_WEIGHT;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.MAX_ROW_COUNT;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.POLL_BACKOFF;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.YtQueueTestFixtures.split;
 
 class YtQueueSourceTest {
     @Test
@@ -115,6 +146,113 @@ class YtQueueSourceTest {
     }
 
     @Test
+    void consumerPathSurvivesFlinkSerialization() throws Exception {
+        YtQueueSource<String> source = sourceBuilder()
+                .consumerPath("//home/test/consumer")
+                .build();
+
+        YtQueueSource<String> restored = InstantiationUtil.clone(
+                source,
+                getClass().getClassLoader());
+
+        assertThat(restored).extracting("consumerPath")
+                .isEqualTo("//home/test/consumer");
+    }
+
+    @ParameterizedTest
+    @CsvSource({"//home/test/consumer, false", "bad-path, true"})
+    void closesSharedEnumeratorClientOnceOnShutdownOrInitializationFailure(
+            String consumerPath,
+            boolean failInitialization) throws Exception {
+        YTsaurusClient metadataClient = mock(YTsaurusClient.class);
+        YtQueueSource<String> source = sourceBuilder().consumerPath(consumerPath).build();
+        try (MockedStatic<YtUtils> ytUtils = mockStatic(YtUtils.class)) {
+            ytUtils.when(() -> YtUtils.makeYtClient(anyString(), any(), anyBoolean()))
+                    .thenReturn(metadataClient);
+            if (failInitialization) {
+                assertThatThrownBy(() -> source.createEnumerator(mock(SplitEnumeratorContext.class)))
+                        .isInstanceOf(IllegalArgumentException.class);
+            } else {
+                SplitEnumerator<YtQueueSplit, YtQueueEnumeratorState> enumerator =
+                        source.createEnumerator(mock(SplitEnumeratorContext.class));
+                enumerator.close();
+                enumerator.close();
+            }
+
+            ytUtils.verify(() -> YtUtils.makeYtClient(anyString(), any(), anyBoolean()));
+            verify(metadataClient).close();
+            verifyNoMoreInteractions(metadataClient);
+        }
+    }
+
+    @ParameterizedTest
+    @NullSource
+    @ValueSource(strings = "//home/test/consumer")
+    void registersCommitMetricsOnlyForConsumerReaders(String consumerPath) throws Exception {
+        YTsaurusClient client = mock(YTsaurusClient.class);
+        when(client.pullQueue(any())).thenReturn(new CompletableFuture<>());
+        when(client.pullConsumer(any())).thenReturn(new CompletableFuture<>());
+        when(client.startTransaction(any(StartTransaction.class)))
+                .thenReturn(CompletableFuture.failedFuture(new IllegalStateException("YT unavailable")));
+        SourceReaderMetricGroup metrics = spy(UnregisteredMetricsGroup.createSourceReaderMetricGroup());
+        Counter commitsSucceeded = mock(Counter.class);
+        Counter commitsFailed = mock(Counter.class);
+        when(metrics.counter("commitsSucceeded")).thenReturn(commitsSucceeded);
+        when(metrics.counter("commitsFailed")).thenReturn(commitsFailed);
+        YtQueueSource<String> source = sourceBuilder().consumerPath(consumerPath).build();
+
+        try (MockedStatic<YtUtils> ytUtils = mockStatic(YtUtils.class)) {
+            ytUtils.when(() -> YtUtils.makeYtClient(anyString(), any(), anyBoolean())).thenReturn(client);
+            try (SourceReader<String, YtQueueSplit> reader = source.createReader(
+                    new TestingReaderContext(new Configuration(), metrics))) {
+                reader.addSplits(List.of(split("queue-id", 0, 10)));
+                reader.snapshotState(1);
+                reader.notifyCheckpointComplete(1);
+                if (consumerPath != null) {
+                    verify(commitsFailed, timeout(2_000)).inc();
+                }
+            }
+
+            if (consumerPath == null) {
+                verify(metrics, never()).counter("commitsSucceeded");
+                verify(metrics, never()).counter("commitsFailed");
+                verify(client, never()).startTransaction(any(StartTransaction.class));
+            } else {
+                verify(metrics).counter("commitsSucceeded");
+                verify(metrics).counter("commitsFailed");
+            }
+            verifyNoMoreInteractions(commitsSucceeded, commitsFailed);
+            verify(client).close();
+        }
+    }
+
+    @Test
+    void rejectsExplicitStartupOptionsWithConsumerPath() {
+        assertThatThrownBy(() -> sourceBuilder()
+                .consumerPath("//home/test/consumer")
+                .startupMode(YtQueueStartupMode.EARLIEST)
+                .build())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("must not be configured with consumerPath");
+
+        assertThatThrownBy(() -> sourceBuilder()
+                .consumerPath("//home/test/consumer")
+                .specificOffsets(List.of(10L))
+                .build())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("must not be configured with consumerPath");
+    }
+
+    @Test
+    void rejectsBlankConsumerPath() {
+        assertThatThrownBy(() -> sourceBuilder()
+                .consumerPath(" ")
+                .build())
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("consumerPath must not be blank");
+    }
+
+    @Test
     void trimmedOffsetPolicySurvivesFlinkSerialization() throws Exception {
         YtQueueSource<String> source = sourceBuilder()
                 .trimmedOffsetPolicy(YtQueueTrimmedOffsetPolicy.SKIP)
@@ -132,7 +270,7 @@ class YtQueueSourceTest {
     void rejectsNullTrimmedOffsetPolicyInBuilder() {
         assertThatThrownBy(() -> sourceBuilder().trimmedOffsetPolicy(null))
                 .isInstanceOf(NullPointerException.class)
-                .hasMessage("trimmedOffsetPolicy");
+                .hasMessage("Trimmed offset policy must not be null");
     }
 
     @Test

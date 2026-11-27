@@ -32,6 +32,9 @@ public class YtQueueDynamicTableSource implements ScanTableSource {
 
     private final String queuePath;
 
+    @Nullable
+    private final String consumerPath;
+
     private final CredentialsProvider credentialsProvider;
 
     private final DecodingFormat<DeserializationSchema<RowData>> decodingFormat;
@@ -66,18 +69,22 @@ public class YtQueueDynamicTableSource implements ScanTableSource {
 
     @Override
     public ScanRuntimeProvider getScanRuntimeProvider(ScanContext context) {
+        YtQueueSource.Builder<RowData> builder = YtQueueSource.builder();
+        if (consumerPath != null) {
+            builder.consumerPath(consumerPath);
+        } else {
+            builder.startupMode(startupMode).specificOffsets(specificOffsets);
+        }
+
         DeserializationSchema<RowData> deserializer =
                 decodingFormat.createRuntimeDecoder(context, physicalRowDataType);
         TypeInformation<RowData> producedType = context.createTypeInformation(physicalRowDataType);
-
-        YtQueueSource<RowData> source = YtQueueSource.<RowData>builder()
+        YtQueueSource<RowData> source = builder
                 .proxy(proxy)
                 .queuePath(queuePath)
                 .credentialsProvider(credentialsProvider)
                 .recordDeserializer(createRecordDeserializer(deserializer))
                 .producedType(producedType)
-                .startupMode(startupMode)
-                .specificOffsets(specificOffsets)
                 .trimmedOffsetPolicy(trimmedOffsetPolicy)
                 .readerOptions(readerOptions)
                 .discoveryInterval(partitionDiscoveryInterval)
@@ -110,6 +117,7 @@ public class YtQueueDynamicTableSource implements ScanTableSource {
         return YtQueueDynamicTableSource.builder()
                 .proxy(proxy)
                 .queuePath(queuePath)
+                .consumerPath(consumerPath)
                 .credentialsProvider(credentialsProvider)
                 .decodingFormat(decodingFormat)
                 .physicalRowDataType(physicalRowDataType)

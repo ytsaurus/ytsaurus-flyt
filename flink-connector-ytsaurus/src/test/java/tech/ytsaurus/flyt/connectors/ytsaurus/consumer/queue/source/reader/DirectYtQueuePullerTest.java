@@ -6,9 +6,13 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import tech.ytsaurus.client.ApiServiceClient;
 import tech.ytsaurus.client.YTsaurusClient;
+import tech.ytsaurus.client.request.PullConsumer;
 import tech.ytsaurus.client.request.PullQueue;
 import tech.ytsaurus.client.rows.QueueRowset;
 import tech.ytsaurus.client.rows.UnversionedRow;
@@ -29,6 +33,37 @@ import static org.mockito.Mockito.when;
 
 class DirectYtQueuePullerTest {
     private static final String QUEUE_PATH = "//home/test/queue";
+
+    @Test
+    void consumerPullUsesExplicitSplitOffsetAndSharesLifecycle() throws Exception {
+        ApiServiceClient client = mock(ApiServiceClient.class);
+        UnversionedRow row = row();
+        CompletableFuture<QueueRowset> pending = new CompletableFuture<>();
+        when(client.pullConsumer(any()))
+                .thenReturn(pending)
+                .thenReturn(CompletableFuture.completedFuture(rowset(schema(), 42, List.of(row))));
+        DirectYtQueuePuller puller = new DirectYtQueuePuller(client, QUEUE_PATH, "//home/test/consumer", null);
+
+        puller.pull(request(3, 42));
+        puller.wakeUp();
+        assertThat(pending).isCancelled();
+        YtQueueBatch batch = puller.pull(request(3, 42)).join();
+
+        assertThat(batch.getStartOffset()).isEqualTo(42);
+        assertThat(batch.getRows()).containsExactly(row);
+        ArgumentCaptor<PullConsumer> request = ArgumentCaptor.forClass(PullConsumer.class);
+        verify(client, times(2)).pullConsumer(request.capture());
+        assertThat(request.getValue().getArgumentsLogString())
+                .contains("consumerPath: //home/test/consumer")
+                .contains("queuePath: //home/test/queue")
+                .contains("partitionIndex: 3")
+                .contains("offset: 42")
+                .contains("maxRowCount=5")
+                .contains("maxDataWeight=64");
+
+        puller.close();
+        verifyNoMoreInteractions(client);
+    }
 
     @Test
     void pullUsesConfiguredPathAndAdaptsAllParametersAndResult() throws Exception {
@@ -151,12 +186,18 @@ class DirectYtQueuePullerTest {
         assertThat(rpcFuture).isCancelled();
     }
 
-    @Test
-    void closeCancelsInFlightRpcAndClosesOwnedClientOnce() throws Exception {
+    @ParameterizedTest
+    @NullSource
+    @ValueSource(strings = "//home/test/consumer")
+    void closeCancelsInFlightRpcAndClosesOwnedClientOnce(String consumerPath) throws Exception {
         YTsaurusClient client = mock(YTsaurusClient.class);
         CompletableFuture<QueueRowset> rpcFuture = new CompletableFuture<>();
-        when(client.pullQueue(any())).thenReturn(rpcFuture);
-        DirectYtQueuePuller puller = new DirectYtQueuePuller(client, QUEUE_PATH);
+        if (consumerPath == null) {
+            when(client.pullQueue(any())).thenReturn(rpcFuture);
+        } else {
+            when(client.pullConsumer(any())).thenReturn(rpcFuture);
+        }
+        DirectYtQueuePuller puller = new DirectYtQueuePuller(client, QUEUE_PATH, consumerPath, client);
 
         puller.pull(request(0, 0));
         puller.close();

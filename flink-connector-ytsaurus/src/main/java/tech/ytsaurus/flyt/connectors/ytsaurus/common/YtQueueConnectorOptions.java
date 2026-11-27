@@ -16,6 +16,11 @@ import tech.ytsaurus.flyt.connectors.ytsaurus.producer.queue.YtQueueWriteMode;
 @UtilityClass
 public class YtQueueConnectorOptions {
 
+    public static final ConfigOption<String> CONSUMER_PATH =
+            ConfigOptions.key("consumer-path")
+                    .stringType()
+                    .noDefaultValue();
+
     public static final ConfigOption<YtQueueWriteMode> WRITE_MODE =
             ConfigOptions.key("sink.write-mode")
                     .enumType(YtQueueWriteMode.class)

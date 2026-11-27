@@ -3,13 +3,17 @@ package tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.reader;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.CompletableFuture;
 import java.util.function.Supplier;
 
 import lombok.extern.slf4j.Slf4j;
+import org.apache.flink.api.connector.source.ReaderOutput;
 import org.apache.flink.api.connector.source.SourceReaderContext;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.connector.base.source.reader.SingleThreadMultiplexSourceReaderBase;
 import org.apache.flink.connector.base.source.reader.splitreader.SplitReader;
+import org.apache.flink.core.io.InputStatus;
+import org.apache.flink.util.concurrent.FutureUtils;
 
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.YtQueueRecordDeserializer;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.config.YtQueueTrimmedOffsetPolicy;
@@ -28,6 +32,8 @@ public final class YtQueueSourceReader<T>
     private final YtQueuePullerFactory pullerFactory;
 
     private final YtQueueOffsetCommitter offsetCommitter;
+
+    private final CompletableFuture<Void> commitFailureFuture;
 
     public YtQueueSourceReader(
             Supplier<? extends YtQueuePuller> pullerSupplier,
@@ -99,7 +105,7 @@ public final class YtQueueSourceReader<T>
         );
     }
 
-    private YtQueueSourceReader(
+    public YtQueueSourceReader(
             YtQueuePullerFactory pullerFactory,
             YtQueueRecordDeserializer<T> deserializer,
             YtQueueReaderOptions options,
@@ -110,12 +116,16 @@ public final class YtQueueSourceReader<T>
         super(
                 splitReaderSupplier(pullerFactory, options, trimmedOffsetPolicy),
                 new YtQueueRecordEmitter<>(deserializer),
-                Objects.requireNonNull(configuration, "configuration"),
-                Objects.requireNonNull(context, "context")
+                Objects.requireNonNull(configuration, "Flink reader configuration must not be null"),
+                Objects.requireNonNull(context, "Source reader context must not be null")
         );
-        this.pullerFactory = Objects.requireNonNull(pullerFactory, "pullerFactory");
-        this.offsetCommitter = Objects.requireNonNull(offsetCommitter, "offsetCommitter");
+        this.pullerFactory = Objects.requireNonNull(pullerFactory, "Queue puller factory must not be null");
+        this.offsetCommitter = Objects.requireNonNull(offsetCommitter, "Queue offset committer must not be null");
         try {
+            this.commitFailureFuture = Objects.requireNonNull(
+                    offsetCommitter.getFailureFuture(), "Offset committer failure future must not be null");
+            commitFailureFuture.whenComplete(
+                    (ignored, failure) -> splitFetcherManager.getQueue().notifyAvailable());
             deserializer.open(context);
             log.info("Opened YT queue source reader");
         } catch (Exception | Error failure) {
@@ -128,6 +138,12 @@ public final class YtQueueSourceReader<T>
             closeAfterFailure(this.pullerFactory, failure);
             throw failure;
         }
+    }
+
+    @Override
+    public InputStatus pollNext(ReaderOutput<T> output) throws Exception {
+        FutureUtils.throwIfCompletedExceptionally(commitFailureFuture);
+        return super.pollNext(output);
     }
 
     @Override
@@ -210,8 +226,8 @@ public final class YtQueueSourceReader<T>
             Supplier<? extends YtQueuePuller> pullerSupplier,
             YtQueueReaderOptions options,
             YtQueueTrimmedOffsetPolicy trimmedOffsetPolicy) {
-        Objects.requireNonNull(pullerSupplier, "pullerSupplier");
-        Objects.requireNonNull(options, "options");
+        Objects.requireNonNull(pullerSupplier, "Queue puller supplier must not be null");
+        Objects.requireNonNull(options, "Queue reader options must not be null");
         return () -> new YtQueueSplitReader(pullerSupplier, options, trimmedOffsetPolicy);
     }
 

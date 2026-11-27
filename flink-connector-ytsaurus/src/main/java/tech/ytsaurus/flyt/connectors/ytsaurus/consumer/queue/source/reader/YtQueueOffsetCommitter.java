@@ -1,6 +1,7 @@
 package tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.reader;
 
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.split.YtQueueSplit;
 
@@ -10,6 +11,10 @@ public interface YtQueueOffsetCommitter extends AutoCloseable {
     void notifyCheckpointComplete(long checkpointId) throws Exception;
 
     void notifyCheckpointAborted(long checkpointId) throws Exception;
+
+    default CompletableFuture<Void> getFailureFuture() {
+        return new CompletableFuture<>();
+    }
 
     @Override
     void close() throws Exception;

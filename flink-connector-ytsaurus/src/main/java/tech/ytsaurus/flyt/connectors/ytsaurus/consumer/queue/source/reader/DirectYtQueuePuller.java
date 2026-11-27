@@ -1,10 +1,14 @@
 package tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.reader;
 
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+
+import javax.annotation.Nullable;
 
 import tech.ytsaurus.client.ApiServiceClient;
 import tech.ytsaurus.client.YTsaurusClient;
+import tech.ytsaurus.client.request.PullConsumer;
 import tech.ytsaurus.client.request.PullQueue;
 import tech.ytsaurus.client.request.RowBatchReadOptions;
 import tech.ytsaurus.client.rows.QueueRowset;
@@ -13,11 +17,16 @@ import tech.ytsaurus.core.cypress.YPath;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.model.YtQueueBatch;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.model.YtQueuePullRequest;
 
+/** Pulls queue rows directly or through an optional registered consumer. */
 public final class DirectYtQueuePuller implements YtQueuePuller {
     private final ApiServiceClient client;
 
     private final YPath queuePath;
 
+    @Nullable
+    private final YPath consumerPath;
+
+    @Nullable
     private final AutoCloseable ownedClient;
 
     private final Object lifecycleMonitor = new Object();
@@ -27,26 +36,27 @@ public final class DirectYtQueuePuller implements YtQueuePuller {
     private boolean closed;
 
     public DirectYtQueuePuller(YTsaurusClient client, String queuePath) {
-        this(client, queuePath, client);
+        this(client, queuePath, null, client);
     }
 
     public DirectYtQueuePuller(ApiServiceClient client, String queuePath) {
-        this(client, queuePath, null);
+        this(client, queuePath, null, null);
     }
 
-    private DirectYtQueuePuller(
+    DirectYtQueuePuller(
             ApiServiceClient client,
             String queuePath,
-            AutoCloseable ownedClient) {
-        this.client = Objects.requireNonNull(client, "client");
-        this.queuePath = YPath.simple(Objects.requireNonNull(queuePath, "queuePath"));
+            @Nullable String consumerPath,
+            @Nullable AutoCloseable ownedClient) {
+        this.client = Objects.requireNonNull(client, "YT client must not be null");
+        this.queuePath = YPath.simple(Objects.requireNonNull(queuePath, "Queue path must not be null"));
+        this.consumerPath = Optional.ofNullable(consumerPath).map(YPath::simple).orElse(null);
         this.ownedClient = ownedClient;
     }
 
     @Override
     public CompletableFuture<YtQueueBatch> pull(YtQueuePullRequest request) {
-        Objects.requireNonNull(request, "request");
-        PullQueue pullQueue = pullQueueRequest(request);
+        Objects.requireNonNull(request, "Queue pull request must not be null");
         Operation operation = new Operation();
         CompletableFuture<QueueRowset> rpcFuture;
 
@@ -62,8 +72,8 @@ public final class DirectYtQueuePuller implements YtQueuePuller {
             inFlight = operation;
             try {
                 rpcFuture = Objects.requireNonNull(
-                        client.pullQueue(pullQueue),
-                        "client returned null future");
+                        pullRows(request),
+                        "YT client returned a null future for a queue pull");
             } catch (RuntimeException e) {
                 rpcFuture = CompletableFuture.failedFuture(e);
             }
@@ -110,16 +120,26 @@ public final class DirectYtQueuePuller implements YtQueuePuller {
         }
     }
 
-    private PullQueue pullQueueRequest(YtQueuePullRequest request) {
-        return PullQueue.builder()
+    private CompletableFuture<QueueRowset> pullRows(YtQueuePullRequest request) {
+        RowBatchReadOptions options = RowBatchReadOptions.builder()
+                .setMaxRowCount(request.getMaxRows())
+                .setMaxDataWeight(DataSize.fromBytes(request.getMaxDataWeightBytes()))
+                .build();
+        if (consumerPath != null) {
+            return client.pullConsumer(PullConsumer.builder()
+                    .setConsumerPath(consumerPath)
+                    .setQueuePath(queuePath)
+                    .setPartitionIndex(request.getPartitionIndex())
+                    .setOffset(request.getOffset())
+                    .setRowBatchReadOptions(options)
+                    .build());
+        }
+        return client.pullQueue(PullQueue.builder()
                 .setQueuePath(queuePath)
                 .setPartitionIndex(request.getPartitionIndex())
                 .setOffset(request.getOffset())
-                .setRowBatchReadOptions(RowBatchReadOptions.builder()
-                        .setMaxRowCount(request.getMaxRows())
-                        .setMaxDataWeight(DataSize.fromBytes(request.getMaxDataWeightBytes()))
-                        .build())
-                .build();
+                .setRowBatchReadOptions(options)
+                .build());
     }
 
     private void clearInFlight(Operation operation) {

@@ -8,6 +8,7 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
@@ -15,11 +16,24 @@ import org.apache.flink.api.connector.source.SourceReaderContext;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.connector.testutils.source.reader.TestingReaderContext;
 import org.apache.flink.connector.testutils.source.reader.TestingReaderOutput;
+import org.apache.flink.core.io.InputStatus;
+import org.apache.flink.metrics.SimpleCounter;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.ArgumentCaptor;
+import tech.ytsaurus.client.ApiServiceClient;
+import tech.ytsaurus.client.ApiServiceTransaction;
+import tech.ytsaurus.client.request.AdvanceConsumer;
+import tech.ytsaurus.client.request.PullConsumer;
+import tech.ytsaurus.client.request.StartTransaction;
+import tech.ytsaurus.client.rows.QueueRowset;
 import tech.ytsaurus.client.rows.UnversionedRow;
+import tech.ytsaurus.client.rows.UnversionedRowset;
 import tech.ytsaurus.core.tables.TableSchema;
 
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.YtQueueRecordDeserializer;
+import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.config.YtQueueTrimmedOffsetPolicy;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.YtQueueReaderOptions;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.model.YtQueueBatch;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.model.YtQueuePullRequest;
@@ -27,9 +41,138 @@ import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.split.YtQueu
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.apache.flink.connector.base.source.reader.SourceReaderOptions.SOURCE_READER_CLOSE_TIMEOUT;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.timeout;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.YtQueueTestFixtures.split;
 
 class YtQueueSourceReaderTest {
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void consumerKeepsReadingDuringCommitAndRestoresSnapshotOffset(boolean failFirstCommit) throws Exception {
+        ApiServiceClient client = mock(ApiServiceClient.class);
+        ApiServiceTransaction firstTransaction = successfulTransaction();
+        ApiServiceTransaction secondTransaction = successfulTransaction();
+        CompletableFuture<Void> firstCommit = new CompletableFuture<>();
+        when(firstTransaction.commit()).thenReturn(firstCommit);
+        when(client.startTransaction(any(StartTransaction.class)))
+                .thenReturn(CompletableFuture.completedFuture(firstTransaction))
+                .thenReturn(CompletableFuture.completedFuture(secondTransaction));
+        when(client.pullConsumer(any()))
+                .thenReturn(CompletableFuture.completedFuture(new QueueRowset(
+                        new UnversionedRowset(queueSchema(), List.of(queueRow(), queueRow(), queueRow())), 1)))
+                .thenAnswer(ignored -> new CompletableFuture<QueueRowset>());
+        List<YtQueueSplit> checkpoint;
+        try (YtQueueSourceReader<String> reader = consumerReader(client)) {
+            reader.addSplits(List.of(split("queue-id", 0, 1)));
+            reader.isAvailable().get(2, TimeUnit.SECONDS);
+            TestingReaderOutput<String> output = new TestingReaderOutput<>();
+            reader.pollNext(output);
+            checkpoint = reader.snapshotState(1);
+            try {
+                assertTimeoutPreemptively(Duration.ofSeconds(2), () -> {
+                    reader.notifyCheckpointComplete(1);
+                    verify(firstTransaction, timeout(2_000)).commit();
+                    reader.pollNext(output);
+                    assertThat(reader.snapshotState(2)).extracting(YtQueueSplit::getNextOffset).containsExactly(3L);
+                    reader.notifyCheckpointComplete(2);
+                    assertThat(firstCommit).isNotDone();
+                });
+            } finally {
+                if (failFirstCommit) {
+                    firstCommit.completeExceptionally(new IOException("commit failed"));
+                } else {
+                    firstCommit.complete(null);
+                }
+            }
+            verify(secondTransaction, timeout(2_000)).close();
+            ArgumentCaptor<AdvanceConsumer> advances = ArgumentCaptor.forClass(AdvanceConsumer.class);
+            verify(firstTransaction).advanceConsumer(advances.capture());
+            verify(secondTransaction).advanceConsumer(advances.capture());
+            verify(firstTransaction).commit();
+            verify(firstTransaction).close();
+            verify(secondTransaction).commit();
+            assertThat(advances.getAllValues()).extracting("newOffset").containsExactly(2L, 3L);
+            assertThat(checkpoint).extracting(YtQueueSplit::getNextOffset).containsExactly(2L);
+            assertThat(output.getEmittedRecords()).hasSize(2);
+        }
+
+        ApiServiceClient restoredClient = mock(ApiServiceClient.class);
+        when(restoredClient.pullConsumer(any()))
+                .thenReturn(CompletableFuture.completedFuture(new QueueRowset(
+                        new UnversionedRowset(queueSchema(), List.of(queueRow())), 2)))
+                .thenAnswer(ignored -> new CompletableFuture<QueueRowset>());
+        try (YtQueueSourceReader<String> restored = consumerReader(restoredClient)) {
+            restored.addSplits(checkpoint);
+            restored.isAvailable().get(2, TimeUnit.SECONDS);
+            TestingReaderOutput<String> output = new TestingReaderOutput<>();
+            restored.pollNext(output);
+
+            ArgumentCaptor<PullConsumer> pulls = ArgumentCaptor.forClass(PullConsumer.class);
+            verify(restoredClient, atLeastOnce()).pullConsumer(pulls.capture());
+            assertThat(pulls.getAllValues().get(0).getArgumentsLogString()).contains("offset: 2");
+            assertThat(output.getEmittedRecords()).containsExactly("record");
+            assertThat(restored.snapshotState(3)).extracting(YtQueueSplit::getNextOffset).containsExactly(3L);
+        }
+    }
+
+    private static YtQueueSourceReader<String> consumerReader(ApiServiceClient client) throws Exception {
+        return new YtQueueSourceReader<>(
+                () -> new DirectYtQueuePuller(client, "//home/test/queue", "//home/test/consumer", null),
+                (row, schema) -> "record",
+                readerOptions(),
+                new Configuration(),
+                new TestingReaderContext(),
+                new YTsaurusQueueConsumerOffsetCommitter(
+                        client, "//home/test/consumer", "//home/test/queue",
+                        new SimpleCounter(), new SimpleCounter(), SOURCE_READER_CLOSE_TIMEOUT.defaultValue()));
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void fatalCommitFailureWakesIdleReaderAndFailsPolling(boolean interrupted) throws Exception {
+        RecordingCommitter committer = new RecordingCommitter();
+        Throwable failure = new AssertionError("fatal commit failure");
+        if (interrupted) {
+            failure = new InterruptedException("commit interrupted");
+        }
+        Throwable expectedFailure = failure;
+        try (YtQueueSourceReader<String> reader = new YtQueueSourceReader<>(
+                new TrackingPullerFactory(),
+                (row, schema) -> "record",
+                readerOptions(),
+                YtQueueTrimmedOffsetPolicy.FAIL,
+                new Configuration(),
+                new TestingReaderContext(),
+                committer)) {
+            TestingReaderOutput<String> output = new TestingReaderOutput<>();
+            assertThat(reader.pollNext(output)).isEqualTo(InputStatus.NOTHING_AVAILABLE);
+            CompletableFuture<Void> available = reader.isAvailable();
+            assertThat(available).isNotDone();
+
+            committer.failureFuture.completeExceptionally(failure);
+
+            available.get(2, TimeUnit.SECONDS);
+            assertThatThrownBy(() -> reader.pollNext(output))
+                    .isInstanceOf(ExecutionException.class)
+                    .satisfies(thrown -> assertThat(thrown.getCause()).isSameAs(expectedFailure));
+        }
+    }
+
+    private static ApiServiceTransaction successfulTransaction() {
+        ApiServiceTransaction transaction = mock(ApiServiceTransaction.class);
+        when(transaction.advanceConsumer(any(AdvanceConsumer.class)))
+                .thenReturn(CompletableFuture.completedFuture(null));
+        when(transaction.commit()).thenReturn(CompletableFuture.completedFuture(null));
+        return transaction;
+    }
+
     @Test
     void snapshotAdvancesOnlyThroughEmittedPartOfFetchedBatch() throws Exception {
         TableSchema schema = queueSchema();
@@ -78,6 +221,10 @@ class YtQueueSourceReaderTest {
                     "record-4",
                     "record-5",
                     "record-6");
+            reader.notifyCheckpointComplete(6);
+            reader.notifyCheckpointAborted(5);
+            assertThat(committer.completedCheckpoints).containsExactly(6L);
+            assertThat(committer.abortedCheckpoints).containsExactly(5L);
         } finally {
             reader.close();
         }
@@ -102,20 +249,28 @@ class YtQueueSourceReaderTest {
     }
 
     @Test
-    void closesWorkerPullerBeforeSharedFactory() throws Exception {
+    void closesWorkerPullerAndCommitterBeforeSharedFactory() throws Exception {
         OrderTrackingPullerFactory pullerFactory = new OrderTrackingPullerFactory();
+        YtQueueOffsetCommitter committer = mock(YtQueueOffsetCommitter.class);
+        when(committer.getFailureFuture()).thenReturn(new CompletableFuture<>());
+        doAnswer(ignored -> {
+            pullerFactory.closeOrder.add("committer");
+            return null;
+        }).when(committer).close();
         YtQueueSourceReader<String> reader = new YtQueueSourceReader<>(
                 pullerFactory,
                 (row, schema) -> row.toString(),
                 readerOptions(),
+                YtQueueTrimmedOffsetPolicy.FAIL,
                 new Configuration(),
-                new TestingReaderContext());
+                new TestingReaderContext(),
+                committer);
         reader.addSplits(List.of(split("queue-id", 0, 0)));
         assertThat(pullerFactory.pullStarted.await(2, TimeUnit.SECONDS)).isTrue();
 
         reader.close();
 
-        assertThat(pullerFactory.closeOrder).containsExactly("puller", "factory");
+        assertThat(pullerFactory.closeOrder).containsExactly("puller", "committer", "factory");
     }
 
     @Test
@@ -193,6 +348,9 @@ class YtQueueSourceReaderTest {
 
     private static final class RecordingCommitter implements YtQueueOffsetCommitter {
         private List<YtQueueSplit> lastSnapshot = List.of();
+        private final CompletableFuture<Void> failureFuture = new CompletableFuture<>();
+        private final List<Long> completedCheckpoints = new CopyOnWriteArrayList<>();
+        private final List<Long> abortedCheckpoints = new CopyOnWriteArrayList<>();
         private boolean closed;
 
         @Override
@@ -202,10 +360,17 @@ class YtQueueSourceReaderTest {
 
         @Override
         public void notifyCheckpointComplete(long checkpointId) {
+            completedCheckpoints.add(checkpointId);
         }
 
         @Override
         public void notifyCheckpointAborted(long checkpointId) {
+            abortedCheckpoints.add(checkpointId);
+        }
+
+        @Override
+        public CompletableFuture<Void> getFailureFuture() {
+            return failureFuture;
         }
 
         @Override

@@ -6,6 +6,7 @@ import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.ReadableConfig;
@@ -22,7 +23,7 @@ public class DataMetricsConfig implements Serializable {
 
     public DataMetricsConfig(String metricTablePathAlias, List<DataMetricsMetricConfig> metrics) {
         this.metricTablePathAlias = metricTablePathAlias;
-        this.metrics = metrics != null ? metrics : new ArrayList<>();
+        this.metrics = Optional.ofNullable(metrics).orElseGet(ArrayList::new);
     }
 
     public static DataMetricsConfig fromConfiguration(Configuration config) {

@@ -4,6 +4,7 @@ import java.io.Serializable;
 import java.time.Duration;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 
 import javax.annotation.Nullable;
 
@@ -26,18 +27,23 @@ import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.enumerator.Y
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.enumerator.YtQueueEnumeratorStateSerializer;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.enumerator.YtQueueSplitEnumerator;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.enumerator.initializer.SpecificYtQueueOffsetInitializer;
+import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.enumerator.initializer.YTsaurusQueueConsumerOffsetInitializer;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.enumerator.initializer.YTsaurusQueueOffsetInitializer;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.enumerator.initializer.YtQueueOffsetInitializer;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.enumerator.metadata.YTsaurusQueueMetadataProvider;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.enumerator.metadata.YtQueueMetadataProvider;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.reader.DirectYtQueuePullerFactory;
+import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.reader.YTsaurusQueueConsumerOffsetCommitter;
+import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.reader.YtQueueOffsetCommitter;
+import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.reader.YtQueuePullerFactory;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.reader.YtQueueSourceReader;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.split.YtQueueSplit;
 import tech.ytsaurus.flyt.connectors.ytsaurus.consumer.queue.source.split.YtQueueSplitSerializer;
 import tech.ytsaurus.flyt.connectors.ytsaurus.utils.YtUtils;
 
-import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.ASYNC_BUFFER_CAPACITY;
+import static org.apache.flink.connector.base.source.reader.SourceReaderOptions.SOURCE_READER_CLOSE_TIMEOUT;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtConnectorOptions.USE_TLS;
+import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.ASYNC_BUFFER_CAPACITY;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.ASYNC_WORKER_COUNT;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.MAX_DATA_WEIGHT;
 import static tech.ytsaurus.flyt.connectors.ytsaurus.common.YtQueueConnectorOptions.MAX_ROW_COUNT;
@@ -54,6 +60,9 @@ public final class YtQueueSource<T>
     private final String proxy;
 
     private final String queuePath;
+
+    @Nullable
+    private final String consumerPath;
 
     private final CredentialsProvider credentialsProvider;
 
@@ -78,6 +87,7 @@ public final class YtQueueSource<T>
     private YtQueueSource(
             String proxy,
             String queuePath,
+            @Nullable String consumerPath,
             CredentialsProvider credentialsProvider,
             YtQueueRecordDeserializer<T> recordDeserializer,
             TypeInformation<T> producedType,
@@ -89,13 +99,16 @@ public final class YtQueueSource<T>
             boolean useTls) {
         this.proxy = requireNonBlank(proxy, "proxy");
         this.queuePath = requireNonBlank(queuePath, "queuePath");
-        this.credentialsProvider = Objects.requireNonNull(credentialsProvider, "credentialsProvider");
-        this.recordDeserializer = Objects.requireNonNull(recordDeserializer, "recordDeserializer");
-        this.producedType = Objects.requireNonNull(producedType, "producedType");
-        this.startupMode = Objects.requireNonNull(startupMode, "startupMode");
+        this.consumerPath = Optional.ofNullable(consumerPath)
+                .map(path -> requireNonBlank(path, "consumerPath"))
+                .orElse(null);
+        this.credentialsProvider = Objects.requireNonNull(credentialsProvider, "Credentials provider must not be null");
+        this.recordDeserializer = Objects.requireNonNull(recordDeserializer, "Record deserializer must not be null");
+        this.producedType = Objects.requireNonNull(producedType, "Produced type information must not be null");
+        this.startupMode = Objects.requireNonNull(startupMode, "Queue startup mode must not be null");
         this.specificOffsets = specificOffsets;
         this.trimmedOffsetPolicy = trimmedOffsetPolicy;
-        this.readerOptions = Objects.requireNonNull(readerOptions, "readerOptions");
+        this.readerOptions = Objects.requireNonNull(readerOptions, "Queue reader options must not be null");
         this.discoveryIntervalMillis = requirePositiveMilliseconds(discoveryInterval, "discoveryInterval");
         this.useTls = useTls;
         validateSpecificOffsets(startupMode, specificOffsets);
@@ -132,18 +145,29 @@ public final class YtQueueSource<T>
 
     @Override
     public SourceReader<T, YtQueueSplit> createReader(SourceReaderContext readerContext) throws Exception {
-        DirectYtQueuePullerFactory pullerFactory = new DirectYtQueuePullerFactory(
-                createClient(),
-                queuePath);
+        YTsaurusClient client = createClient();
+        YtQueuePullerFactory pullerFactory = new DirectYtQueuePullerFactory(client, queuePath, consumerPath);
+        YtQueueOffsetCommitter offsetCommitter = null;
         try {
+            offsetCommitter = Optional.ofNullable(consumerPath)
+                    .<YtQueueOffsetCommitter>map(path -> new YTsaurusQueueConsumerOffsetCommitter(
+                            client,
+                            path,
+                            queuePath,
+                            readerContext.metricGroup().counter("commitsSucceeded"),
+                            readerContext.metricGroup().counter("commitsFailed"),
+                            readerContext.getConfiguration().get(SOURCE_READER_CLOSE_TIMEOUT)))
+                    .orElseGet(YtQueueOffsetCommitter::noOp);
             return new YtQueueSourceReader<>(
                     pullerFactory,
                     recordDeserializer,
                     readerOptions,
                     trimmedOffsetPolicy,
                     readerContext.getConfiguration(),
-                    readerContext);
+                    readerContext,
+                    offsetCommitter);
         } catch (Exception | Error failure) {
+            closeAfterFailure(offsetCommitter, failure);
             closeAfterFailure(pullerFactory, failure);
             throw failure;
         }
@@ -159,7 +183,9 @@ public final class YtQueueSource<T>
     public SplitEnumerator<YtQueueSplit, YtQueueEnumeratorState> restoreEnumerator(
             SplitEnumeratorContext<YtQueueSplit> enumContext,
             YtQueueEnumeratorState checkpoint) {
-        return createEnumerator(enumContext, Objects.requireNonNull(checkpoint, "checkpoint"));
+        return createEnumerator(
+                enumContext,
+                Objects.requireNonNull(checkpoint, "Enumerator checkpoint must not be null"));
     }
 
     @Override
@@ -185,7 +211,10 @@ public final class YtQueueSource<T>
         YtQueueOffsetInitializer offsetInitializer = null;
         try {
             metadataProvider = new YTsaurusQueueMetadataProvider(metadataClient, queuePath);
-            if (startupMode == YtQueueStartupMode.SPECIFIC) {
+            if (consumerPath != null) {
+                offsetInitializer = new YTsaurusQueueConsumerOffsetInitializer(
+                        metadataClient, consumerPath, queuePath);
+            } else if (startupMode == YtQueueStartupMode.SPECIFIC) {
                 offsetInitializer = new SpecificYtQueueOffsetInitializer(specificOffsets);
             } else {
                 offsetInitializer = new YTsaurusQueueOffsetInitializer(
@@ -215,7 +244,7 @@ public final class YtQueueSource<T>
     }
 
     private static String requireNonBlank(String value, String fieldName) {
-        Objects.requireNonNull(value, fieldName);
+        Objects.requireNonNull(value, fieldName + " must not be null");
         if (value.isBlank()) {
             throw new IllegalArgumentException(fieldName + " must not be blank");
         }
@@ -223,7 +252,7 @@ public final class YtQueueSource<T>
     }
 
     private static long requirePositiveMilliseconds(Duration value, String fieldName) {
-        Objects.requireNonNull(value, fieldName);
+        Objects.requireNonNull(value, fieldName + " must not be null");
         long milliseconds;
         try {
             milliseconds = value.toMillis();
@@ -252,6 +281,9 @@ public final class YtQueueSource<T>
 
         private String queuePath;
 
+        @Nullable
+        private String consumerPath;
+
         private CredentialsProvider credentialsProvider;
 
         private YtQueueRecordDeserializer<T> recordDeserializer;
@@ -259,6 +291,8 @@ public final class YtQueueSource<T>
         private TypeInformation<T> producedType;
 
         private YtQueueStartupMode startupMode = STARTUP_MODE.defaultValue();
+
+        private boolean startupModeConfigured;
 
         @Nullable
         private List<Long> specificOffsets;
@@ -292,6 +326,11 @@ public final class YtQueueSource<T>
             return this;
         }
 
+        public Builder<T> consumerPath(@Nullable String consumerPath) {
+            this.consumerPath = consumerPath;
+            return this;
+        }
+
         public Builder<T> credentialsProvider(CredentialsProvider credentialsProvider) {
             this.credentialsProvider = credentialsProvider;
             return this;
@@ -308,7 +347,8 @@ public final class YtQueueSource<T>
         }
 
         public Builder<T> startupMode(YtQueueStartupMode startupMode) {
-            this.startupMode = startupMode;
+            this.startupMode = Objects.requireNonNull(startupMode, "Queue startup mode must not be null");
+            this.startupModeConfigured = true;
             return this;
         }
 
@@ -318,7 +358,8 @@ public final class YtQueueSource<T>
         }
 
         public Builder<T> trimmedOffsetPolicy(YtQueueTrimmedOffsetPolicy trimmedOffsetPolicy) {
-            this.trimmedOffsetPolicy = Objects.requireNonNull(trimmedOffsetPolicy, "trimmedOffsetPolicy");
+            this.trimmedOffsetPolicy = Objects.requireNonNull(
+                    trimmedOffsetPolicy, "Trimmed offset policy must not be null");
             return this;
         }
 
@@ -353,7 +394,7 @@ public final class YtQueueSource<T>
         }
 
         public Builder<T> readerOptions(YtQueueReaderOptions readerOptions) {
-            this.readerOptions = Objects.requireNonNull(readerOptions, "readerOptions");
+            this.readerOptions = Objects.requireNonNull(readerOptions, "Queue reader options must not be null");
             this.maxRowCount = readerOptions.getMaxRows();
             this.maxDataWeightBytes = readerOptions.getMaxDataWeightBytes();
             this.pollBackoff = readerOptions.getEmptyPollBackoff();
@@ -374,6 +415,10 @@ public final class YtQueueSource<T>
         }
 
         public YtQueueSource<T> build() {
+            if (consumerPath != null && (startupModeConfigured || specificOffsets != null)) {
+                throw new IllegalArgumentException(
+                        "startupMode and specificOffsets must not be configured with consumerPath");
+            }
             YtQueueReaderOptions resolvedReaderOptions = readerOptions;
             if (resolvedReaderOptions == null) {
                 resolvedReaderOptions = new YtQueueReaderOptions(
@@ -386,6 +431,7 @@ public final class YtQueueSource<T>
             return new YtQueueSource<>(
                     proxy,
                     queuePath,
+                    consumerPath,
                     credentialsProvider,
                     recordDeserializer,
                     producedType,

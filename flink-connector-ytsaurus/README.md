@@ -52,7 +52,7 @@ Maven
 <dependency>
     <groupId>tech.ytsaurus.flyt.connectors.ytsaurus</groupId>
     <artifactId>flink-connector-ytsaurus</artifactId>
-    <version>1.13.0</version>
+    <version>1.13.1</version>
     <classifier>all</classifier>
 </dependency>
 ```
@@ -60,7 +60,7 @@ Maven
 Gradle
 
 ```kotlin
-implementation("tech.ytsaurus.flyt.connectors.ytsaurus:flink-connector-ytsaurus:1.13.0:all")
+implementation("tech.ytsaurus.flyt.connectors.ytsaurus:flink-connector-ytsaurus:1.13.1:all")
 ```
 
 ## Building from Source
@@ -717,9 +717,11 @@ CREATE TABLE multi_cluster_table (
 );
 ```
 
-## Queue Source (Direct Mode)
+## Queue Source
 
-The `ytsaurus-queue` connector continuously reads an ordered dynamic table without a registered YTsaurus consumer. Offsets are owned by Flink source state and restored from checkpoints. It also supports an insert-only [queue sink](#queue-sink). Lookup, metadata columns, and multi-cluster modes are not supported.
+The `ytsaurus-queue` connector continuously reads an ordered dynamic table. It also supports an insert-only [queue sink](#queue-sink). Lookup, metadata columns, and multi-cluster modes are not supported.
+
+By default, the connector uses direct mode without a registered YTsaurus consumer. Offsets are owned by Flink source state and restored from checkpoints. Set `consumer-path` to use a pre-created YTsaurus queue consumer instead. The consumer must already be registered for the queue; the connector does not create or register it and does not manage its `vital` setting.
 
 The table schema comes from the Flink DDL. In the default `ROW` read mode queue rows are YSON maps, so this source supports only the insert-only `format = 'yson'` decoder; see [Read modes](#read-modes) for reading a payload out of a single column instead. There is no YSON table schema option. Install the [Flink YSON format](../flink-yson/README.md) alongside the connector.
 
@@ -749,7 +751,15 @@ env.fromSource(source, WatermarkStrategy.noWatermarks(), "ytsaurus-queue");
 
 Each source reader uses one shared YTsaurus client and pulls assigned partitions in background workers. The configured worker count is a maximum: a reader never starts more workers than it has assigned partitions. `fetch()` returns prefetched batches from a bounded `LinkedBlockingQueue`; its capacity is measured in batches, not rows. The capacity limits this internal queue, while each worker can additionally hold one in-flight or completed batch and Flink maintains its own handover buffer. Pausing a partition stops new pulls, but batches prefetched before the pause can still be emitted.
 
-This first vertical slice implements direct mode only. The reader and checkpoint state are independent of the pull mechanism, so consumer mode can reuse them with a `PullConsumer` implementation and checkpoint-complete offset committer.
+In consumer mode, a fresh source and newly discovered partitions start from the offsets stored in the consumer table. A partition with no stored offset starts at zero. Initialization reads the consumer table directly using the canonical cluster name from `//sys/@cluster_name`; the job needs read access to both. `scan.startup.mode` and `scan.startup.specific-offsets` must not be configured with `consumer-path`.
+
+Flink checkpoint state remains authoritative after restore, including when it differs from the current consumer offsets. Reads use the consumer API with the explicit offset from Flink state. The existing trimmed offset policy applies both to fresh and restored offsets: `FAIL` rejects a gap, while `SKIP` continues from the first available row. Consumer mode supports a queue and consumer on the same cluster.
+
+Consumer offsets are advanced asynchronously after a Flink checkpoint completes. Each source reader uses one background thread to commit offsets in a YTsaurus tablet transaction. While it is running, only the latest completed checkpoint is retained for the next commit. Successful commits increment the reader's `commitsSucceeded` counter. Commit RPC failures are logged and increment the reader's `commitsFailed` counter without failing the source; failed attempts are not retried.
+
+Shutdown discards waiting checkpoints and waits for the active commit up to Flink's `source.reader.close.timeout`. After a timeout, the worker is interrupted and transaction cleanup is best effort. A transaction whose start response arrives after the worker stops is left to expire on the server. A commit already sent to the server may still succeed. Shutdown does not guarantee a final commit.
+
+Flink recovery still uses checkpoint state, but stale consumer offsets can delay trimming for vital consumers and cause replay on a fresh start without Flink state. If checkpointing is disabled or no checkpoint completes, the external consumer offsets do not advance. A consumer must be used exclusively by one Flink job; parallel subtasks of that job are supported.
 
 ```sql
 CREATE TABLE queue_events (
@@ -764,6 +774,36 @@ CREATE TABLE queue_events (
     'format' = 'yson',
     'scan.startup.mode' = 'EARLIEST'
 );
+```
+
+To read through a registered consumer, add its path and omit all startup options:
+
+```sql
+CREATE TABLE queue_events (
+    event_id STRING,
+    payload STRING,
+    created_at TIMESTAMP(3)
+) WITH (
+    'connector' = 'ytsaurus-queue',
+    'proxy' = 'localhost:9013',
+    'path' = '//tmp/events_queue',
+    'consumer-path' = '//tmp/events_consumer',
+    'credentials-source' = 'env',
+    'format' = 'yson'
+);
+```
+
+For the DataStream API, set the consumer path without configuring a startup mode:
+
+```java
+YtQueueSource<String> source = YtQueueSource.<String>builder()
+        .proxy("localhost:9013")
+        .queuePath("//home/path/to/queue")
+        .consumerPath("//home/path/to/consumer")
+        .credentialsProvider(new EnvCredentialsProvider())
+        .recordDeserializer((row, schema) -> row.toYTreeMap(schema, true).toString())
+        .producedType(Types.STRING)
+        .build();
 ```
 
 ### Read modes
@@ -823,6 +863,7 @@ Metadata columns are not supported in either mode, so `$timestamp`, `$cumulative
 |--------|------|---------|-------------|
 | `proxy` | String | - | Required YTsaurus RPC proxy address |
 | `path` | String | - | Required queue path |
+| `consumer-path` | String | - | Optional path to an existing consumer registered for this queue; enables consumer mode |
 | `credentials-source` | String | - | Required credentials provider identifier |
 | `format` | String | - | Required insert-only format; must be `yson` in `ROW` read mode |
 | `username` | String | - | Username for the `options` credentials provider |

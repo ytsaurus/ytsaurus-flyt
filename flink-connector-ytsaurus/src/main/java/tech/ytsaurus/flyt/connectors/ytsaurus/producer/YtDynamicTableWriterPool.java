@@ -8,6 +8,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.function.Consumer;
@@ -119,7 +120,7 @@ public class YtDynamicTableWriterPool implements Serializable, Closeable {
             thread.setDaemon(true);
             return thread;
         });
-        this.cache = makeCache(cacheTtl != null ? cacheTtl : CACHE_TTL, cacheTicker);
+        this.cache = makeCache(Optional.ofNullable(cacheTtl).orElse(CACHE_TTL), cacheTicker);
     }
 
     private Cache<String, YtDynamicTableWriter> makeCache(Duration ttl, @Nullable Ticker ticker) {
