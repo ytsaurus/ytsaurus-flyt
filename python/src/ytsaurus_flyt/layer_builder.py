@@ -252,10 +252,16 @@ def _build_unsquashfs_binary_docker(output_path: str) -> None:
         raise RuntimeError("Could not build flyt_unsquashfs helper: output binary missing after container build")
 
 
+def layer_cache_prefix(config: FlytConfig) -> str:
+    return ((config.squashfs_layer_cache_prefix or "").strip() or "//tmp/flyt_squashfs_layers").rstrip("/")
+
+
+def tools_cache_prefix(config: FlytConfig) -> str:
+    return ((config.squashfs_tools_cache_prefix or "").strip() or "//tmp/flyt_squashfs_tools").rstrip("/")
+
+
 def ensure_unsquashfs_tool_remote(yt_client: YtClient, config: FlytConfig) -> str:
-    prefix = (config.squashfs_tools_cache_prefix or "").strip() or "//tmp/flyt_squashfs_tools"
-    prefix = prefix.rstrip("/")
-    remote_path = f"{prefix}/flyt_unsquashfs"
+    remote_path = f"{tools_cache_prefix(config)}/flyt_unsquashfs"
 
     if yt_client.exists(remote_path):
         logger.info("Using cached unsquashfs helper at %s", remote_path)
@@ -286,9 +292,7 @@ def ensure_runtime_layer(
 ) -> str:
     """Return Cypress path to the runtime layer (build and upload if missing)."""
     h = compute_layer_hash(config, flink_lib_jar_yt_paths)
-    prefix = config.squashfs_layer_cache_prefix.strip() or "//tmp/flyt_squashfs_layers"
-    prefix = prefix.rstrip("/")
-    remote_path = f"{prefix}/runtime-{h}.squashfs"
+    remote_path = f"{layer_cache_prefix(config)}/runtime-{h}.squashfs"
 
     if yt_client.exists(remote_path):
         if not force_rebuild:

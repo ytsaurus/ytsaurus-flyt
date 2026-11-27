@@ -45,7 +45,13 @@ from ytsaurus_flyt.profiles import (
     save_profile_dict,
     write_active_profile_name,
 )
-from ytsaurus_flyt.sql_job import SQL_JOB_COMMAND, SQL_JOB_SERVICE_NAME, upload_sql_job
+from ytsaurus_flyt.sql_job import (
+    SQL_JOB_COMMAND,
+    ensure_sql_runner_remote,
+    publish_sql_manifest,
+    sql_job_config,
+    upload_sql_script,
+)
 from ytsaurus_flyt.validate_config import validate_flyt_config
 from ytsaurus_flyt.wheel_utils import build_wheel
 from ytsaurus_flyt.yt_client import env_yt_token, make_yt_client
@@ -274,7 +280,7 @@ def profile_show(name: Optional[str]) -> None:
     help="Use existing Cypress prefix for layers (sets .../layers and .../tools under it).",
 )
 def install(ctx: click.Context, force: bool, reuse_layers: Optional[str]) -> None:
-    """Build runtime SquashFS (and unsquashfs helper) and upload to the active profile paths."""
+    """Build runtime SquashFS (and unsquashfs helper), upload to the active profile paths, publish the SQL job."""
     _setup_logging()
     _echo_profile_line(ctx)
     gp = ctx.obj.get("profile")
@@ -316,6 +322,7 @@ def install(ctx: click.Context, force: bool, reuse_layers: Optional[str]) -> Non
     if cfg.squashfs_layer_delivery == "sandbox_unpack":
         tool = ensure_unsquashfs_tool_remote(yt_client, cfg)
         click.echo(f"unsquashfs helper: {tool}")
+    click.echo(f"SQL job manifest: {publish_sql_manifest(yt_client, cfg, name)}")
 
 
 @cli.command("validate")
@@ -465,12 +472,8 @@ def run(
                 raise click.UsageError("--wheel and --source-dir do not apply to a .sql script")
             # The bundled SQL runner becomes the job, shipped with the script as files of the operation;
             # the arguments after the script are the runner's own.
-            job_files = stack.enter_context(upload_sql_job(yt_client, job_argv[0]))
-            cfg = dataclasses.replace(
-                cfg,
-                extra_file_paths=[*cfg.extra_file_paths, *job_files],
-                service_name=cfg.service_name or SQL_JOB_SERVICE_NAME,
-            )
+            script_path = stack.enter_context(upload_sql_script(yt_client, job_argv[0]))
+            cfg = sql_job_config(cfg, [ensure_sql_runner_remote(yt_client, cfg), script_path])
             job_command = shlex.join([*SQL_JOB_COMMAND, *job_argv[1:]])
         elif not wheel_path and not source_dir:
             proj = find_pyproject_for_job(job_command)
